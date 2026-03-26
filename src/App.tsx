@@ -16,6 +16,7 @@ import ConceptDetailModal from './components/ConceptDetailModal';
 import ExtractWorkspace from './components/ExtractWorkspace';
 import type { ExtractMode, ExtractSortDirection } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
+import type { FindingConceptLink, FindingContext } from './components/FindingsSidebar';
 import FileUpload from './components/FileUpload';
 import InspectorHeader from './components/InspectorHeader';
 import TaxAuditPanel from './components/TaxAuditPanel';
@@ -102,6 +103,22 @@ function getFindingOriginLabel(findingId: string) {
   return 'Operativo';
 }
 
+function parseMathFindingId(findingId: string) {
+  const parts = findingId.split('-');
+  if (parts.length < 5 || parts[0] !== 'math') return null;
+
+  return {
+    code: parts[1],
+    level: parts[2],
+    conceptIndex: parts[3] === 'na' ? null : Number(parts[3]),
+  };
+}
+
+function formatSignedExact(value: number) {
+  if (value === 0) return '0';
+  return `${value > 0 ? '+' : '-'}${formatExact(Math.abs(value))}`;
+}
+
 export default function App() {
   const {
     profile,
@@ -161,6 +178,87 @@ export default function App() {
   });
   const subtotalDifference = Math.abs((cfdi?.subtotalCalculado ?? 0) - (cfdi?.subtotal ?? 0));
   const totalDifference = Math.abs((cfdi?.totalCalculado ?? 0) - (cfdi?.total ?? 0));
+  const findingContexts = useMemo<FindingContext[]>(() => {
+    if (!cfdi) return [];
+
+    const buildConceptLink = (conceptIndex: number, reason: string): FindingConceptLink | null => {
+      const concept = cfdi.conceptos[conceptIndex];
+      if (!concept) return null;
+      return { concept, conceptIndex, reason };
+    };
+
+    return cfdi.findings.map((finding) => {
+      if (finding.id.startsWith('tax-group-')) {
+        const groupKey = finding.id.slice('tax-group-'.length);
+        const group = cfdi.taxAuditGroups.find((taxGroup) => taxGroup.key === groupKey);
+        if (!group) {
+          return {
+            findingId: finding.id,
+            explanation: 'Este hallazgo fiscal no pudo mapearse al grupo de impuestos actual.',
+            relationshipLabel: 'Sin relacion visible',
+            conceptLinks: [],
+          };
+        }
+
+        return {
+          findingId: finding.id,
+          explanation: 'Compara la suma de traslados por concepto contra el impuesto agrupado del comprobante. Los conceptos de abajo participan en ese mismo grupo fiscal.',
+          relationshipLabel: `${group.conceptos.length} concepto(s) en el grupo ${group.impuesto} ${(group.tasaOCuota * 100).toFixed(2)}%`,
+          differenceLabel: `Dif. real ${formatSignedExact(group.diferencia)}`,
+          conceptLinks: group.conceptos
+            .map((conceptIndex) => buildConceptLink(
+              conceptIndex,
+              `Participa en el grupo fiscal ${group.impuesto} ${group.tipoFactor} ${(group.tasaOCuota * 100).toFixed(2)}% comparado contra el agrupado.`,
+            ))
+            .filter((link): link is FindingConceptLink => Boolean(link)),
+        };
+      }
+
+      if (finding.id.startsWith('concept-')) {
+        const conceptIndex = Number(finding.id.slice('concept-'.length));
+        return {
+          findingId: finding.id,
+          explanation: 'Este hallazgo señala directamente un concepto cuyo importe no coincide con el cálculo esperado.',
+          relationshipLabel: '1 concepto directamente afectado',
+          conceptLinks: [buildConceptLink(conceptIndex, 'El importe de este concepto no coincide con cantidad × valor unitario.')]
+            .filter((link): link is FindingConceptLink => Boolean(link)),
+        };
+      }
+
+      if (finding.id.startsWith('math-')) {
+        const parsed = parseMathFindingId(finding.id);
+        if (parsed?.conceptIndex !== null && parsed?.conceptIndex !== undefined) {
+          const reason = parsed.code === 'LINE_TAX_MISMATCH'
+            ? 'El traslado de este concepto no coincide con Base × Tasa.'
+            : parsed.code === 'LINE_TAX_NOT_RECALCULATED'
+              ? 'Este traslado no se recalcula automáticamente por su tipo de factor.'
+              : 'Este hallazgo matemático apunta a un concepto específico.';
+
+          return {
+            findingId: finding.id,
+            explanation: 'Este hallazgo matemático sí apunta a un concepto específico dentro del comprobante.',
+            relationshipLabel: '1 concepto directamente afectado',
+            conceptLinks: [buildConceptLink(parsed.conceptIndex, reason)]
+              .filter((link): link is FindingConceptLink => Boolean(link)),
+          };
+        }
+
+        return {
+          findingId: finding.id,
+          explanation: 'Este hallazgo resume una discrepancia global del comprobante y no señala por sí solo un concepto individual.',
+          relationshipLabel: 'Sin concepto directo',
+          conceptLinks: [],
+        };
+      }
+
+      return {
+        findingId: finding.id,
+        explanation: 'Hallazgo operativo sin relacion detallada con conceptos en esta version.',
+        relationshipLabel: 'Sin relacion detallada',
+        conceptLinks: [],
+      };
+    });
+  }, [cfdi]);
   const sortedDiagnoseRows = useMemo(() => {
     const rows = [...filteredConceptos];
     rows.sort((left, right) => {
@@ -292,12 +390,14 @@ export default function App() {
       <main className="flex-1 min-h-0 flex overflow-hidden">
         <FindingsSidebar
           cfdi={cfdi}
+          findingContexts={findingContexts}
           activeDatasetType={activeDatasetType}
           activeExtractMetrics={activeExtractMetrics}
           subtotalDifference={subtotalDifference}
           totalDifference={totalDifference}
           formatExact={formatExact}
           getFindingOriginLabel={getFindingOriginLabel}
+          onSelectConcept={setSelectedConcept}
         />
 
         <section className="flex-1 min-h-0 flex flex-col overflow-hidden relative">

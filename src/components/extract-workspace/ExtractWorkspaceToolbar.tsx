@@ -11,6 +11,8 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
     extractSearchTerm,
     sorting,
     extractPageSize,
+    filteredExtractCount,
+    totalExtractCount,
     selectedRowCount,
     setColumnFilterKey,
     setSearchTerm,
@@ -18,6 +20,10 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
     resetGrid,
   } = grid;
   const activeColumnLabel = extractColumns.find((column) => column.key === extractColumnFilterKey)?.label ?? 'columna';
+  const searchScopeLabel = extractColumnFilterKey === 'all' ? 'todas las columnas' : activeColumnLabel;
+  const searchSummary = extractSearchTerm.trim()
+    ? `"${extractSearchTerm.trim()}" en ${searchScopeLabel}`
+    : `sin busqueda global (${searchScopeLabel})`;
 
   return (
     <div className="p-4 border-b border-[#141414] bg-white/50 space-y-3">
@@ -73,6 +79,12 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
       </div>
       <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-60">
         <span className="opacity-40">Estado</span>
+        <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
+          {searchSummary}
+        </span>
+        <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
+          {filteredExtractCount} de {totalExtractCount} visibles
+        </span>
         <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
           {sorting.length} {sorting.length === 1 ? 'sort' : 'sorts'}
         </span>

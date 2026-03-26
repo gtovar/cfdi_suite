@@ -1,0 +1,18 @@
+# EXPLORATION
+
+PROBLEM:
+What is unclear?
+
+OPTIONS:
+A:
+B:
+C:
+
+RISKS:
+A:
+B:
+C:
+
+PROPOSED DECISION:
+
+OPEN QUESTIONS:

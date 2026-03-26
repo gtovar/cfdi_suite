@@ -154,6 +154,7 @@ export function useExtractGridState(params: {
   const filteredExtractRows = table.getFilteredRowModel().rows.map((row) => row.original) as unknown as Array<CFDIIngresoRow | CFDIPagoRow>;
   const sortedExtractRows = table.getSortedRowModel().rows.map((row) => row.original) as unknown as Array<CFDIIngresoRow | CFDIPagoRow>;
   const filteredExtractCount = table.getFilteredRowModel().rows.length;
+  const totalExtractCount = activeExtractRows.length;
   const extractTotalPages = Math.max(1, table.getPageCount());
   const safeExtractPage = Math.min(extractPage, extractTotalPages);
   const extractPageStart = filteredExtractCount === 0 ? 0 : (safeExtractPage - 1) * extractPageSize;
@@ -277,7 +278,7 @@ export function useExtractGridState(params: {
     setExtractColumnFilterKey('all');
     setExtractPageState(1);
     setExtractPageSizeState(100);
-    setSortingState([{ id: 'descripcion', desc: false }]);
+    setSortingState([{ id: activeDatasetType === 'pagos' ? 'fechaPago' : 'descripcion', desc: false }]);
     setColumnFiltersState([]);
     setHiddenIngresoColumns([]);
     setHiddenPagoColumns([]);
@@ -295,6 +296,7 @@ export function useExtractGridState(params: {
     sorting,
     extractPageSize,
     filteredExtractCount,
+    totalExtractCount,
     safeExtractPage,
     extractTotalPages,
     extractPageStart,

@@ -17,6 +17,7 @@ export interface ExtractGridController {
   sorting: SortingState;
   extractPageSize: number;
   filteredExtractCount: number;
+  totalExtractCount: number;
   safeExtractPage: number;
   extractTotalPages: number;
   extractPageStart: number;
