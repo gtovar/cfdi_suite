@@ -5,9 +5,9 @@
 experiment/sidebar-context-and-ui-baseline
 
 ## Último cambio
-Governance completado: detect-secrets instalado y configurado en pre-commit hook,
-governance.json corregido a strategy "git-hooks" (alineado con .git/hooks/pre-commit existente),
-.gitignore actualizado con patrones Python cache.
+Governance completado + utils recuperados: detect-secrets configurado en pre-commit, governance.json
+corregido a "git-hooks", .gitignore con patrones Python. Añadidos cfdiFormatters.ts y
+findingUtils.ts (extraídos en refactor d2a6f98 pero sin commitear).
 
 ## Próximo paso
 Retomar trabajo en sidebar: contexto de findings (`useFindingContexts`) y UI baseline.
