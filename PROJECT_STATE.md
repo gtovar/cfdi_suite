@@ -2,13 +2,16 @@
 > Actualizar antes de cada commit con cambios de código
 
 ## Checkpoint activo
-<!-- nombre del checkpoint actual -->
+experiment/sidebar-context-and-ui-baseline
 
 ## Último cambio
-<!-- qué se hizo en la última sesión -->
+Governance completado: detect-secrets instalado y configurado en pre-commit hook,
+governance.json corregido a strategy "git-hooks" (alineado con .git/hooks/pre-commit existente),
+.gitignore actualizado con patrones Python cache.
 
 ## Próximo paso
-<!-- qué falta hacer -->
+Retomar trabajo en sidebar: contexto de findings (`useFindingContexts`) y UI baseline.
 
 ## Riesgos abiertos
-<!-- dependencias, bloqueadores, deuda técnica -->
+- `src/app/utils/` untracked: verificar si es código nuevo que debe commitearse
+- `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos

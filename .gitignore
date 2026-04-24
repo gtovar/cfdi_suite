@@ -8,6 +8,11 @@ coverage/
 !.env.example
 .venv-satcfdi/
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
 # AI Governance — infraestructura local, no se versiona
 .governance/
 .claude/governance.json
