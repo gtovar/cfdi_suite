@@ -28,6 +28,7 @@ Codex should not:
 - expand scope beyond the stated slice
 - invent features or refactors outside the task
 - patch around a bad result without first updating the decision
+- chain a new work unit by inertia when the next step should start in a new session
 
 ## Exploration Policy
 
@@ -42,6 +43,15 @@ Implementation tasks:
 - require a prior closed decision
 - must define scope, constraints, and validation
 - should be rejected or redirected if the decision is still ambiguous
+- must verify at the start whether they belong in a new session/task
+
+Open a new session/task by default when:
+- the implementation follows a closed exploration/decision task
+- the previous unit already ended in a verifiable milestone
+- the primary concern changed even if the broader topic stayed similar
+- the next step requires a different runtime, external dependency, or larger context surface
+
+Stay in the same session/task only for narrow follow-up work inside the same already-open unit.
 
 ## Hotfix Policy
 

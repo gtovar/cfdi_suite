@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/gil/Documents/cfdi_inspector/.claude/hooks/governance.sh SESSION_START"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/gil/Documents/cfdi_inspector/.claude/hooks/governance.sh SESSION_STOP"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r \".tool_input.command // \\\"\\\"\" 2>/dev/null); if [[ \"$CMD\" == *\"--no-verify\"* ]]; then COMMIT_BYPASSED_CMD=\"$CMD\" bash /Users/gil/Documents/cfdi_inspector/.claude/hooks/governance.sh COMMIT_BYPASSED; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}

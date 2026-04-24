@@ -1,0 +1,1 @@
+/Users/gil/Documents/ai-governance/docs/insumos/ai-governance-platform/scripts/governance-hook.sh

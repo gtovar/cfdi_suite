@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="4.0" TipoDeComprobante="I" Fecha="2026-04-17T10:00:00" SubTotal="100.00" Total="115.00" Moneda="MXN" Exportacion="01" LugarExpedicion="64000" Sello="SELLO12345678" NoCertificado="00001000000504465028" Certificado="CERTIFICADOBASE64">
+  <cfdi:Emisor Rfc="AAA010101AAA" Nombre="EMISOR SA DE CV" RegimenFiscal="601" />
+  <cfdi:Receptor Rfc="BBB010101BBB" Nombre="RECEPTOR SA DE CV" UsoCFDI="G03" DomicilioFiscalReceptor="64000" RegimenFiscalReceptor="601" />
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="10101504" ClaveUnidad="E48" Unidad="Unidad de servicio" Cantidad="1" Descripcion="Traslado por linea inconsistente" ValorUnitario="100.00" Importe="100.00" ObjetoImp="02">
+      <cfdi:Impuestos>
+        <cfdi:Traslados>
+          <cfdi:Traslado Base="100.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="15.00" />
+        </cfdi:Traslados>
+      </cfdi:Impuestos>
+    </cfdi:Concepto>
+  </cfdi:Conceptos>
+  <cfdi:Impuestos>
+    <cfdi:Traslados>
+      <cfdi:Traslado Base="100.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="15.00" />
+    </cfdi:Traslados>
+  </cfdi:Impuestos>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="LINE-TAX-MISMATCH-UUID" FechaTimbrado="2026-04-17T10:00:01" RfcProvCertif="AAA010101AAA" SelloCFD="SELLOCFD12345678" NoCertificadoSAT="00001000000504465028" SelloSAT="SELLOSAT12345678" />
+  </cfdi:Complemento>
+</cfdi:Comprobante>

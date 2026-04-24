@@ -1,10 +1,5 @@
-import { buildCfdiData, detectCfdiProfile } from '../cfdi/application/cfdiAnalysisService';
-import { extractIngresoRowsData, extractPagoRowsData } from '../cfdi/application/cfdiExtractionService';
-import type { CFDIPagoRow } from '../cfdi/application/cfdiTypes';
-
-function projectProgress(start: number, end: number, stepProgress: number) {
-  return Math.round(start + ((end - start) * stepProgress) / 100);
-}
+import { detectCfdiProfile } from '../cfdi/application/cfdiAnalysisService';
+import { analyzeCfdiWithCurrentTsEngine } from '../cfdi/engine/currentTsEngine';
 
 self.onmessage = async (event: MessageEvent<{ xml: string }>) => {
   try {
@@ -13,50 +8,28 @@ self.onmessage = async (event: MessageEvent<{ xml: string }>) => {
     const profile = detectCfdiProfile(xml);
 
     self.postMessage({ progress: 28, label: 'Calculando diagnóstico fiscal', detail: `Perfil detectado: ${profile}.` });
-    const cfdi = buildCfdiData(xml);
-
-    self.postMessage({
-      progress: 56,
-      label: 'Extrayendo filas de ingresos',
-      detail: `${cfdi.conceptos.length.toLocaleString('es-MX')} conceptos detectados · ${cfdi.findings.length.toLocaleString('es-MX')} hallazgos.`,
-    });
-    const ingresoRows = extractIngresoRowsData(xml, (stepProgress, detail) => {
-      self.postMessage({
-        progress: projectProgress(56, 84, stepProgress),
-        label: 'Extrayendo filas de ingresos',
-        detail,
-      });
-    });
-
-    self.postMessage({
-      progress: 84,
-      label: 'Extrayendo filas de pagos',
-      detail: `${ingresoRows.length.toLocaleString('es-MX')} filas de ingresos listas.`,
-    });
-    let pagoRows: CFDIPagoRow[] = [];
-    try {
-      pagoRows = extractPagoRowsData(xml, (stepProgress, detail) => {
-        self.postMessage({
-          progress: projectProgress(84, 96, stepProgress),
-          label: 'Extrayendo filas de pagos',
-          detail,
-        });
-      });
-    } catch {
-      pagoRows = [];
+    const result = analyzeCfdiWithCurrentTsEngine(xml);
+    const fatalIssue = result.issues.find((issue) => issue.fatal);
+    if (fatalIssue || !result.cfdi) {
+      throw new Error(fatalIssue?.message || 'No se pudo construir el analisis CFDI');
     }
+
+    self.postMessage({
+      progress: 72,
+      label: profile === 'pagos' ? 'Extrayendo filas de pagos' : 'Extrayendo filas de ingresos',
+      detail: `${result.cfdi.conceptos.length.toLocaleString('es-MX')} conceptos detectados · ${result.cfdi.findings.length.toLocaleString('es-MX')} hallazgos.`,
+    });
 
     const finalDetail =
       profile === 'pagos'
-        ? `Filas: ${pagoRows.length.toLocaleString('es-MX')}`
-        : `Filas: ${ingresoRows.length.toLocaleString('es-MX')}`;
+        ? `Filas: ${result.pagoRows.length.toLocaleString('es-MX')}`
+        : `Filas: ${result.ingresoRows.length.toLocaleString('es-MX')}`;
 
     self.postMessage({
       progress: 96,
       label: 'Consolidando resultados del archivo',
       detail: finalDetail,
     });
-    const result = { profile, cfdi, ingresoRows, pagoRows };
     self.postMessage({ ok: true, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error desconocido al analizar CFDI';

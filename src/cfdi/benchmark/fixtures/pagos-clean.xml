@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xmlns:pago20="http://www.sat.gob.mx/Pagos20" Version="4.0" TipoDeComprobante="P" Fecha="2026-04-17T10:00:00" SubTotal="0" Total="0" Moneda="XXX" Exportacion="01" LugarExpedicion="64000" Sello="SELLO12345678" NoCertificado="00001000000504465028" Certificado="CERTIFICADOBASE64">
+  <cfdi:Emisor Rfc="AAA010101AAA" Nombre="EMISOR SA DE CV" RegimenFiscal="601" />
+  <cfdi:Receptor Rfc="BBB010101BBB" Nombre="RECEPTOR SA DE CV" UsoCFDI="CP01" DomicilioFiscalReceptor="64000" RegimenFiscalReceptor="601" />
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111506" ClaveUnidad="ACT" Cantidad="1" Descripcion="Pago" ValorUnitario="0" Importe="0" ObjetoImp="01" />
+  </cfdi:Conceptos>
+  <cfdi:Complemento>
+    <pago20:Pagos Version="2.0">
+      <pago20:Totales MontoTotalPagos="116.00" />
+      <pago20:Pago FechaPago="2026-04-17T10:00:00" FormaDePagoP="03" MonedaP="MXN" Monto="116.00" TipoCambioP="1">
+        <pago20:DoctoRelacionado IdDocumento="DOC-UUID-001" Serie="A" Folio="123" MonedaDR="MXN" NumParcialidad="1" ImpSaldoAnt="116.00" ImpPagado="116.00" ImpSaldoInsoluto="0.00" ObjetoImpDR="01" />
+      </pago20:Pago>
+    </pago20:Pagos>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="PAGOS-CLEAN-UUID" FechaTimbrado="2026-04-17T10:00:01" RfcProvCertif="AAA010101AAA" SelloCFD="SELLOCFD12345678" NoCertificadoSAT="00001000000504465028" SelloSAT="SELLOSAT12345678" />
+  </cfdi:Complemento>
+</cfdi:Comprobante>

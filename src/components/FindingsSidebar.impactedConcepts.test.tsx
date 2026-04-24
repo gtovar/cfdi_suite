@@ -75,6 +75,7 @@ describe('FindingsSidebar impacted concepts', () => {
         findingId: 'tax-group-002|Tasa|0.16',
         explanation: 'Compara el detalle por concepto contra el agrupado del comprobante.',
         relationshipLabel: '5 concepto(s) en el grupo 002 16.00%',
+        whyItMatters: 'Si este grupo no cuadra, el impuesto total del comprobante puede distribuirse mal.',
         differenceLabel: 'Dif. real +0.02',
         conceptLinks: [
           { concept: createImpactedConcept({ descripcion: 'Concepto A' }), conceptIndex: 0, reason: 'Participa en el grupo fiscal 002 16.00%.' },
@@ -109,21 +110,25 @@ describe('FindingsSidebar impacted concepts', () => {
     );
 
     expect(container.textContent).toContain('Hallazgo enfocado');
-    expect(container.textContent).toContain('Conceptos relacionados');
-    expect(container.textContent).toContain('Relacionados con: Diferencia en traslado 002 16.00%');
+    expect(container.textContent).toContain('Guía de revisión');
+    expect(container.textContent).toContain('Hallazgo enfocado: Diferencia en traslado 002 16.00%');
+    expect(container.textContent).toContain('Por qué importa');
+    expect(container.textContent).toContain('Prioridad');
+    expect(container.textContent).toContain('Acción');
+    expect(container.textContent).toContain('Empieza por revisar el concepto 1.');
+    expect(container.textContent).toContain('Concepto sugerido');
     expect(container.textContent).toContain('Concepto A');
-    expect(container.textContent).toContain('Concepto D');
-    expect(container.textContent).not.toContain('Concepto E');
-    expect(container.textContent).toContain('1 conceptos adicionales relacionados no visibles');
+    expect(container.textContent).not.toContain('Concepto D');
+    expect(container.textContent).toContain('4 conceptos adicionales siguen disponibles en la tabla principal');
     expect(container.textContent).toContain('Participa en el grupo fiscal 002 16.00%.');
 
-    const conceptButton = findButtonByText(container, 'Concepto B');
+    const conceptButton = findButtonByText(container, 'Abrir concepto sugerido');
     expect(conceptButton).toBeTruthy();
 
     act(() => {
       conceptButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(selected).toEqual(['Concepto B']);
+    expect(selected).toEqual(['Concepto A']);
   });
 });

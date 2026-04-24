@@ -119,6 +119,14 @@ function formatSignedExact(value: number) {
   return `${value > 0 ? '+' : '-'}${formatExact(Math.abs(value))}`;
 }
 
+function getConceptPriorityScore(concept: CFDIConcept) {
+  const taxDifference = concept.impuestos.reduce((maxDifference, tax) => (
+    Math.max(maxDifference, Math.abs(tax.diferencia ?? 0))
+  ), 0);
+
+  return Math.max(Math.abs(concept.diferencia ?? 0), taxDifference);
+}
+
 export default function App() {
   const {
     profile,
@@ -187,6 +195,13 @@ export default function App() {
       return { concept, conceptIndex, reason };
     };
 
+    const sortConceptLinks = (links: FindingConceptLink[]) =>
+      [...links].sort((left, right) => {
+        const scoreDifference = getConceptPriorityScore(right.concept) - getConceptPriorityScore(left.concept);
+        if (scoreDifference !== 0) return scoreDifference;
+        return left.conceptIndex - right.conceptIndex;
+      });
+
     return cfdi.findings.map((finding) => {
       if (finding.id.startsWith('tax-group-')) {
         const groupKey = finding.id.slice('tax-group-'.length);
@@ -200,17 +215,22 @@ export default function App() {
           };
         }
 
-        return {
-          findingId: finding.id,
-          explanation: 'Compara la suma de traslados por concepto contra el impuesto agrupado del comprobante. Los conceptos de abajo participan en ese mismo grupo fiscal.',
-          relationshipLabel: `${group.conceptos.length} concepto(s) en el grupo ${group.impuesto} ${(group.tasaOCuota * 100).toFixed(2)}%`,
-          differenceLabel: `Dif. real ${formatSignedExact(group.diferencia)}`,
-          conceptLinks: group.conceptos
+        const conceptLinks = sortConceptLinks(
+          group.conceptos
             .map((conceptIndex) => buildConceptLink(
               conceptIndex,
               `Participa en el grupo fiscal ${group.impuesto} ${group.tipoFactor} ${(group.tasaOCuota * 100).toFixed(2)}% comparado contra el agrupado.`,
             ))
             .filter((link): link is FindingConceptLink => Boolean(link)),
+        );
+
+        return {
+          findingId: finding.id,
+          explanation: 'Compara la suma de traslados por concepto contra el impuesto agrupado del comprobante. Los conceptos de abajo participan en ese mismo grupo fiscal.',
+          relationshipLabel: `${group.conceptos.length} concepto(s) en el grupo ${group.impuesto} ${(group.tasaOCuota * 100).toFixed(2)}%`,
+          whyItMatters: 'Si este grupo no cuadra, el impuesto total del comprobante puede verse correcto a simple vista pero estar distribuido de forma inconsistente en el detalle.',
+          differenceLabel: `Dif. real ${formatSignedExact(group.diferencia)}`,
+          conceptLinks,
         };
       }
 
@@ -220,6 +240,7 @@ export default function App() {
           findingId: finding.id,
           explanation: 'Este hallazgo señala directamente un concepto cuyo importe no coincide con el cálculo esperado.',
           relationshipLabel: '1 concepto directamente afectado',
+          whyItMatters: 'Si el importe del concepto está mal, puede arrastrar discrepancias en subtotal, total o impuestos del comprobante.',
           conceptLinks: [buildConceptLink(conceptIndex, 'El importe de este concepto no coincide con cantidad × valor unitario.')]
             .filter((link): link is FindingConceptLink => Boolean(link)),
         };
@@ -238,6 +259,7 @@ export default function App() {
             findingId: finding.id,
             explanation: 'Este hallazgo matemático sí apunta a un concepto específico dentro del comprobante.',
             relationshipLabel: '1 concepto directamente afectado',
+            whyItMatters: 'Este concepto es una pista directa del origen del problema matemático detectado por el sistema.',
             conceptLinks: [buildConceptLink(parsed.conceptIndex, reason)]
               .filter((link): link is FindingConceptLink => Boolean(link)),
           };
@@ -247,6 +269,7 @@ export default function App() {
           findingId: finding.id,
           explanation: 'Este hallazgo resume una discrepancia global del comprobante y no señala por sí solo un concepto individual.',
           relationshipLabel: 'Sin concepto directo',
+          whyItMatters: 'Sirve para interpretar el estado general del comprobante, pero no para elegir por sí solo un concepto específico.',
           conceptLinks: [],
         };
       }
@@ -255,6 +278,7 @@ export default function App() {
         findingId: finding.id,
         explanation: 'Hallazgo operativo sin relacion detallada con conceptos en esta version.',
         relationshipLabel: 'Sin relacion detallada',
+        whyItMatters: 'Aporta contexto operativo, pero no ofrece todavía una ruta directa hacia conceptos específicos.',
         conceptLinks: [],
       };
     });

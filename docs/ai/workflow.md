@@ -34,6 +34,7 @@ Rules:
 - do not expand scope
 - do not invent features
 - do not refactor outside the stated slice
+- before implementation starts, verify whether it should begin in a new session/task
 
 ## Hotfix
 
@@ -64,6 +65,16 @@ If any of those are missing, the task remains in exploration.
 Exploration and implementation must not happen in the same task flow.
 
 If exploration produces a decision and work should continue, start a new implementation task using that decision as input.
+
+Before continuing any relevant work unit, explicitly check whether a new session/task should start.
+
+Open a new session/task by default when:
+- the work changes phase or primary concern
+- a verifiable milestone was just closed
+- the task type changes between exploration, implementation, or hotfix
+- the next step requires materially different context or runtime setup
+
+Continue in the same flow only when the next step is still part of the same narrow work unit.
 
 ## Deviations
 

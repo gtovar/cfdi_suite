@@ -18,6 +18,7 @@ export interface FindingContext {
   findingId: string;
   explanation: string;
   relationshipLabel: string;
+  whyItMatters?: string;
   differenceLabel?: string;
   conceptLinks: FindingConceptLink[];
 }
@@ -52,11 +53,8 @@ export default function FindingsSidebar({
   const selectedFindingContext = findingContexts.find((context) => context.findingId === selectedFindingId)
     ?? findingContexts.find((context) => context.conceptLinks.length > 0)
     ?? null;
-  const visibleConceptLinks = selectedFindingContext?.conceptLinks.slice(0, 4) ?? [];
-  const hiddenImpactedConceptCount = Math.max(
-    0,
-    (selectedFindingContext?.conceptLinks.length ?? 0) - visibleConceptLinks.length,
-  );
+  const suggestedConceptLink = selectedFindingContext?.conceptLinks[0] ?? null;
+  const remainingRelatedConcepts = Math.max(0, (selectedFindingContext?.conceptLinks.length ?? 0) - (suggestedConceptLink ? 1 : 0));
 
   useEffect(() => {
     setShowAllFindings(false);
@@ -173,47 +171,79 @@ export default function FindingsSidebar({
           </div>
         )}
 
-        {selectedFindingContext && selectedFindingContext.conceptLinks.length > 0 ? (
+        {selectedFindingContext ? (
           <div className="border border-[#141414]/10 bg-white/40 rounded p-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">
-                Conceptos relacionados
+                Guía de revisión
               </p>
               <span className="text-[10px] font-mono uppercase opacity-45">
-                {selectedFindingContext.conceptLinks.length}
+                {selectedFindingContext.conceptLinks.length > 0 ? 'Activa' : 'Resumen'}
               </span>
             </div>
             <p className="mt-3 text-[10px] font-mono uppercase tracking-widest opacity-45">
-              Relacionados con: {cfdi.findings.find((finding) => finding.id === selectedFindingContext.findingId)?.title}
+              Hallazgo enfocado: {cfdi.findings.find((finding) => finding.id === selectedFindingContext.findingId)?.title}
             </p>
             <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-60">
               {selectedFindingContext.explanation}
             </p>
-            <div className="mt-3 space-y-2">
-              {visibleConceptLinks.map((link) => (
-                <button
-                  key={`${link.concept.claveProdServ}-${link.concept.descripcion}-${link.conceptIndex}`}
-                  type="button"
-                  onClick={() => onSelectConcept(link.concept)}
-                  className="w-full border border-[#141414]/10 bg-white/70 px-3 py-2 text-left hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
-                >
-                  <p className="text-[10px] font-mono uppercase tracking-widest opacity-55">
-                    Concepto {link.conceptIndex + 1}
+            {selectedFindingContext.whyItMatters ? (
+              <div className="mt-3 border border-[#141414]/10 bg-white/60 px-3 py-2">
+                <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
+                  Por qué importa
+                </p>
+                <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-65">
+                  {selectedFindingContext.whyItMatters}
+                </p>
+              </div>
+            ) : null}
+            <div className="mt-3 border border-[#141414]/10 bg-white/60 px-3 py-2">
+              <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
+                Prioridad
+              </p>
+              <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-65">
+                {suggestedConceptLink
+                  ? `Este hallazgo toca ${selectedFindingContext.conceptLinks.length} concepto(s). Empieza por revisar el concepto ${suggestedConceptLink.conceptIndex + 1}.`
+                  : 'Este hallazgo no apunta a un concepto específico; úsalo como contexto general del comprobante.'}
+              </p>
+              {suggestedConceptLink ? (
+                <div className="mt-3 border border-[#141414]/10 bg-[#E4E3E0] px-3 py-2">
+                  <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
+                    Concepto sugerido
                   </p>
-                  <p className="mt-1 text-xs font-semibold truncate">
-                    {link.concept.descripcion || 'Sin descripcion'}
+                  <p className="mt-2 text-xs font-semibold truncate">
+                    {suggestedConceptLink.concept.descripcion || `Concepto ${suggestedConceptLink.conceptIndex + 1}`}
                   </p>
                   <p className="mt-2 text-[10px] font-mono leading-relaxed opacity-60 normal-case tracking-normal">
-                    {link.reason}
+                    {suggestedConceptLink.reason}
                   </p>
-                </button>
-              ))}
+                </div>
+              ) : null}
             </div>
-            {hiddenImpactedConceptCount > 0 ? (
-              <p className="mt-3 text-[10px] font-mono uppercase tracking-widest opacity-40">
-                {hiddenImpactedConceptCount} conceptos adicionales relacionados no visibles
+            <div className="mt-3 border border-[#141414]/10 bg-white/60 px-3 py-2">
+              <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
+                Acción
               </p>
-            ) : null}
+              <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-65">
+                {suggestedConceptLink
+                  ? 'Abre el concepto sugerido para inspeccionar su detalle. El resto de conceptos relacionados sigue estando disponible en la tabla principal.'
+                  : 'Usa este hallazgo para interpretar el comprobante y continúa la revisión desde la tabla principal.'}
+              </p>
+              {suggestedConceptLink ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectConcept(suggestedConceptLink.concept)}
+                  className="mt-3 border border-[#141414]/20 px-2.5 py-1 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+                >
+                  Abrir concepto sugerido
+                </button>
+              ) : null}
+              {remainingRelatedConcepts > 0 ? (
+                <p className="mt-3 text-[10px] font-mono uppercase tracking-widest opacity-40">
+                  {remainingRelatedConcepts} conceptos adicionales siguen disponibles en la tabla principal
+                </p>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>

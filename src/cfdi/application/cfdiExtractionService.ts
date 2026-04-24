@@ -1,6 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import { buildCfdiData, detectCfdiProfile } from './cfdiAnalysisService';
-import type { CFDIAnalysisBundle, CFDIIngresoRow, CFDIPagoRow } from './cfdiTypes';
+import type { CFDIIngresoRow, CFDIPagoRow } from './cfdiTypes';
 
 type XmlNode = Record<string, unknown>;
 type ProgressReporter = (progress: number, detail: string) => void;
@@ -255,19 +255,4 @@ export function extractPagoRowsData(
   }
 
   return rows;
-}
-
-export function buildCfdiAnalysisBundle(xml: string): CFDIAnalysisBundle {
-  return {
-    profile: detectCfdiProfile(xml),
-    cfdi: buildCfdiData(xml),
-    ingresoRows: extractIngresoRowsData(xml),
-    pagoRows: (() => {
-      try {
-        return extractPagoRowsData(xml);
-      } catch {
-        return [];
-      }
-    })(),
-  };
 }

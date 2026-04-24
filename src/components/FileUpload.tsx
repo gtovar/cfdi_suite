@@ -12,7 +12,7 @@ interface FileUploadProps {
   analysisLabel?: string;
   analysisProgress?: number;
   analysisDetail?: string;
-  analysisEngine?: 'idle' | 'worker' | 'fallback';
+  analysisEngine?: 'idle' | 'api' | 'fallback';
   analysisReason?: string;
 }
 
@@ -162,22 +162,22 @@ export default function FileUpload({
             {phase === 'analyzing' && analysisEngine !== 'idle' ? (
               <div className="mt-3 pt-3 border-t border-[#141414]/8">
                 <div className={`inline-flex items-center gap-2 px-2.5 py-1 border text-[10px] font-mono uppercase tracking-widest ${
-                  analysisEngine === 'worker'
+                  analysisEngine === 'api'
                     ? 'border-green-700/20 bg-green-50 text-green-700'
                     : analysisEngine === 'fallback'
                       ? 'border-amber-700/20 bg-amber-50 text-amber-700'
                       : 'border-[#141414]/10 bg-white text-[#141414]/60'
                 }`}>
                   <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80" />
-                  {analysisEngine === 'worker'
-                    ? 'Worker activo'
+                  {analysisEngine === 'api'
+                    ? 'API activa'
                     : analysisEngine === 'fallback'
                       ? 'Fallback local'
                       : 'Estado tecnico'}
                 </div>
                 <p className="mt-2 text-[10px] font-mono uppercase tracking-widest text-gray-400">
-                  {analysisEngine === 'worker'
-                    ? 'Procesamiento fuera del hilo principal'
+                  {analysisEngine === 'api'
+                    ? 'Procesamiento por backend Python'
                     : analysisEngine === 'fallback'
                       ? 'Procesado completo en hilo principal'
                       : 'Analizando'}

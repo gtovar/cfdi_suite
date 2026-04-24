@@ -116,10 +116,3 @@ export interface CFDIData {
   };
   supportText: string;
 }
-
-export interface CFDIAnalysisBundle {
-  profile: CFDIProfile;
-  cfdi: CFDIData;
-  ingresoRows: CFDIIngresoRow[];
-  pagoRows: CFDIPagoRow[];
-}

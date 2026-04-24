@@ -1,0 +1,7 @@
+{
+  "workspaceId": "f2edd5ae-a9c1-4df0-85de-0f48592831ad",
+  "apiUrl": "http://localhost:4000",
+  "stateFiles": ["PROJECT_STATE.md"],
+  "secretPatterns": ["sk-", "ghp_", "AKIA[0-9A-Z]{16}", "-----BEGIN (PRIVATE|RSA) KEY"],
+  "requiredHooks": [".git/hooks/pre-commit"]
+}

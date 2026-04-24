@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xmlns:nomina12="http://www.sat.gob.mx/nomina12" Version="4.0" TipoDeComprobante="I" Fecha="2026-04-17T10:00:00" SubTotal="100.00" Total="100.00" Moneda="MXN" Exportacion="01" LugarExpedicion="64000" Sello="SELLO12345678" NoCertificado="00001000000504465028" Certificado="CERTIFICADOBASE64">
+  <cfdi:Emisor Rfc="AAA010101AAA" Nombre="EMISOR SA DE CV" RegimenFiscal="601" />
+  <cfdi:Receptor Rfc="BBB010101BBB" Nombre="RECEPTOR SA DE CV" UsoCFDI="CN01" DomicilioFiscalReceptor="64000" RegimenFiscalReceptor="605" />
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111505" ClaveUnidad="ACT" Unidad="Actividad" Cantidad="1" Descripcion="Recibo de nomina" ValorUnitario="100.00" Importe="100.00" ObjetoImp="01" />
+  </cfdi:Conceptos>
+  <cfdi:Complemento>
+    <nomina12:Nomina Version="1.2" TipoNomina="O" FechaPago="2026-04-17" FechaInicialPago="2026-04-01" FechaFinalPago="2026-04-15" NumDiasPagados="15" TotalPercepciones="100.00" TotalDeducciones="0.00" TotalOtrosPagos="0.00">
+      <nomina12:Emisor RegistroPatronal="A1234567890" />
+      <nomina12:Receptor Curp="XEXX010101HNEXXXA4" NumSeguridadSocial="12345678901" FechaInicioRelLaboral="2026-01-01" Antiguedad="P15D" TipoContrato="01" TipoJornada="01" TipoRegimen="02" NumEmpleado="EMP-001" Departamento="Operaciones" Puesto="Analista" RiesgoPuesto="1" PeriodicidadPago="04" Banco="002" CuentaBancaria="1234567890" SalarioBaseCotApor="100.00" SalarioDiarioIntegrado="100.00" ClaveEntFed="NLE" />
+      <nomina12:Percepciones TotalSueldos="100.00" TotalGravado="100.00" TotalExento="0.00">
+        <nomina12:Percepcion TipoPercepcion="001" Clave="P001" Concepto="Sueldos" ImporteGravado="100.00" ImporteExento="0.00" />
+      </nomina12:Percepciones>
+    </nomina12:Nomina>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="NOMINA-LIKE-UUID" FechaTimbrado="2026-04-17T10:00:01" RfcProvCertif="AAA010101AAA" SelloCFD="SELLOCFD12345678" NoCertificadoSAT="00001000000504465028" SelloSAT="SELLOSAT12345678" />
+  </cfdi:Complemento>
+</cfdi:Comprobante>

@@ -1,8 +1,8 @@
-import type { CFDIAnalysisBundle } from '../cfdi/application/cfdiTypes';
-import { analyzeCFDI } from './cfdi';
+import type { CfdiAnalysisContractResult } from '../cfdi/public';
+import { analyzeCFDIContract } from './cfdi';
 
 export interface CFDIWorkerResponse {
-  bundle: CFDIAnalysisBundle;
+  result: CfdiAnalysisContractResult;
   engine: 'worker' | 'fallback';
   reason?: string;
 }
@@ -20,7 +20,7 @@ export async function analyzeCFDIWithWorker(
   if (typeof Worker === 'undefined') {
     onProgress?.({ label: 'Analizando en hilo principal', progress: 100 });
     return {
-      bundle: analyzeCFDI(xml),
+      result: analyzeCFDIContract(xml),
       engine: 'fallback',
       reason: 'Worker no disponible en este entorno',
     };
@@ -29,8 +29,8 @@ export async function analyzeCFDIWithWorker(
   try {
     const worker = new Worker(new URL('./cfdi-worker.ts', import.meta.url), { type: 'module' });
 
-    const result = await new Promise<CFDIAnalysisBundle>((resolve, reject) => {
-      worker.onmessage = (event: MessageEvent<{ ok?: boolean; result?: CFDIAnalysisBundle; error?: string; progress?: number; label?: string; detail?: string }>) => {
+    const result = await new Promise<CfdiAnalysisContractResult>((resolve, reject) => {
+      worker.onmessage = (event: MessageEvent<{ ok?: boolean; result?: CfdiAnalysisContractResult; error?: string; progress?: number; label?: string; detail?: string }>) => {
         if (typeof event.data.progress === 'number' && event.data.label) {
           onProgress?.({ progress: event.data.progress, label: event.data.label, detail: event.data.detail });
           return;
@@ -52,13 +52,13 @@ export async function analyzeCFDIWithWorker(
     });
 
     return {
-      bundle: result,
+      result,
       engine: 'worker',
     };
   } catch (error) {
     onProgress?.({ label: 'Analizando en hilo principal', progress: 100, detail: 'Worker no disponible, se usa procesamiento local completo.' });
     return {
-      bundle: analyzeCFDI(xml),
+      result: analyzeCFDIContract(xml),
       engine: 'fallback',
       reason: error instanceof Error ? error.message : 'Error desconocido en worker',
     };
