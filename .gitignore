@@ -8,5 +8,8 @@ coverage/
 !.env.example
 .venv-satcfdi/
 
-# AI Governance runtime
+# AI Governance — infraestructura local, no se versiona
 .governance/
+.claude/governance.json
+.claude/settings.json
+.claude/hooks/
