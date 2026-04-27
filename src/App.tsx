@@ -50,8 +50,6 @@ export default function App() {
     cfdi,
     ingresoRows,
     pagoRows,
-    analysisEngine,
-    analysisReason,
     analysisStageLabel,
     analysisStageProgress,
     analysisStageDetail,
@@ -139,8 +137,6 @@ export default function App() {
             analysisLabel={analysisStageLabel}
             analysisProgress={analysisStageProgress}
             analysisDetail={analysisStageDetail}
-            analysisEngine={analysisEngine}
-            analysisReason={analysisReason}
           />
         </div>
       </div>

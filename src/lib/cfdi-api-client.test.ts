@@ -1,15 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { analyzeCFDI } from './cfdi-api-client';
 
-const analyzeCFDIContract = vi.fn();
-
-vi.mock('./cfdi', () => ({
-  analyzeCFDIContract: (...args: unknown[]) => analyzeCFDIContract(...args),
-}));
-
 describe('cfdi-api-client', () => {
   beforeEach(() => {
-    analyzeCFDIContract.mockReset();
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -42,34 +35,22 @@ describe('cfdi-api-client', () => {
     const response = await analyzeCFDI('<xml />');
 
     expect(response.engine).toBe('api');
-    expect(response.meta?.requestId).toBe('req-api-1');
-    expect(response.meta?.providerMode).toBe('bridge');
+    expect(response.meta.requestId).toBe('req-api-1');
+    expect(response.meta.providerMode).toBe('bridge');
   });
 
-  it('uses fallback only for eligible technical failures', async () => {
-    analyzeCFDIContract.mockReturnValue({
-      engine: 'current-ts',
-      profile: 'unknown',
-      cfdi: null,
-      ingresoRows: [],
-      pagoRows: [],
-      issues: [],
-    });
+  it('throws on network errors instead of falling back locally', async () => {
     vi.mocked(globalThis.fetch).mockRejectedValue(new TypeError('network down'));
 
-    const response = await analyzeCFDI('<xml />');
-
-    expect(response.engine).toBe('fallback');
-    expect(analyzeCFDIContract).toHaveBeenCalledWith('<xml />');
+    await expect(analyzeCFDI('<xml />')).rejects.toThrow('network down');
   });
 
-  it('does not use fallback for backend http errors without a contractual body', async () => {
+  it('throws on backend http errors without a contractual body', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response('bad request', { status: 400 }),
     );
 
     await expect(analyzeCFDI('<xml />')).rejects.toThrow('La API respondió 400');
-    expect(analyzeCFDIContract).not.toHaveBeenCalled();
   });
 
   it('uses backend contractual fallback responses without invoking local fallback', async () => {
@@ -98,8 +79,7 @@ describe('cfdi-api-client', () => {
     const response = await analyzeCFDI('<xml />');
 
     expect(response.engine).toBe('api');
-    expect(response.meta?.provider).toBe('current-ts');
-    expect(response.meta?.providerMode).toBe('fallback');
-    expect(analyzeCFDIContract).not.toHaveBeenCalled();
+    expect(response.meta.provider).toBe('current-ts');
+    expect(response.meta.providerMode).toBe('fallback');
   });
 });

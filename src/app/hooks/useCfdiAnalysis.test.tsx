@@ -130,8 +130,6 @@ describe('useCfdiAnalysis', () => {
     expect(latest?.profile).toBe('pagos');
     expect(latest?.cfdi?.uuid).toBe('HOOK-TEST-UUID');
     expect(latest?.pagoRows).toHaveLength(1);
-    expect(latest?.analysisEngine).toBe('api');
-    expect(latest?.analysisReason).toBe('api ok');
     expect(latest?.analysisMeta?.requestId).toBe('req-123');
     expect(latest?.analysisMeta?.providerMode).toBe('bridge');
     expect(beforeApply).toHaveBeenCalledWith('pagos');

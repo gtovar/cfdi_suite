@@ -8,8 +8,6 @@ export function useCfdiAnalysis() {
   const [cfdi, setCfdi] = useState<CFDIData | null>(null);
   const [ingresoRows, setIngresoRows] = useState<CFDIIngresoRow[]>([]);
   const [pagoRows, setPagoRows] = useState<CFDIPagoRow[]>([]);
-  const [analysisEngine, setAnalysisEngine] = useState<'idle' | 'api' | 'fallback'>('idle');
-  const [analysisReason, setAnalysisReason] = useState('');
   const [analysisMeta, setAnalysisMeta] = useState<CFDIAnalysisMeta | null>(null);
   const [analysisStageLabel, setAnalysisStageLabel] = useState('Analizando estructura CFDI');
   const [analysisStageProgress, setAnalysisStageProgress] = useState(100);
@@ -25,7 +23,7 @@ export function useCfdiAnalysis() {
   ) {
     try {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const { result, engine, reason, meta } = await analyzeCFDI(xml, ({ label, progress, detail }) => {
+      const { result, meta } = await analyzeCFDI(xml, ({ label, progress, detail }) => {
         setAnalysisStageLabel(label);
         setAnalysisStageProgress(progress);
         setAnalysisStageDetail(detail ?? '');
@@ -42,9 +40,7 @@ export function useCfdiAnalysis() {
       setIngresoRows(result.ingresoRows);
       setPagoRows(result.pagoRows);
       setProfile(result.profile);
-      setAnalysisEngine(engine);
-      setAnalysisReason(reason ?? result.issues.map((issue) => issue.message).join(' | '));
-      setAnalysisMeta(meta ?? null);
+      setAnalysisMeta(meta);
       setAnalysisStageLabel('Analizando estructura CFDI');
       setAnalysisStageProgress(100);
       setAnalysisStageDetail('');
@@ -52,7 +48,10 @@ export function useCfdiAnalysis() {
       options?.onAfterApply?.();
     } catch (error) {
       console.error('Error parsing CFDI:', error);
-      alert('Error al procesar el XML. Asegúrate de que sea un CFDI válido.');
+      const message = error instanceof TypeError
+        ? 'No se pudo conectar con la API. Verifica que el backend esté corriendo.'
+        : 'Error al procesar el XML. Asegúrate de que sea un CFDI válido.';
+      alert(message);
     }
   }
 
@@ -62,8 +61,6 @@ export function useCfdiAnalysis() {
     setPagoRows([]);
     setSourceXml('');
     setProfile('unknown');
-    setAnalysisEngine('idle');
-    setAnalysisReason('');
     setAnalysisMeta(null);
     setAnalysisStageLabel('Analizando estructura CFDI');
     setAnalysisStageProgress(100);
@@ -75,8 +72,6 @@ export function useCfdiAnalysis() {
     cfdi,
     ingresoRows,
     pagoRows,
-    analysisEngine,
-    analysisReason,
     analysisMeta,
     analysisStageLabel,
     analysisStageProgress,

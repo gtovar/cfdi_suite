@@ -1,5 +1,4 @@
 import type { CfdiAnalysisContractResult } from '../cfdi/public';
-import { analyzeCFDIContract } from './cfdi';
 
 export interface CFDIAnalysisMeta {
   contractVersion: string;
@@ -16,9 +15,8 @@ export interface CFDIAnalysisMeta {
 
 export interface CFDIAnalysisResponse {
   result: CfdiAnalysisContractResult;
-  engine: 'api' | 'fallback';
-  reason?: string;
-  meta?: CFDIAnalysisMeta;
+  engine: 'api';
+  meta: CFDIAnalysisMeta;
 }
 
 export interface CFDIAnalysisProgress {
@@ -49,70 +47,49 @@ export async function analyzeCFDI(
     detail: 'Enviando el archivo al backend Python.',
   });
 
-  try {
-    const response = await fetch(`${resolveApiBaseUrl()}/api/cfdi/analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ xml }),
-    });
+  const response = await fetch(`${resolveApiBaseUrl()}/api/cfdi/analyze`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ xml }),
+  });
 
-    onProgress?.({
-      label: 'Procesando respuesta del backend',
-      progress: 76,
-      detail: 'Consolidando respuesta contractual para la UI.',
-    });
+  onProgress?.({
+    label: 'Procesando respuesta del backend',
+    progress: 76,
+    detail: 'Consolidando respuesta contractual para la UI.',
+  });
 
-    const payload = await tryReadContractualPayload(response);
-    if (!payload?.meta?.requestId) {
-      throw new Error(response.ok
-        ? 'La API devolvió una respuesta contractual inválida'
-        : `La API respondió ${response.status}`);
-    }
-
-    const result: CfdiAnalysisContractResult = {
-      engine: payload.meta.provider === 'current-ts' ? 'current-ts' : 'python-satcfdi',
-      profile: payload.profile,
-      cfdi: payload.cfdi,
-      ingresoRows: payload.ingresoRows,
-      pagoRows: payload.pagoRows,
-      issues: payload.issues,
-    };
-
-    onProgress?.({
-      label: 'Resultado listo',
-      progress: 100,
-      detail: payload.profile === 'pagos'
-        ? `Filas: ${payload.pagoRows.length.toLocaleString('es-MX')}`
-        : `Filas: ${payload.ingresoRows.length.toLocaleString('es-MX')}`,
-    });
-
-    return {
-      result,
-      engine: 'api',
-      reason: buildApiReason(payload.meta),
-      meta: payload.meta,
-    };
-  } catch (error) {
-    const shouldUseFallback = isApiUnavailableError(error);
-    if (!shouldUseFallback) {
-      throw error;
-    }
-
-    onProgress?.({
-      label: 'Analizando con fallback local',
-      progress: 100,
-      detail: 'La API no estuvo disponible. Se usa el motor TypeScript local.',
-    });
-
-    return {
-      result: analyzeCFDIContract(xml),
-      engine: 'fallback',
-      reason: error instanceof Error ? error.message : 'Error desconocido al llamar la API',
-      meta: undefined,
-    };
+  const payload = await tryReadContractualPayload(response);
+  if (!payload?.meta?.requestId) {
+    throw new Error(response.ok
+      ? 'La API devolvió una respuesta contractual inválida'
+      : `La API respondió ${response.status}`);
   }
+
+  const result: CfdiAnalysisContractResult = {
+    engine: payload.meta.provider === 'current-ts' ? 'current-ts' : 'python-satcfdi',
+    profile: payload.profile,
+    cfdi: payload.cfdi,
+    ingresoRows: payload.ingresoRows,
+    pagoRows: payload.pagoRows,
+    issues: payload.issues,
+  };
+
+  onProgress?.({
+    label: 'Resultado listo',
+    progress: 100,
+    detail: payload.profile === 'pagos'
+      ? `Filas: ${payload.pagoRows.length.toLocaleString('es-MX')}`
+      : `Filas: ${payload.ingresoRows.length.toLocaleString('es-MX')}`,
+  });
+
+  return {
+    result,
+    engine: 'api',
+    meta: payload.meta,
+  };
 }
 
 async function tryReadContractualPayload(response: Response): Promise<ApiAnalyzeResponse | null> {
@@ -126,14 +103,6 @@ async function tryReadContractualPayload(response: Response): Promise<ApiAnalyze
   } catch {
     return null;
   }
-}
-
-function isApiUnavailableError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return error instanceof TypeError || error.name === 'AbortError';
 }
 
 function buildApiReason(meta: CFDIAnalysisMeta) {
