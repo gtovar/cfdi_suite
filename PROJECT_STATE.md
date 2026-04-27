@@ -5,13 +5,15 @@
 experiment/sidebar-context-and-ui-baseline
 
 ## Último cambio
-Governance completado + utils recuperados: detect-secrets configurado en pre-commit, governance.json
-corregido a "git-hooks", .gitignore con patrones Python. Añadidos cfdiFormatters.ts y
-findingUtils.ts (extraídos en refactor d2a6f98 pero sin commitear).
+Sesión C completada: retiro del fallback local del frontend. El api-client ya no ejecuta
+el motor TypeScript local cuando el backend no responde — los errores de red propagaran
+al usuario con mensaje claro. Removidos: `analysisEngine`, `analysisReason`, badge UI de
+fallback, `isApiUnavailableError`. Tests actualizados (6/6 pasan).
 
 ## Próximo paso
-Retomar trabajo en sidebar: contexto de findings (`useFindingContexts`) y UI baseline.
+Sesión B: implementar `cfdi.findings` ricos desde python-satcfdi y reemplazar placeholders
+de `verdict` y `supportText` (5 archivos backend + 1 frontend).
 
 ## Riesgos abiertos
-- `src/app/utils/` untracked: verificar si es código nuevo que debe commitearse
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos
+- Obligación "Implement a secrets detection strategy" en governance server requiere cierre manual en http://localhost:3000
