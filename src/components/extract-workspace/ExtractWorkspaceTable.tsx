@@ -61,9 +61,9 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
       }}
     >
       <table className="w-full border-collapse table-fixed">
-        <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
+        <thead className="sticky top-0 bg-gray-50 z-10 border-b border-gray-200">
           {table.getHeaderGroups().map((headerGroup) => (
-            <tr key={headerGroup.id} className="text-left text-[10px] font-mono uppercase opacity-50">
+            <tr key={headerGroup.id} className="text-left">
               <th className="w-10 px-2 py-2 font-normal">
                 <input
                   type="checkbox"
@@ -80,7 +80,7 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
                 return (
                   <th
                     key={header.id}
-                    className="px-3 py-2 font-normal whitespace-nowrap align-top relative"
+                    className="px-3 py-2 whitespace-nowrap align-top relative text-tiny font-medium uppercase tracking-wider text-gray-500"
                     style={{ width: header.getSize() }}
                   >
                     {header.isPlaceholder ? null : (
@@ -89,7 +89,7 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
                           <button
                             type="button"
                             onClick={(event) => header.column.toggleSorting(undefined, event.shiftKey)}
-                            className="font-normal text-left hover:opacity-100 opacity-80"
+                            className="text-left hover:text-primary-600 transition-colors"
                           >
                             {flexRender(header.column.columnDef.header, header.getContext())}
                           </button>
@@ -104,20 +104,20 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
                           value={String(header.column.getFilterValue() ?? '')}
                           onChange={(event) => setColumnFilterValue(header.column.id, event.target.value)}
                           placeholder="Filtrar..."
-                          className="w-full px-2 py-1 bg-white/70 border border-[#141414]/15 text-[10px] font-mono normal-case tracking-normal"
+                          className="w-full rounded px-2 py-1 border border-gray-200 bg-white text-tiny normal-case tracking-normal outline-none focus:border-primary-400"
                         />
                         <div className="flex items-center gap-1 normal-case">
                           <button
                             type="button"
                             onClick={() => grid.moveColumn(header.column.id, 'left')}
-                            className="px-1.5 py-0.5 border border-[#141414]/10 text-[9px]"
+                            className="rounded px-1 py-0.5 border border-gray-200 text-gray-400 text-tiny hover:border-gray-400 hover:text-gray-600 transition-colors"
                           >
                             ←
                           </button>
                           <button
                             type="button"
                             onClick={() => grid.moveColumn(header.column.id, 'right')}
-                            className="px-1.5 py-0.5 border border-[#141414]/10 text-[9px]"
+                            className="rounded px-1 py-0.5 border border-gray-200 text-gray-400 text-tiny hover:border-gray-400 hover:text-gray-600 transition-colors"
                           >
                             →
                           </button>
@@ -128,7 +128,7 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
                       onMouseDown={header.getResizeHandler()}
                       onTouchStart={header.getResizeHandler()}
                       className={`absolute top-0 right-0 h-full w-1 cursor-col-resize select-none ${
-                        header.column.getIsResizing() ? 'bg-[#141414]' : 'bg-[#141414]/15'
+                        header.column.getIsResizing() ? 'bg-primary-500' : 'bg-gray-200'
                       }`}
                     />
                   </th>
@@ -146,8 +146,8 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
           {virtualization.visibleRows.map((row) => (
             <tr
               key={row.id}
-              className={`border-b border-[#141414]/10 hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors ${
-                row.getIsSelected() ? 'bg-[#141414]/10' : ''
+              className={`border-b border-gray-100 transition-colors ${
+                row.getIsSelected() ? 'bg-primary-50' : 'hover:bg-gray-50'
               }`}
               style={{ height: ROW_HEIGHT }}
             >
@@ -179,8 +179,8 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
         </tbody>
       </table>
       {table.getState().sorting.length > 0 ? (
-        <div className="px-4 py-2 border-t border-[#141414]/10 bg-white/70 text-[10px] font-mono uppercase tracking-widest opacity-70 sticky bottom-0">
-          Multi-sort activo. Usa Shift + click en encabezados para agregar o quitar niveles.
+        <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 text-tiny text-gray-400 uppercase tracking-widest sticky bottom-0">
+          Multi-sort activo · Shift + click para agregar o quitar niveles
         </div>
       ) : null}
     </div>

@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import ExtractWorkspacePagination from './extract-workspace/ExtractWorkspacePagination';
 import ExtractWorkspaceTable from './extract-workspace/ExtractWorkspaceTable';
 import ExtractWorkspaceToolbar from './extract-workspace/ExtractWorkspaceToolbar';
@@ -17,7 +18,7 @@ export default function ExtractWorkspace({
   const { extractColumns, activeHiddenColumns, toggleColumn } = grid;
 
   return (
-    <section className={embedded ? 'flex-1 min-h-0 border-t border-[#141414] bg-white/10 flex flex-col' : 'flex-1 flex flex-col overflow-hidden relative'}>
+    <section className={embedded ? 'flex-1 min-h-0 flex flex-col' : 'flex-1 flex flex-col overflow-hidden relative'}>
       {embedded ? null : (
         <div className="grid grid-cols-3 border-b border-[#141414]">
           <div className="p-4 border-r border-[#141414]">
@@ -43,20 +44,21 @@ export default function ExtractWorkspace({
 
       <ExtractWorkspaceToolbar grid={grid} />
 
-      <div className="border-b border-[#141414]/10 bg-[#E4E3E0] px-4 py-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-mono uppercase tracking-widest opacity-45">Columnas</span>
+      <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-tiny font-medium uppercase tracking-wider text-gray-400 mr-1">Columnas</span>
           {extractColumns.map((column) => {
             const hidden = activeHiddenColumns.includes(column.key);
             return (
               <button
                 key={column.key}
                 onClick={() => toggleColumn(column.key, hidden)}
-                className={`px-2.5 py-1 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
+                className={clsx(
+                  'rounded border px-2 py-0.5 text-tiny font-medium uppercase tracking-wide transition-colors',
                   hidden
-                    ? 'border-[#141414]/10 text-[#141414]/35 bg-white/50'
-                    : 'border-[#141414]/25 bg-[#141414] text-[#E4E3E0]'
-                }`}
+                    ? 'border-gray-200 bg-white text-gray-400 hover:border-gray-300 hover:text-gray-600'
+                    : 'border-primary-600/20 bg-primary-600/10 text-primary-600',
+                )}
               >
                 {column.label}
               </button>

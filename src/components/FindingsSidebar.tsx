@@ -1,5 +1,6 @@
+import clsx from 'clsx';
 import { useEffect, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type { CFDIConcept, CFDIData } from '../cfdi/public';
 
 interface SummaryMetricCard {
@@ -50,239 +51,269 @@ export default function FindingsSidebar({
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const visibleFindings = showAllFindings ? cfdi.findings : cfdi.findings.slice(0, 4);
   const hiddenFindingsCount = Math.max(0, cfdi.findings.length - visibleFindings.length);
-  const selectedFindingContext = findingContexts.find((context) => context.findingId === selectedFindingId)
-    ?? findingContexts.find((context) => context.conceptLinks.length > 0)
-    ?? null;
+  const selectedFindingContext =
+    findingContexts.find((ctx) => ctx.findingId === selectedFindingId) ??
+    findingContexts.find((ctx) => ctx.conceptLinks.length > 0) ??
+    null;
   const suggestedConceptLink = selectedFindingContext?.conceptLinks[0] ?? null;
-  const remainingRelatedConcepts = Math.max(0, (selectedFindingContext?.conceptLinks.length ?? 0) - (suggestedConceptLink ? 1 : 0));
+  const remainingRelatedConcepts = Math.max(
+    0,
+    (selectedFindingContext?.conceptLinks.length ?? 0) - (suggestedConceptLink ? 1 : 0),
+  );
 
   useEffect(() => {
     setShowAllFindings(false);
-    setSelectedFindingId(findingContexts.find((context) => context.conceptLinks.length > 0)?.findingId ?? null);
+    setSelectedFindingId(
+      findingContexts.find((ctx) => ctx.conceptLinks.length > 0)?.findingId ?? null,
+    );
   }, [cfdi.uuid, findingContexts]);
 
+  const hasFindings = cfdi.findings.length > 0;
+
   return (
-    <aside className="w-80 min-h-0 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
-      <div className="p-4 border-b border-[#141414]">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className={`w-2 h-2 rounded-full shrink-0 ${cfdi.findings.length > 0 ? 'bg-red-600' : 'bg-green-600'}`} />
-            <p className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-60">Hallazgos encontrados</p>
-          </div>
-          <span
-            className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-mono ${
-              cfdi.findings.length > 0
-                ? 'bg-red-100 text-red-600'
-                : 'bg-green-100 text-green-700'
-            }`}
-          >
-            {cfdi.findings.length === 0 ? '0 alertas' : `${cfdi.findings.length} alertas`}
-          </span>
+    <aside className="flex w-80 min-h-0 shrink-0 flex-col rounded-lg bg-white shadow-soft overflow-hidden">
+      {/* Header */}
+      <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
+        <div className="flex items-center gap-2">
+          {hasFindings ? (
+            <AlertTriangle size={14} className="text-amber-500 shrink-0" />
+          ) : (
+            <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+          )}
+          <p className="text-xs font-medium text-gray-700">Hallazgos</p>
         </div>
+        <span
+          className={clsx(
+            'inline-flex items-center rounded-full px-2 py-0.5 text-tiny font-medium',
+            hasFindings ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700',
+          )}
+        >
+          {cfdi.findings.length === 0 ? '0 alertas' : `${cfdi.findings.length} alertas`}
+        </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {cfdi.findings.length === 0 ? (
-          <p className="text-[11px] font-mono opacity-55 leading-relaxed">
-            No se detectaron discrepancias con las reglas actualmente implementadas para este XML.
+      {/* Findings list */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {!hasFindings ? (
+          <p className="text-xs text-gray-500 leading-relaxed">
+            No se detectaron discrepancias con las reglas actualmente implementadas.
           </p>
         ) : (
-          <div className="space-y-3">
-            {visibleFindings.map((finding) => (
-              <div
-                key={finding.id}
-                className={`p-3 border rounded flex gap-3 ${
-                  finding.severity === 'critical'
-                    ? 'border-red-500/30 bg-red-50'
-                    : 'border-amber-500/30 bg-amber-50'
-                }`}
-              >
-                <AlertTriangle
-                  className={finding.severity === 'critical' ? 'text-red-500 shrink-0' : 'text-amber-500 shrink-0'}
-                  size={16}
-                />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono ${
-                      finding.severity === 'critical'
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-amber-100 text-amber-700'
-                    }`}>
-                      {getFindingOriginLabel(finding.id)}
-                    </span>
-                    <p className={`text-xs font-semibold ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
-                      {finding.title}
-                    </p>
-                  </div>
-                  <p className={`text-xs font-mono leading-relaxed mt-1 ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
-                    {finding.summary}
-                  </p>
-                  {findingContexts.find((context) => context.findingId === finding.id) ? (
-                    <div className="mt-3 space-y-2 border-t border-current/10 pt-3">
-                      <p className={`text-[10px] font-mono leading-relaxed ${finding.severity === 'critical' ? 'text-red-900/80' : 'text-amber-900/80'}`}>
-                        {findingContexts.find((context) => context.findingId === finding.id)?.explanation}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`px-2 py-1 text-[10px] font-mono uppercase tracking-widest ${
-                          finding.severity === 'critical'
-                            ? 'bg-red-100/80 text-red-800'
-                            : 'bg-amber-100/80 text-amber-800'
-                        }`}>
-                          {findingContexts.find((context) => context.findingId === finding.id)?.relationshipLabel}
-                        </span>
-                        {findingContexts.find((context) => context.findingId === finding.id)?.differenceLabel ? (
-                          <span className="text-[10px] font-mono uppercase tracking-widest opacity-70">
-                            {findingContexts.find((context) => context.findingId === finding.id)?.differenceLabel}
-                          </span>
-                        ) : null}
-                      </div>
-                      {(findingContexts.find((context) => context.findingId === finding.id)?.conceptLinks.length ?? 0) > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedFindingId(finding.id)}
-                          className={`border px-2.5 py-1 text-[10px] font-mono uppercase tracking-widest transition-colors ${
-                            selectedFindingContext?.findingId === finding.id
-                              ? 'border-[#141414] bg-[#141414] text-[#E4E3E0]'
-                              : 'border-[#141414]/20 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0]'
-                          }`}
+          <div className="space-y-2">
+            {visibleFindings.map((finding) => {
+              const isCritical = finding.severity === 'critical';
+              const ctx = findingContexts.find((c) => c.findingId === finding.id);
+              const isSelected = selectedFindingContext?.findingId === finding.id;
+              return (
+                <div
+                  key={finding.id}
+                  className={clsx(
+                    'rounded-lg border p-3',
+                    isCritical
+                      ? 'border-red-200 bg-red-50'
+                      : 'border-amber-200 bg-amber-50',
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle
+                      size={13}
+                      className={clsx(
+                        'mt-0.5 shrink-0',
+                        isCritical ? 'text-red-500' : 'text-amber-500',
+                      )}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                        <span
+                          className={clsx(
+                            'inline-flex rounded-full px-1.5 py-0.5 text-tiny font-medium',
+                            isCritical
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-amber-100 text-amber-700',
+                          )}
                         >
-                          {selectedFindingContext?.findingId === finding.id ? 'Hallazgo enfocado' : 'Ver conceptos relacionados'}
-                        </button>
-                      ) : null}
+                          {getFindingOriginLabel(finding.id)}
+                        </span>
+                        <p
+                          className={clsx(
+                            'text-xs font-semibold',
+                            isCritical ? 'text-red-900' : 'text-amber-900',
+                          )}
+                        >
+                          {finding.title}
+                        </p>
+                      </div>
+                      <p
+                        className={clsx(
+                          'text-xs leading-relaxed',
+                          isCritical ? 'text-red-800' : 'text-amber-800',
+                        )}
+                      >
+                        {finding.summary}
+                      </p>
+                      {ctx && (
+                        <div className="mt-2 space-y-2 border-t border-current/10 pt-2">
+                          <p
+                            className={clsx(
+                              'text-xs leading-relaxed',
+                              isCritical ? 'text-red-800/80' : 'text-amber-800/80',
+                            )}
+                          >
+                            {ctx.explanation}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={clsx(
+                                'rounded px-1.5 py-0.5 text-tiny font-medium uppercase tracking-wide',
+                                isCritical
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-amber-100 text-amber-800',
+                              )}
+                            >
+                              {ctx.relationshipLabel}
+                            </span>
+                            {ctx.differenceLabel && (
+                              <span className="text-tiny opacity-60">{ctx.differenceLabel}</span>
+                            )}
+                          </div>
+                          {ctx.conceptLinks.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFindingId(finding.id)}
+                              className={clsx(
+                                'inline-flex items-center rounded-lg border px-2.5 py-1 text-tiny font-medium transition-colors duration-200',
+                                isSelected
+                                  ? 'border-primary-600 bg-primary-600 text-white'
+                                  : 'border-gray-300 text-gray-600 hover:border-primary-400 hover:text-primary-600',
+                              )}
+                            >
+                              {isSelected ? 'Hallazgo enfocado' : 'Ver conceptos relacionados'}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
-            {cfdi.findings.length > 4 ? (
-              <div className="flex items-center justify-between gap-3 rounded border border-[#141414]/10 bg-white/50 px-3 py-2 text-[10px] font-mono uppercase tracking-widest">
-                <span className="opacity-55">
+              );
+            })}
+
+            {cfdi.findings.length > 4 && (
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                <span className="text-tiny text-gray-500">
                   {showAllFindings ? 'Lista completa visible' : `${hiddenFindingsCount} hallazgos ocultos`}
                 </span>
                 <button
                   type="button"
-                  onClick={() => setShowAllFindings((current) => !current)}
-                  className="border border-[#141414]/20 px-2.5 py-1 text-[10px] hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+                  onClick={() => setShowAllFindings((v) => !v)}
+                  className="rounded px-2 py-0.5 text-tiny font-medium text-primary-600 hover:bg-primary-50 transition-colors duration-200"
                 >
                   {showAllFindings ? 'Ver menos' : 'Ver todos'}
                 </button>
               </div>
-            ) : null}
+            )}
           </div>
         )}
 
-        {selectedFindingContext ? (
-          <div className="border border-[#141414]/10 bg-white/40 rounded p-3">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">
-                Guía de revisión
-              </p>
-              <span className="text-[10px] font-mono uppercase opacity-45">
-                {selectedFindingContext.conceptLinks.length > 0 ? 'Activa' : 'Resumen'}
-              </span>
-            </div>
-            <p className="mt-3 text-[10px] font-mono uppercase tracking-widest opacity-45">
-              Hallazgo enfocado: {cfdi.findings.find((finding) => finding.id === selectedFindingContext.findingId)?.title}
+        {/* Review guide */}
+        {selectedFindingContext && (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <p className="text-tiny font-medium uppercase tracking-wider text-gray-500 mb-2">
+              Guía de revisión
             </p>
-            <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-60">
+            <p className="text-tiny text-gray-500 mb-1">
+              Hallazgo enfocado: {cfdi.findings.find((f) => f.id === selectedFindingContext.findingId)?.title}
+            </p>
+            <p className="text-xs text-gray-600 leading-relaxed">
               {selectedFindingContext.explanation}
             </p>
-            {selectedFindingContext.whyItMatters ? (
-              <div className="mt-3 border border-[#141414]/10 bg-white/60 px-3 py-2">
-                <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
-                  Por qué importa
-                </p>
-                <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-65">
-                  {selectedFindingContext.whyItMatters}
-                </p>
+
+            {selectedFindingContext.whyItMatters && (
+              <div className="mt-2 rounded border border-gray-200 bg-white p-2.5">
+                <p className="text-tiny font-medium uppercase tracking-wider text-gray-500 mb-1">Por qué importa</p>
+                <p className="text-xs text-gray-600 leading-relaxed">{selectedFindingContext.whyItMatters}</p>
               </div>
-            ) : null}
-            <div className="mt-3 border border-[#141414]/10 bg-white/60 px-3 py-2">
-              <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
-                Prioridad
-              </p>
-              <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-65">
+            )}
+
+            <div className="mt-2 rounded border border-gray-200 bg-white p-2.5">
+              <p className="text-tiny font-medium uppercase tracking-wider text-gray-500 mb-1">Prioridad</p>
+              <p className="text-xs text-gray-600 leading-relaxed">
                 {suggestedConceptLink
                   ? `Este hallazgo toca ${selectedFindingContext.conceptLinks.length} concepto(s). Empieza por revisar el concepto ${suggestedConceptLink.conceptIndex + 1}.`
                   : 'Este hallazgo no apunta a un concepto específico; úsalo como contexto general del comprobante.'}
               </p>
-              {suggestedConceptLink ? (
-                <div className="mt-3 border border-[#141414]/10 bg-[#E4E3E0] px-3 py-2">
-                  <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
-                    Concepto sugerido
-                  </p>
-                  <p className="mt-2 text-xs font-semibold truncate">
+              {suggestedConceptLink && (
+                <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2">
+                  <p className="text-tiny font-medium uppercase tracking-wider text-gray-500 mb-1">Concepto sugerido</p>
+                  <p className="text-xs font-medium text-gray-800 truncate">
                     {suggestedConceptLink.concept.descripcion || `Concepto ${suggestedConceptLink.conceptIndex + 1}`}
                   </p>
-                  <p className="mt-2 text-[10px] font-mono leading-relaxed opacity-60 normal-case tracking-normal">
+                  <p className="mt-1 text-tiny text-gray-500 leading-relaxed">
                     {suggestedConceptLink.reason}
                   </p>
                 </div>
-              ) : null}
+              )}
             </div>
-            <div className="mt-3 border border-[#141414]/10 bg-white/60 px-3 py-2">
-              <p className="text-[10px] font-mono uppercase tracking-widest opacity-45">
-                Acción
-              </p>
-              <p className="mt-2 text-[11px] font-mono leading-relaxed opacity-65">
-                {suggestedConceptLink
-                  ? 'Abre el concepto sugerido para inspeccionar su detalle. El resto de conceptos relacionados sigue estando disponible en la tabla principal.'
-                  : 'Usa este hallazgo para interpretar el comprobante y continúa la revisión desde la tabla principal.'}
-              </p>
-              {suggestedConceptLink ? (
+
+            {suggestedConceptLink && (
+              <div className="mt-2">
+                <div className="mb-1">
+                  <p className="text-tiny font-medium uppercase tracking-wider text-gray-500">Acción</p>
+                  <p className="mt-1 text-xs text-gray-600 leading-relaxed">
+                    Abre el concepto sugerido para inspeccionar su detalle.
+                  </p>
+                </div>
                 <button
                   type="button"
                   onClick={() => onSelectConcept(suggestedConceptLink.concept)}
-                  className="mt-3 border border-[#141414]/20 px-2.5 py-1 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+                  className="inline-flex items-center rounded-lg border border-gray-300 px-2.5 py-1 text-tiny font-medium text-gray-700 transition-colors duration-200 hover:border-primary-400 hover:text-primary-600"
                 >
                   Abrir concepto sugerido
                 </button>
-              ) : null}
-              {remainingRelatedConcepts > 0 ? (
-                <p className="mt-3 text-[10px] font-mono uppercase tracking-widest opacity-40">
-                  {remainingRelatedConcepts} conceptos adicionales siguen disponibles en la tabla principal
-                </p>
-              ) : null}
-            </div>
+                {remainingRelatedConcepts > 0 && (
+                  <p className="mt-2 text-tiny text-gray-400">
+                    {remainingRelatedConcepts} conceptos adicionales siguen disponibles en la tabla principal
+                  </p>
+                )}
+              </div>
+            )}
           </div>
-        ) : null}
+        )}
       </div>
 
-      <div className="p-4 border-t border-[#141414] bg-[#141414]/5">
-        <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-3">Resumen</h3>
-        <div className="space-y-2 text-[11px] font-mono">
+      {/* Summary footer */}
+      <div className="shrink-0 border-t border-gray-200 bg-gray-50 p-3">
+        <p className="mb-2 text-tiny font-medium uppercase tracking-wider text-gray-500">Resumen</p>
+        <div className="space-y-1.5 text-xs">
           {activeDatasetType === 'ingresos' ? (
             <>
-              <div className="flex justify-between gap-3">
-                <span>Subtotal XML</span>
-                <span>${cfdi.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between gap-3 text-blue-600 italic">
-                <span>Subtotal Calc.</span>
-                <span>${cfdi.subtotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className={`flex justify-between gap-3 ${subtotalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                <span>Dif. Subtotal</span>
-                <span>${formatExact(subtotalDifference)}</span>
-              </div>
-              <div className="flex justify-between gap-3 border-t border-[#141414]/10 pt-2">
-                <span>Total XML</span>
-                <span>${cfdi.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between gap-3 text-blue-600 italic">
-                <span>Total Calc.</span>
-                <span>${cfdi.totalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className={`flex justify-between gap-3 ${totalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                <span>Dif. Total</span>
-                <span>${formatExact(totalDifference)}</span>
-              </div>
+              {[
+                { label: 'Subtotal XML', value: `$${cfdi.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}`, color: '' },
+                { label: 'Subtotal Calc.', value: `$${cfdi.subtotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}`, color: 'text-blue-600' },
+                { label: 'Dif. Subtotal', value: `$${formatExact(subtotalDifference)}`, color: subtotalDifference !== 0 ? 'text-red-600' : 'text-emerald-600' },
+                { label: 'Total XML', value: `$${cfdi.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}`, color: '', divider: true },
+                { label: 'Total Calc.', value: `$${cfdi.totalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}`, color: 'text-blue-600' },
+                { label: 'Dif. Total', value: `$${formatExact(totalDifference)}`, color: totalDifference !== 0 ? 'text-red-600' : 'text-emerald-600' },
+              ].map((row, i) => (
+                <div
+                  key={i}
+                  className={clsx(
+                    'flex justify-between gap-2',
+                    row.divider && 'mt-1.5 border-t border-gray-200 pt-1.5',
+                  )}
+                >
+                  <span className="text-gray-500">{row.label}</span>
+                  <span className={clsx('font-medium tabular-nums', row.color || 'text-gray-800')}>
+                    {row.value}
+                  </span>
+                </div>
+              ))}
             </>
           ) : (
             activeExtractMetrics.map((metric) => (
-              <div key={metric.key} className="flex justify-between gap-3">
-                <span>{metric.label}</span>
-                <span>{metric.value}</span>
+              <div key={metric.key} className="flex justify-between gap-2">
+                <span className="text-gray-500">{metric.label}</span>
+                <span className="font-medium text-gray-800">{metric.value}</span>
               </div>
             ))
           )}

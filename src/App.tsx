@@ -10,11 +10,16 @@ import { useCfdiExports } from './app/hooks/useCfdiExports';
 import { useDiagnoseState } from './app/hooks/useDiagnoseState';
 import { useExtractGridState } from './app/hooks/useExtractGridState';
 import { useFindingContexts } from './app/hooks/useFindingContexts';
+import { useSatEnquiry } from './app/hooks/useSatEnquiry';
 import { buildExtractMetrics, buildSummaryFields, getProfileLabel } from './app/view-models/cfdiViewModels';
 import { formatExact, getExplainedMeaning, getExplainedTaxLabel } from './app/utils/cfdiFormatters';
 import { getFindingOriginLabel } from './app/utils/findingUtils';
+import AppSidebar, { type AppView } from './components/AppNav';
+import AppHeader from './components/AppHeader';
 import CfdiSummaryHeader from './components/CfdiSummaryHeader';
 import ConceptDetailModal from './components/ConceptDetailModal';
+import ConsultasSATPage from './components/ConsultasSATPage';
+import EmisoresPage from './components/EmisoresPage';
 import ExtractWorkspace from './components/ExtractWorkspace';
 import type { ExtractMode } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
@@ -45,6 +50,9 @@ const PAGO_COLUMNS = [
 ] as const;
 
 export default function App() {
+  const [activeView, setActiveView] = useState<AppView>('inspector');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
   const {
     profile,
     cfdi,
@@ -61,6 +69,7 @@ export default function App() {
 
   const diagnose = useDiagnoseState(cfdi);
   const findingContexts = useFindingContexts(cfdi);
+  const satEnquiry = useSatEnquiry();
 
   const activeDatasetType: ExtractMode = profile === 'pagos' ? 'pagos' : 'ingresos';
   const extractColumns = activeDatasetType === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
@@ -105,9 +114,19 @@ export default function App() {
     extractGrid,
   });
 
+  const rfcEmisor =
+    (profile === 'pagos' ? pagoRows[0]?.rfcEmisor : ingresoRows[0]?.rfcEmisor) ?? '';
+  const rfcReceptor =
+    (profile === 'pagos' ? pagoRows[0]?.rfcReceptor : ingresoRows[0]?.rfcReceptor) ?? '';
+  const satEnquiryData =
+    cfdi && rfcEmisor
+      ? { uuid: cfdi.uuid, rfcEmisor, rfcReceptor, total: cfdi.total }
+      : null;
+
   function resetForFileSelect(nextProfile: ExtractMode) {
     resetForNewAnalysis(nextProfile);
     diagnose.reset();
+    satEnquiry.reset();
     setTaxAuditExpanded(true);
   }
 
@@ -115,84 +134,120 @@ export default function App() {
     resetAnalysis();
     resetExtractState();
     diagnose.reset();
+    satEnquiry.reset();
     setTaxAuditExpanded(true);
   }
 
-  if (!cfdi) {
-    return (
-      <div className="min-h-screen bg-[#E4E3E0] flex items-center justify-center p-6">
-        <div className="max-w-2xl w-full">
-          <div className="mb-8 text-center">
-            <h1 className="text-4xl font-serif italic mb-2 text-[#141414]">CFDI Inspector</h1>
-            <p className="text-[#141414]/60 font-mono text-sm uppercase tracking-widest">Auditoría y Validación de Facturas XML</p>
-          </div>
-          <FileUpload
-            onFileSelect={(xml) =>
-              handleFileSelect(xml, {
-                onBeforeApply: (nextProfile) => {
-                  resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
-                },
-              })
-            }
-            analysisLabel={analysisStageLabel}
-            analysisProgress={analysisStageProgress}
-            analysisDetail={analysisStageDetail}
-          />
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="h-screen bg-[#E4E3E0] text-[#141414] font-sans flex flex-col">
-      <InspectorHeader
-        profileLabel={getProfileLabel(profile)}
-        tableExported={tableExported}
-        tableExportError={tableExportError}
-        onExport={exportCurrentTable}
-        onReset={resetAll}
+    <div className="flex h-screen flex-col">
+      <AppHeader
+        activeView={activeView}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
       />
 
-      <main className="flex-1 min-h-0 flex overflow-hidden">
-        <FindingsSidebar
-          cfdi={cfdi}
-          findingContexts={findingContexts}
-          activeDatasetType={activeDatasetType}
-          activeExtractMetrics={activeExtractMetrics}
-          subtotalDifference={subtotalDifference}
-          totalDifference={totalDifference}
-          formatExact={formatExact}
-          getFindingOriginLabel={getFindingOriginLabel}
-          onSelectConcept={diagnose.setSelectedConcept}
+      <div className="flex flex-1 min-h-0">
+        <AppSidebar
+          activeView={activeView}
+          onViewChange={setActiveView}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
         />
 
-        <section className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-          <CfdiSummaryHeader summaryFields={summaryFields} />
-          <TaxAuditPanel
-            cfdi={cfdi}
-            taxAuditExpanded={taxAuditExpanded}
-            onToggle={() => setTaxAuditExpanded((current) => !current)}
-            getExplainedMeaning={getExplainedMeaning}
-            getExplainedTaxLabel={getExplainedTaxLabel}
-            formatExact={formatExact}
-          />
-          <div className="flex-1 min-h-0 flex flex-col">
-            <ExtractWorkspace
-              embedded
-              activeDatasetType={activeDatasetType}
-              grid={extractGrid}
-            />
-          </div>
+      <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
+      {activeView === 'consultas-sat' && <ConsultasSATPage />}
+      {activeView === 'emisores' && <EmisoresPage />}
 
-          <ConceptDetailModal
-            selectedConcept={diagnose.selectedConcept}
-            onClose={() => diagnose.setSelectedConcept(null)}
-            formatExact={formatExact}
-            getExplainedMeaning={getExplainedMeaning}
-            getExplainedTaxLabel={getExplainedTaxLabel}
-          />
-        </section>
-      </main>
+      {activeView === 'inspector' && (
+        <>
+          {!cfdi ? (
+            <div className="flex-1 flex items-center justify-center p-8 bg-gray-50">
+              <div className="max-w-2xl w-full">
+                <div className="mb-8 text-center">
+                  <p className="text-xs font-medium uppercase tracking-widest text-gray-400">
+                    Auditoría y Validación de Facturas XML
+                  </p>
+                </div>
+                <FileUpload
+                  onFileSelect={(xml) =>
+                    handleFileSelect(xml, {
+                      onBeforeApply: (nextProfile) => {
+                        resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
+                      },
+                    })
+                  }
+                  analysisLabel={analysisStageLabel}
+                  analysisProgress={analysisStageProgress}
+                  analysisDetail={analysisStageDetail}
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <InspectorHeader
+                profileLabel={getProfileLabel(profile)}
+                tableExported={tableExported}
+                tableExportError={tableExportError}
+                onExport={exportCurrentTable}
+                onReset={resetAll}
+                satEnquiryData={satEnquiryData}
+                satLoading={satEnquiry.loading}
+                satResult={satEnquiry.result}
+                satError={satEnquiry.error}
+                onConsultarSat={() =>
+                  satEnquiryData && satEnquiry.consult(satEnquiryData)
+                }
+              />
+
+              <main className="flex-1 min-h-0 flex overflow-hidden bg-gray-50 p-3 gap-3">
+                <FindingsSidebar
+                  cfdi={cfdi}
+                  findingContexts={findingContexts}
+                  activeDatasetType={activeDatasetType}
+                  activeExtractMetrics={activeExtractMetrics}
+                  subtotalDifference={subtotalDifference}
+                  totalDifference={totalDifference}
+                  formatExact={formatExact}
+                  getFindingOriginLabel={getFindingOriginLabel}
+                  onSelectConcept={diagnose.setSelectedConcept}
+                />
+
+                <div className="flex-1 min-h-0 relative flex flex-col gap-3 overflow-hidden">
+                  <div className="shrink-0 rounded-lg bg-white shadow-soft overflow-hidden">
+                    <CfdiSummaryHeader summaryFields={summaryFields} />
+                    <TaxAuditPanel
+                      cfdi={cfdi}
+                      taxAuditExpanded={taxAuditExpanded}
+                      onToggle={() => setTaxAuditExpanded((current) => !current)}
+                      getExplainedMeaning={getExplainedMeaning}
+                      getExplainedTaxLabel={getExplainedTaxLabel}
+                      formatExact={formatExact}
+                    />
+                  </div>
+
+                  <div className="flex-1 min-h-0 flex flex-col rounded-lg bg-white shadow-soft overflow-hidden">
+                    <ExtractWorkspace
+                      embedded
+                      activeDatasetType={activeDatasetType}
+                      grid={extractGrid}
+                    />
+                  </div>
+
+                  <ConceptDetailModal
+                    selectedConcept={diagnose.selectedConcept}
+                    onClose={() => diagnose.setSelectedConcept(null)}
+                    formatExact={formatExact}
+                    getExplainedMeaning={getExplainedMeaning}
+                    getExplainedTaxLabel={getExplainedTaxLabel}
+                  />
+                </div>
+              </main>
+            </>
+          )}
+        </>
+      )}
+      </div>
+      </div>
     </div>
   );
 }

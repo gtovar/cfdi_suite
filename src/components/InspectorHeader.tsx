@@ -1,4 +1,13 @@
-import { ArrowLeft, FileText } from 'lucide-react';
+import clsx from 'clsx';
+import { ArrowLeft, FileText, Loader2, Search } from 'lucide-react';
+import type { EnquiryResult } from '../lib/sat-enquiry-api-client';
+
+interface SatEnquiryData {
+  uuid: string;
+  rfcEmisor: string;
+  rfcReceptor: string;
+  total: number;
+}
 
 interface InspectorHeaderProps {
   profileLabel: string;
@@ -6,6 +15,35 @@ interface InspectorHeaderProps {
   tableExportError: boolean;
   onReset: () => void;
   onExport: () => void;
+  satEnquiryData?: SatEnquiryData | null;
+  satLoading?: boolean;
+  satResult?: EnquiryResult | null;
+  satError?: string | null;
+  onConsultarSat?: () => void;
+}
+
+function SatResultBadge({ result }: { result: EnquiryResult }) {
+  if (result.error) {
+    return (
+      <span className="inline-flex items-center rounded px-2 py-0.5 text-tiny font-medium bg-red-100 text-red-700">
+        Error
+      </span>
+    );
+  }
+  const isVigente = result.estado.toLowerCase().includes('vigente');
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center rounded px-2 py-0.5 text-tiny font-medium',
+        isVigente ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600',
+      )}
+      title={[result.estado, result.es_cancelable, result.estatus_cancelacion]
+        .filter(Boolean)
+        .join(' · ')}
+    >
+      {result.estado || '—'}
+    </span>
+  );
 }
 
 export default function InspectorHeader({
@@ -14,50 +52,68 @@ export default function InspectorHeader({
   tableExportError,
   onReset,
   onExport,
+  satEnquiryData,
+  satLoading = false,
+  satResult,
+  satError,
+  onConsultarSat,
 }: InspectorHeaderProps) {
-  return (
-    <header className="border-b border-[#141414] sticky top-0 bg-[#E4E3E0] z-10">
-      <div className="px-4 py-2.5 flex items-center justify-between gap-6">
-        <div className="flex items-start gap-4 min-w-0">
-          <button
-            onClick={onReset}
-            className="w-9 h-9 shrink-0 border border-[#141414] bg-[#E4E3E0] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors rounded-full flex items-center justify-center"
-          >
-            <ArrowLeft size={18} />
-          </button>
-          <div className="flex items-start gap-6 min-w-0">
-            <div className="flex flex-col min-w-0">
-              <div className="flex items-baseline gap-4 min-w-0">
-                <h1 className="text-[26px] leading-none font-serif italic whitespace-nowrap">CFDI Inspector</h1>
-                <div className="h-px w-8 bg-[#141414]/20 mt-1 shrink-0" />
-                <h2 className="text-[17px] leading-none font-serif italic text-[#141414]/70 truncate">
-                  {profileLabel}
-                </h2>
-              </div>
-              <div className="mt-2 flex items-center gap-3 min-w-0">
-                <p className="text-[10px] font-mono opacity-45 uppercase tracking-[0.18em]">v1.0.0</p>
-                <span className="text-[#141414]/20">/</span>
-                <p className="text-[10px] font-mono opacity-45 uppercase tracking-[0.18em]">Internal Tool</p>
-              </div>
-            </div>
-          </div>
-        </div>
+  const canEnquire = !!satEnquiryData?.rfcEmisor && !satLoading;
 
-        <div className="flex items-center gap-3 shrink-0">
+  return (
+    <header className="shrink-0 flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <button
+          onClick={onReset}
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-800"
+        >
+          <ArrowLeft size={16} />
+        </button>
+
+        <span className="text-xs-plus font-medium text-gray-700 truncate">{profileLabel}</span>
+      </div>
+
+      <div className="flex items-center gap-2 shrink-0">
+        {satResult && <SatResultBadge result={satResult} />}
+        {satError && !satResult && (
+          <span className="max-w-[120px] truncate text-xs text-red-500" title={satError}>
+            {satError}
+          </span>
+        )}
+
+        {satEnquiryData && (
           <button
-            onClick={onExport}
-            className={`px-4 py-2.5 text-[10px] font-mono uppercase tracking-[0.22em] transition-opacity flex items-center gap-2 ${
-              tableExported
-                ? 'bg-green-700 text-[#E4E3E0]'
-                : tableExportError
-                  ? 'bg-red-700 text-[#E4E3E0]'
-                  : 'bg-[#141414] text-[#E4E3E0] hover:opacity-80'
-            }`}
+            onClick={onConsultarSat}
+            disabled={!canEnquire}
+            className={clsx(
+              'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs-plus font-medium transition-colors duration-200',
+              'border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-100',
+              'disabled:cursor-not-allowed disabled:opacity-40',
+            )}
           >
-            <FileText size={14} />
-            {tableExported ? 'Exportado' : tableExportError ? 'Sin datos' : 'Exportar'}
+            {satLoading ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Search size={13} />
+            )}
+            {satLoading ? 'Consultando…' : 'Consultar SAT'}
           </button>
-        </div>
+        )}
+
+        <button
+          onClick={onExport}
+          className={clsx(
+            'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs-plus font-medium transition-colors duration-200',
+            tableExported
+              ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+              : tableExportError
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-primary-600 text-white hover:bg-primary-700',
+          )}
+        >
+          <FileText size={13} />
+          {tableExported ? 'Exportado' : tableExportError ? 'Sin datos' : 'Exportar'}
+        </button>
       </div>
     </header>
   );

@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import type { LucideIcon } from 'lucide-react';
 
 export interface SummaryFieldCard {
@@ -14,19 +15,31 @@ interface CfdiSummaryHeaderProps {
 
 export default function CfdiSummaryHeader({ summaryFields }: CfdiSummaryHeaderProps) {
   return (
-    <div className={`grid border-b border-[#141414] ${summaryFields.length >= 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
+    <div
+      className={clsx(
+        'grid shrink-0 border-b border-gray-200',
+        summaryFields.length >= 4 ? 'grid-cols-4' : 'grid-cols-3',
+      )}
+    >
       {summaryFields.map((field, index) => {
         const Icon = field.icon;
         return (
           <div
             key={field.key}
-            className={`p-4 flex items-start gap-3 ${index < summaryFields.length - 1 ? 'border-r border-[#141414]' : ''}`}
             title={field.meaning}
+            className={clsx(
+              'flex items-start gap-3 p-4',
+              index < summaryFields.length - 1 && 'border-r border-gray-200',
+            )}
           >
-            <Icon size={16} className="opacity-50 mt-1" />
-            <div>
-              <p className="text-[10px] font-mono uppercase opacity-50">{field.label}</p>
-              <p className="text-xs font-bold truncate max-w-[200px]">{field.value}</p>
+            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500">
+              <Icon size={15} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-tiny font-medium uppercase tracking-wider text-gray-500">{field.label}</p>
+              <p className="mt-0.5 text-xs-plus font-semibold text-gray-900 truncate max-w-[180px]">
+                {field.value}
+              </p>
             </div>
           </div>
         );

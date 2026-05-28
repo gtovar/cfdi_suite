@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { ChevronRight } from 'lucide-react';
 import type { CFDIData } from '../cfdi/public';
 
@@ -18,77 +19,92 @@ export default function TaxAuditPanel({
   getExplainedTaxLabel,
   formatExact,
 }: TaxAuditPanelProps) {
+  const diffCount = cfdi.taxAuditGroups.filter((g) => Math.abs(g.diferencia) !== 0).length;
+
   return (
-    <div className="border-b border-[#141414] bg-[#141414]/[0.03]">
+    <div className="shrink-0 border-t border-gray-200">
       <button
         type="button"
         onClick={onToggle}
-        className="w-full px-4 py-2.5 flex items-center justify-between gap-4 text-left hover:bg-[#141414]/[0.04] transition-colors"
+        className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-200 hover:bg-gray-50"
       >
         <div>
-          <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Auditoría de Traslados</p>
-          <p className="text-[11px] font-mono opacity-55 mt-0.5">Comparación entre el detalle por concepto y el agrupado del comprobante.</p>
+          <p className="text-xs font-medium text-gray-700">Auditoría de Traslados</p>
+          <p className="mt-0.5 text-tiny text-gray-500">
+            Comparación entre el detalle por concepto y el agrupado del comprobante.
+          </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] font-mono uppercase opacity-50">
-            {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) !== 0).length} diferencias
-          </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {diffCount > 0 ? (
+            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-tiny font-medium bg-red-100 text-red-700">
+              {diffCount} diferencias
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-tiny font-medium bg-gray-100 text-gray-500">
+              Sin diferencias
+            </span>
+          )}
           <ChevronRight
             size={14}
-            className={`opacity-50 transition-transform ${taxAuditExpanded ? 'rotate-90' : 'rotate-0'}`}
+            className={clsx(
+              'text-gray-400 transition-transform duration-200',
+              taxAuditExpanded && 'rotate-90',
+            )}
           />
         </div>
       </button>
+
       {taxAuditExpanded && (
-        <div className="overflow-auto max-h-36 border-t border-[#141414]/10 bg-white/15">
+        <div className="max-h-36 overflow-auto border-t border-gray-200">
           <table className="w-full border-collapse">
-            <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
-              <tr className="text-[10px] font-mono uppercase opacity-50 text-left">
-                <th className="px-3 py-2 font-normal">Impuesto</th>
-                <th className="px-3 py-2 font-normal">Tipo</th>
-                <th className="px-3 py-2 font-normal text-right">Tasa</th>
-                <th className="px-3 py-2 font-normal text-right">Detalle</th>
-                <th className="px-3 py-2 font-normal text-right">Agrupado</th>
-                <th className="px-3 py-2 font-normal text-right">Dif.</th>
+            <thead className="sticky top-0 z-10 bg-gray-50">
+              <tr className="border-b border-gray-200 text-left">
+                {['Impuesto', 'Tipo', 'Tasa', 'Detalle', 'Agrupado', 'Dif.'].map((h, i) => (
+                  <th
+                    key={h}
+                    className={clsx(
+                      'px-3 py-2 text-tiny font-medium uppercase tracking-wider text-gray-500',
+                      i >= 2 && 'text-right',
+                    )}
+                  >
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#141414]/10">
-              {cfdi.taxAuditGroups.map((group) => (
-                <tr key={group.key}>
-                  <td
-                    className="px-3 py-2 text-[10px] font-mono"
-                    title={getExplainedMeaning('impuesto', group.impuesto)}
-                  >
-                    <div>{getExplainedTaxLabel(group.impuesto)}</div>
-                    <div className="text-[9px] opacity-50 mt-0.5">
-                      {getExplainedMeaning('impuesto', group.impuesto)}
-                    </div>
-                  </td>
-                  <td
-                    className="px-3 py-2 text-[10px]"
-                    title={getExplainedMeaning('tipoFactor', group.tipoFactor)}
-                  >
-                    <div>{group.tipoFactor}</div>
-                    <div className="text-[9px] opacity-50 mt-0.5">
-                      {getExplainedMeaning('tipoFactor', group.tipoFactor)}
-                    </div>
-                  </td>
-                  <td
-                    className="px-3 py-2 text-[10px] font-mono text-right"
-                    title={getExplainedMeaning('tasaOCuota', group.tasaOCuota)}
-                  >
-                    <div>{(group.tasaOCuota * 100).toFixed(2)}%</div>
-                    <div className="text-[9px] opacity-50 mt-0.5">
-                      {getExplainedMeaning('tasaOCuota', group.tasaOCuota)}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
-                  <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>
-                  <td className={`px-3 py-2 text-[10px] font-mono text-right ${Math.abs(group.diferencia) !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
-                    ${formatExact(group.diferencia)}
-                  </td>
-                </tr>
-              ))}
+            <tbody className="divide-y divide-gray-100">
+              {cfdi.taxAuditGroups.map((group) => {
+                const hasDiff = Math.abs(group.diferencia) !== 0;
+                return (
+                  <tr key={group.key} className="hover:bg-gray-50 transition-colors duration-150">
+                    <td className="px-3 py-2" title={getExplainedMeaning('impuesto', group.impuesto)}>
+                      <p className="text-xs text-gray-800">{getExplainedTaxLabel(group.impuesto)}</p>
+                      <p className="text-tiny text-gray-400">{getExplainedMeaning('impuesto', group.impuesto)}</p>
+                    </td>
+                    <td className="px-3 py-2" title={getExplainedMeaning('tipoFactor', group.tipoFactor)}>
+                      <p className="text-xs text-gray-800">{group.tipoFactor}</p>
+                      <p className="text-tiny text-gray-400">{getExplainedMeaning('tipoFactor', group.tipoFactor)}</p>
+                    </td>
+                    <td className="px-3 py-2 text-right" title={getExplainedMeaning('tasaOCuota', group.tasaOCuota)}>
+                      <p className="text-xs text-gray-800 tabular-nums">{(group.tasaOCuota * 100).toFixed(2)}%</p>
+                    </td>
+                    <td className="px-3 py-2 text-right text-xs text-gray-800 tabular-nums">
+                      ${group.importeDetalle.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-xs text-gray-800 tabular-nums">
+                      ${group.importeAgrupado.toFixed(2)}
+                    </td>
+                    <td
+                      className={clsx(
+                        'px-3 py-2 text-right text-xs font-medium tabular-nums',
+                        hasDiff ? 'text-red-600' : 'text-emerald-600',
+                      )}
+                    >
+                      ${formatExact(group.diferencia)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
