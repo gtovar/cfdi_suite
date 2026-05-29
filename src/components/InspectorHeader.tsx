@@ -25,8 +25,8 @@ interface InspectorHeaderProps {
 function SatResultBadge({ result }: { result: EnquiryResult }) {
   if (result.error) {
     return (
-      <span className="inline-flex items-center rounded px-2 py-0.5 text-tiny font-medium bg-red-100 text-red-700">
-        Error
+      <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-tiny font-medium bg-red-100 text-red-700">
+        Error SAT
       </span>
     );
   }
@@ -34,7 +34,7 @@ function SatResultBadge({ result }: { result: EnquiryResult }) {
   return (
     <span
       className={clsx(
-        'inline-flex items-center rounded px-2 py-0.5 text-tiny font-medium',
+        'inline-flex items-center rounded-full px-2.5 py-0.5 text-tiny font-medium',
         isVigente ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600',
       )}
       title={[result.estado, result.es_cancelable, result.estatus_cancelacion]
@@ -45,6 +45,11 @@ function SatResultBadge({ result }: { result: EnquiryResult }) {
     </span>
   );
 }
+
+const PROFILE_BADGE: Record<string, { label: string; class: string }> = {
+  Ingreso: { label: 'Ingreso', class: 'bg-blue-100 text-blue-700' },
+  Pagos:   { label: 'Pagos',   class: 'bg-violet-100 text-violet-700' },
+};
 
 export default function InspectorHeader({
   profileLabel,
@@ -59,24 +64,32 @@ export default function InspectorHeader({
   onConsultarSat,
 }: InspectorHeaderProps) {
   const canEnquire = !!satEnquiryData?.rfcEmisor && !satLoading;
+  const profileBadge = PROFILE_BADGE[profileLabel];
 
   return (
-    <header className="shrink-0 flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3">
+    <header className="shrink-0 flex items-center justify-between border-b border-gray-200 bg-white px-5 py-3.5">
       <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={onReset}
-          className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-800"
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-700"
         >
           <ArrowLeft size={16} />
         </button>
 
-        <span className="text-xs-plus font-medium text-gray-700 truncate">{profileLabel}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          {profileBadge && (
+            <span className={clsx('inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-tiny font-semibold', profileBadge.class)}>
+              {profileBadge.label}
+            </span>
+          )}
+          <span className="text-sm font-semibold text-gray-800 truncate">Inspector</span>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
         {satResult && <SatResultBadge result={satResult} />}
         {satError && !satResult && (
-          <span className="max-w-[120px] truncate text-xs text-red-500" title={satError}>
+          <span className="max-w-[140px] truncate text-xs text-red-500" title={satError}>
             {satError}
           </span>
         )}
@@ -86,9 +99,10 @@ export default function InspectorHeader({
             onClick={onConsultarSat}
             disabled={!canEnquire}
             className={clsx(
-              'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs-plus font-medium transition-colors duration-200',
-              'border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-100',
-              'disabled:cursor-not-allowed disabled:opacity-40',
+              'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-200',
+              canEnquire
+                ? 'border-blue-200 text-blue-700 hover:border-blue-300 hover:bg-blue-50'
+                : 'border-gray-200 text-gray-400 cursor-not-allowed opacity-50',
             )}
           >
             {satLoading ? (
@@ -103,7 +117,7 @@ export default function InspectorHeader({
         <button
           onClick={onExport}
           className={clsx(
-            'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs-plus font-medium transition-colors duration-200',
+            'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors duration-200',
             tableExported
               ? 'bg-emerald-600 text-white hover:bg-emerald-700'
               : tableExportError

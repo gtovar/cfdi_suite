@@ -58,11 +58,6 @@ describe('FindingsSidebar', () => {
       <FindingsSidebar
         cfdi={createCfdi()}
         findingContexts={emptyFindingContexts}
-        activeDatasetType="ingresos"
-        activeExtractMetrics={[]}
-        subtotalDifference={0}
-        totalDifference={0}
-        formatExact={(value) => String(value)}
         getFindingOriginLabel={() => 'Matematico'}
         onSelectConcept={() => {}}
       />,
@@ -81,11 +76,6 @@ describe('FindingsSidebar', () => {
       <FindingsSidebar
         cfdi={initialCfdi}
         findingContexts={emptyFindingContexts}
-        activeDatasetType="ingresos"
-        activeExtractMetrics={[]}
-        subtotalDifference={0}
-        totalDifference={0}
-        formatExact={(value) => String(value)}
         getFindingOriginLabel={() => 'Matematico'}
         onSelectConcept={() => {}}
       />,
@@ -106,11 +96,6 @@ describe('FindingsSidebar', () => {
       <FindingsSidebar
         cfdi={createCfdi({ uuid: 'TEST-UUID-2' })}
         findingContexts={emptyFindingContexts}
-        activeDatasetType="ingresos"
-        activeExtractMetrics={[]}
-        subtotalDifference={0}
-        totalDifference={0}
-        formatExact={(value) => String(value)}
         getFindingOriginLabel={() => 'Matematico'}
         onSelectConcept={() => {}}
       />,

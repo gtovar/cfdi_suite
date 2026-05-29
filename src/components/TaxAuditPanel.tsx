@@ -29,18 +29,20 @@ export default function TaxAuditPanel({
         className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-200 hover:bg-gray-50"
       >
         <div>
-          <p className="text-xs font-medium text-gray-700">Auditoría de Traslados</p>
+          <p className="text-sm font-semibold text-gray-700">Auditoría de Traslados</p>
           <p className="mt-0.5 text-tiny text-gray-500">
             Comparación entre el detalle por concepto y el agrupado del comprobante.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {diffCount > 0 ? (
-            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-tiny font-medium bg-red-100 text-red-700">
-              {diffCount} diferencias
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+              {diffCount} {diffCount === 1 ? 'diferencia' : 'diferencias'}
             </span>
           ) : (
-            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-tiny font-medium bg-gray-100 text-gray-500">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Sin diferencias
             </span>
           )}

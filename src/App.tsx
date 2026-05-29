@@ -11,7 +11,7 @@ import { useDiagnoseState } from './app/hooks/useDiagnoseState';
 import { useExtractGridState } from './app/hooks/useExtractGridState';
 import { useFindingContexts } from './app/hooks/useFindingContexts';
 import { useSatEnquiry } from './app/hooks/useSatEnquiry';
-import { buildExtractMetrics, buildSummaryFields, getProfileLabel } from './app/view-models/cfdiViewModels';
+import { buildSummaryFields, getProfileLabel } from './app/view-models/cfdiViewModels';
 import { formatExact, getExplainedMeaning, getExplainedTaxLabel } from './app/utils/cfdiFormatters';
 import { getFindingOriginLabel } from './app/utils/findingUtils';
 import AppSidebar, { type AppView } from './components/AppNav';
@@ -23,6 +23,7 @@ import EmisoresPage from './components/EmisoresPage';
 import ExtractWorkspace from './components/ExtractWorkspace';
 import type { ExtractMode } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
+import FinancialSummaryCard from './components/FinancialSummaryCard';
 import FileUpload from './components/FileUpload';
 import InspectorHeader from './components/InspectorHeader';
 import TaxAuditPanel from './components/TaxAuditPanel';
@@ -65,7 +66,7 @@ export default function App() {
     resetAnalysis,
   } = useCfdiAnalysis();
 
-  const [taxAuditExpanded, setTaxAuditExpanded] = useState(true);
+  const [taxAuditExpanded, setTaxAuditExpanded] = useState(false);
 
   const diagnose = useDiagnoseState(cfdi);
   const findingContexts = useFindingContexts(cfdi);
@@ -93,14 +94,6 @@ export default function App() {
   const totalDifference = Math.abs((cfdi?.totalCalculado ?? 0) - (cfdi?.total ?? 0));
 
   const summaryFields = buildSummaryFields({ profile, cfdi, pagoRows });
-  const activeExtractMetrics = buildExtractMetrics({
-    activeDatasetType,
-    extractSearchTerm,
-    filteredIngresoRows,
-    filteredPagoRows,
-    ingresoRows,
-    pagoRows,
-  });
 
   const {
     tableExported,
@@ -127,7 +120,7 @@ export default function App() {
     resetForNewAnalysis(nextProfile);
     diagnose.reset();
     satEnquiry.reset();
-    setTaxAuditExpanded(true);
+    setTaxAuditExpanded(false);
   }
 
   function resetAll() {
@@ -135,7 +128,7 @@ export default function App() {
     resetExtractState();
     diagnose.reset();
     satEnquiry.reset();
-    setTaxAuditExpanded(true);
+    setTaxAuditExpanded(false);
   }
 
   return (
@@ -199,22 +192,33 @@ export default function App() {
                 }
               />
 
-              <main className="flex-1 min-h-0 flex overflow-hidden bg-gray-50 p-3 gap-3">
-                <FindingsSidebar
-                  cfdi={cfdi}
-                  findingContexts={findingContexts}
-                  activeDatasetType={activeDatasetType}
-                  activeExtractMetrics={activeExtractMetrics}
-                  subtotalDifference={subtotalDifference}
-                  totalDifference={totalDifference}
-                  formatExact={formatExact}
-                  getFindingOriginLabel={getFindingOriginLabel}
-                  onSelectConcept={diagnose.setSelectedConcept}
-                />
+              <main className="flex-1 min-h-0 flex flex-col overflow-hidden bg-gray-50 p-4 gap-4">
+                {/* Fila 1: 4 stat cards */}
+                <CfdiSummaryHeader summaryFields={summaryFields} />
 
-                <div className="flex-1 min-h-0 relative flex flex-col gap-3 overflow-hidden">
-                  <div className="shrink-0 rounded-lg bg-white shadow-soft overflow-hidden">
-                    <CfdiSummaryHeader summaryFields={summaryFields} />
+                {/* Fila 2: banner financiero (solo ingresos) */}
+                {activeDatasetType === 'ingresos' && cfdi && (
+                  <FinancialSummaryCard
+                    subtotal={cfdi.subtotal}
+                    subtotalCalculado={cfdi.subtotalCalculado}
+                    total={cfdi.total}
+                    totalCalculado={cfdi.totalCalculado}
+                    formatExact={formatExact}
+                  />
+                )}
+
+                {/* Fila 3: [Hallazgos si los hay] + Tarjeta de tabla */}
+                <div className="relative flex flex-1 min-h-0 gap-4 overflow-hidden">
+                  {cfdi.findings.length > 0 && (
+                    <FindingsSidebar
+                      cfdi={cfdi}
+                      findingContexts={findingContexts}
+                      getFindingOriginLabel={getFindingOriginLabel}
+                      onSelectConcept={diagnose.setSelectedConcept}
+                    />
+                  )}
+
+                  <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white shadow-sm overflow-hidden">
                     <TaxAuditPanel
                       cfdi={cfdi}
                       taxAuditExpanded={taxAuditExpanded}
@@ -223,9 +227,6 @@ export default function App() {
                       getExplainedTaxLabel={getExplainedTaxLabel}
                       formatExact={formatExact}
                     />
-                  </div>
-
-                  <div className="flex-1 min-h-0 flex flex-col rounded-lg bg-white shadow-soft overflow-hidden">
                     <ExtractWorkspace
                       embedded
                       activeDatasetType={activeDatasetType}

@@ -99,11 +99,6 @@ describe('FindingsSidebar impacted concepts', () => {
           ],
         })}
         findingContexts={findingContexts}
-        activeDatasetType="ingresos"
-        activeExtractMetrics={[]}
-        subtotalDifference={0}
-        totalDifference={0}
-        formatExact={(value) => String(value)}
         getFindingOriginLabel={() => 'Matematico'}
         onSelectConcept={(concept) => selected.push(concept.descripcion ?? '')}
       />,
@@ -111,15 +106,14 @@ describe('FindingsSidebar impacted concepts', () => {
 
     expect(container.textContent).toContain('Hallazgo enfocado');
     expect(container.textContent).toContain('Guía de revisión');
-    expect(container.textContent).toContain('Hallazgo enfocado: Diferencia en traslado 002 16.00%');
+    expect(container.textContent).toContain('Hallazgo: Diferencia en traslado 002 16.00%');
     expect(container.textContent).toContain('Por qué importa');
     expect(container.textContent).toContain('Prioridad');
-    expect(container.textContent).toContain('Acción');
-    expect(container.textContent).toContain('Empieza por revisar el concepto 1.');
+    expect(container.textContent).toContain('Empieza por el concepto 1.');
     expect(container.textContent).toContain('Concepto sugerido');
     expect(container.textContent).toContain('Concepto A');
     expect(container.textContent).not.toContain('Concepto D');
-    expect(container.textContent).toContain('4 conceptos adicionales siguen disponibles en la tabla principal');
+    expect(container.textContent).toContain('4 conceptos adicionales disponibles en la tabla');
     expect(container.textContent).toContain('Participa en el grupo fiscal 002 16.00%.');
 
     const conceptButton = findButtonByText(container, 'Abrir concepto sugerido');
