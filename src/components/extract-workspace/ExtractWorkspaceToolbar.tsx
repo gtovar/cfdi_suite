@@ -1,8 +1,14 @@
+import clsx from 'clsx';
 import type { ExtractGridController } from './types';
 
 interface ExtractWorkspaceToolbarProps {
   grid: ExtractGridController;
 }
+
+const SELECT_CLASS = clsx(
+  'rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 outline-none',
+  'transition-colors duration-200 focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30',
+);
 
 export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolbarProps) {
   const {
@@ -19,48 +25,56 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
     setPageSize,
     resetGrid,
   } = grid;
-  const activeColumnLabel = extractColumns.find((column) => column.key === extractColumnFilterKey)?.label ?? 'columna';
-  const searchScopeLabel = extractColumnFilterKey === 'all' ? 'todas las columnas' : activeColumnLabel;
+
+  const activeColumnLabel =
+    extractColumns.find((col) => col.key === extractColumnFilterKey)?.label ?? 'columna';
+  const searchScopeLabel =
+    extractColumnFilterKey === 'all' ? 'todas las columnas' : activeColumnLabel;
   const searchSummary = extractSearchTerm.trim()
     ? `"${extractSearchTerm.trim()}" en ${searchScopeLabel}`
     : `sin busqueda global (${searchScopeLabel})`;
 
   return (
-    <div className="p-4 border-b border-[#141414] bg-white/50 space-y-3">
+    <div className="shrink-0 space-y-2.5 border-b border-gray-200 bg-white px-4 py-3">
+      {/* Controls row */}
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
+        <div className="flex items-center gap-2.5">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600">
             <span>Buscar en</span>
             <select
               value={extractColumnFilterKey}
               onChange={(e) => setColumnFilterKey(e.target.value)}
-              className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+              className={SELECT_CLASS}
             >
               <option value="all">Todas</option>
-              {extractColumns.map((column) => (
-                <option key={column.key} value={column.key}>
-                  {column.label}
+              {extractColumns.map((col) => (
+                <option key={col.key} value={col.key}>
+                  {col.label}
                 </option>
               ))}
             </select>
           </label>
-          <div className="relative w-80">
-            <input
-              type="text"
-              placeholder={`Buscar en ${extractColumnFilterKey === 'all' ? 'todas las columnas' : activeColumnLabel}...`}
-              className="w-full pl-9 pr-4 py-2 text-xs font-mono bg-transparent border border-[#141414]/20 focus:border-[#141414] outline-none transition-colors"
-              value={extractSearchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
+
+          <input
+            type="text"
+            placeholder={`Buscar en ${searchScopeLabel}…`}
+            value={extractSearchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className={clsx(
+              'w-72 rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700 outline-none',
+              'placeholder:text-gray-400 transition-colors duration-200',
+              'focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30',
+            )}
+          />
         </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
-            <span>Filas por pagina</span>
+
+        <div className="flex items-center gap-2.5">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600">
+            <span>Filas</span>
             <select
               value={extractPageSize}
               onChange={(e) => setPageSize(Number(e.target.value))}
-              className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+              className={SELECT_CLASS}
             >
               {[50, 100, 250, 500, 1000].map((size) => (
                 <option key={size} value={size}>
@@ -69,33 +83,36 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
               ))}
             </select>
           </label>
+
           <button
             onClick={resetGrid}
-            className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+            className={clsx(
+              'rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600',
+              'transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-800',
+            )}
           >
-            Reset grid
+            Reset
           </button>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-60">
-        <span className="opacity-40">Estado</span>
-        <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
-          {searchSummary}
-        </span>
-        <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
-          {filteredExtractCount} de {totalExtractCount} visibles
-        </span>
-        <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
-          {sorting.length} {sorting.length === 1 ? 'sort' : 'sorts'}
-        </span>
-        <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
-          {grid.columnFilters.length} filtros de columna
-        </span>
-        <span className="px-2 py-1 border border-[#141414]/10 bg-white/60">
-          {selectedRowCount} seleccionados
-        </span>
-        <span className="opacity-40">Sort y filtros finos viven en los headers</span>
-        <span className="opacity-40">Shift + click agrega niveles de sort</span>
+
+      {/* Status chips */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {[
+          searchSummary,
+          `${filteredExtractCount} de ${totalExtractCount} visibles`,
+          `${sorting.length} sorts`,
+          `${grid.columnFilters.length} filtros de columna`,
+          `${selectedRowCount} seleccionados`,
+        ].map((label, i) => (
+          <span
+            key={i}
+            className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-tiny text-gray-500"
+          >
+            {label}
+          </span>
+        ))}
+        <span className="text-tiny text-gray-400">· Shift+click agrega niveles de sort</span>
       </div>
     </div>
   );

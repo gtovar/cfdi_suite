@@ -4,14 +4,27 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
 from .observability import record_analyze_cfdi_error
+from .routers.emisores import router as emisores_router
+from .routers.sat_enquiry import router as sat_router
 from .services.analyze_cfdi import run_analyze_cfdi
 
 
-app = FastAPI(title="cfdi-platform-api", version="0.1.0")
+app = FastAPI(title="cfdi-suite-api", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(emisores_router)
+app.include_router(sat_router)
 
 
 @app.exception_handler(RequestValidationError)
