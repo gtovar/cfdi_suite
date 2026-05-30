@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { useEffect, useRef, useState } from 'react';
 import type { ExtractGridController } from './types';
 
 interface ExtractWorkspaceToolbarProps {
@@ -13,6 +14,8 @@ const SELECT_CLASS = clsx(
 export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolbarProps) {
   const {
     extractColumns,
+    activeHiddenColumns,
+    toggleColumn,
     extractColumnFilterKey,
     extractSearchTerm,
     sorting,
@@ -24,6 +27,20 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
     setPageSize,
     resetGrid,
   } = grid;
+
+  const [colsOpen, setColsOpen] = useState(false);
+  const colsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!colsOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (colsRef.current && !colsRef.current.contains(e.target as Node)) {
+        setColsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [colsOpen]);
 
   const activeColumnLabel =
     extractColumns.find((col) => col.key === extractColumnFilterKey)?.label ?? 'columna';
@@ -82,6 +99,50 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
               ))}
             </select>
           </label>
+
+          <div className="relative" ref={colsRef}>
+            <button
+              onClick={() => setColsOpen((v) => !v)}
+              className={clsx(
+                'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors duration-200',
+                colsOpen
+                  ? 'border-primary-300 bg-primary-50 text-primary-700'
+                  : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-800',
+              )}
+            >
+              <span>⚙</span>
+              <span>Columnas</span>
+              {activeHiddenColumns.length > 0 && (
+                <span className="rounded-full bg-primary-600 px-1.5 text-[10px] font-medium text-white leading-[1.4]">
+                  {activeHiddenColumns.length}
+                </span>
+              )}
+            </button>
+
+            {colsOpen && (
+              <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-xl border border-gray-200 bg-white p-3 shadow-lg">
+                <div className="flex flex-wrap gap-1.5">
+                  {extractColumns.map((col) => {
+                    const hidden = activeHiddenColumns.includes(col.key);
+                    return (
+                      <button
+                        key={col.key}
+                        onClick={() => toggleColumn(col.key, hidden)}
+                        className={clsx(
+                          'rounded border px-2 py-0.5 text-tiny font-medium uppercase tracking-wide transition-colors',
+                          hidden
+                            ? 'border-gray-200 bg-white text-gray-400 hover:border-gray-300 hover:text-gray-600'
+                            : 'border-primary-600/20 bg-primary-600/10 text-primary-600',
+                        )}
+                      >
+                        {col.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
 
           <button
             onClick={resetGrid}
