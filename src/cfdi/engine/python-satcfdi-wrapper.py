@@ -102,7 +102,7 @@ def normalize_concept(concepto):
         "valorUnitario": decimal_to_number(concepto.get("ValorUnitario")),
         "importe": decimal_to_number(concepto.get("Importe")),
         "claveProdServ": code_or_raw(cprod),
-        "claveProdServDescripcion": cprod.description if cprod and hasattr(cprod, "description") else None,
+        "claveProdServDescripcion": (getattr(cprod, "description", None) or "No existe en el catálogo") if cprod else None,
         "impuestos": (
             normalize_tax_lines(impuestos.get("Traslados"), "Traslado")
             + normalize_tax_lines(impuestos.get("Retenciones"), "Retencion")

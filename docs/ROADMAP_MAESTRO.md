@@ -10,8 +10,12 @@
 ### Stack
 - **Frontend:** React + TypeScript + Vite + TanStack Table + Tailwind (Tailux)
 - **Backend:** FastAPI Python con `python-satcfdi` como provider principal, `current-ts` como fallback
-- **Motor activo:** TypeScript (`current-ts`) vía backend; el wrapper Python extrae estructura pero no genera findings
+- **Motor activo:** Python wrapper + TypeScript para validación matemática
 - **Contrato HTTP:** v1 cerrado en `backend/app/contracts.py`
+
+### Contratos internos de diseño
+
+**Sentinel de catálogo inválido:** La cadena `"No existe en el catálogo"` es el valor que el wrapper Python emite en `claveProdServDescripcion` cuando satcfdi reconoce el campo pero no encuentra el código en su base de datos. `analyze_cfdi.py → _collect_catalog_findings()` detecta ese valor para generar el finding. Este patrón debe seguirse para todos los catálogos futuros que se agreguen (usoCFDI, metodoPago, formaPago, etc.).
 
 ### Lo que funciona hoy
 | Capacidad | Dónde vive | Estado |
@@ -61,7 +65,7 @@
 
 ## Backlog priorizado
 
-### 🔴 Frente A — Findings desde backend Python: catálogos (deuda activa ~34 días)
+### ✅ Frente A — Findings desde backend Python: catálogos (completado 2026-06-01)
 **Por qué primero:** El wrapper Python ya extrae `claveProdServ`, `usoCFDI`, `metodoPago`, `formaPago`, `moneda` pero no valida ninguno. satcfdi tiene catálogos completos. El canal de findings ya existe en el frontend.
 
 **Archivos:**
@@ -139,6 +143,7 @@
 | ~2026-05-xx | XmlNodeViewer con virtual scroll para XMLs pesados | `48d127d` |
 | 2026-06-01 | Eliminar `FinancialSummaryCard`; integrar `differenceLabel` en findings globales | `7463296` |
 | 2026-06-01 | Análisis satcfdi vs nuestra app; definir roadmap maestro; priorizar catálogos como Frente A | este doc |
+| 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | pendiente commit |
 
 ---
 
