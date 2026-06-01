@@ -157,7 +157,7 @@
 | 2026-06-01 | Eliminar `FinancialSummaryCard`; integrar `differenceLabel` en findings globales | `7463296` |
 | 2026-06-01 | Análisis satcfdi vs nuestra app; definir roadmap maestro; priorizar catálogos como Frente A | este doc |
 | 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | `38989e8` |
-| 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | pendiente commit |
+| 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | `1148e08` |
 
 ---
 
