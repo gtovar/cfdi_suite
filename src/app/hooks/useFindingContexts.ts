@@ -172,6 +172,33 @@ export function useFindingContexts(cfdi: CFDIData | null) {
         };
       }
 
+      const HEADER_CATALOG_PREFIXES: Record<string, { label: string; catalog: string }> = {
+        'catalog-uso-cfdi-': { label: 'Uso de CFDI', catalog: 'c_UsoCFDI' },
+        'catalog-metodo-pago-': { label: 'Método de pago', catalog: 'c_MetodoPago' },
+        'catalog-forma-pago-': { label: 'Forma de pago', catalog: 'c_FormaPago' },
+        'catalog-moneda-': { label: 'Moneda', catalog: 'c_Moneda' },
+      };
+      const matchedHeaderCatalog = Object.entries(HEADER_CATALOG_PREFIXES).find(([prefix]) =>
+        finding.id.startsWith(prefix),
+      );
+      if (matchedHeaderCatalog) {
+        const [, { label, catalog }] = matchedHeaderCatalog;
+        const invalidCode = finding.declared ?? '';
+        const correctionSteps: CorrectionStep[] = [
+          { text: 'Identifica este CFDI en tu sistema de facturación por su UUID', copyValue: cfdi.uuid, copyLabel: 'Copiar UUID' },
+          { text: `El código '${invalidCode}' no existe en el catálogo SAT ${catalog}. Consulta el catálogo oficial en el portal del SAT para encontrar el valor correcto.` },
+          { text: 'Actualiza el valor en tu sistema de facturación y reemite el CFDI corregido' },
+        ];
+        return {
+          findingId: finding.id,
+          explanation: `El campo ${label} contiene el código '${invalidCode}' que no está registrado en el catálogo SAT ${catalog}.`,
+          relationshipLabel: 'Campo de cabecera del comprobante',
+          whyItMatters: `El SAT exige valores válidos del catálogo oficial. Un código incorrecto puede causar rechazo del CFDI.`,
+          conceptLinks: [],
+          correctionSteps,
+        };
+      }
+
       if (finding.id.startsWith('catalog-clave-prod-serv-')) {
         const invalidCode = finding.declared ?? '';
         const affectedConcepts = cfdi.conceptos

@@ -299,5 +299,88 @@ class AnalyzeCfdiServiceTests(unittest.TestCase):
         self.assertEqual(metrics.fallback_total, 0)
 
 
+class CollectCatalogFindingsTests(unittest.TestCase):
+    """Tests unitarios para _collect_catalog_findings (catálogos de cabecera y concepto)."""
+
+    def setUp(self):
+        from backend.app.services.analyze_cfdi import _collect_catalog_findings
+        self._fn = _collect_catalog_findings
+
+    def _base_source(self, **overrides):
+        src = {
+            "conceptos": [],
+            "usoCfdi": "",
+            "usoCfdiDescripcion": None,
+            "metodoPago": "",
+            "metodoPagoDescripcion": None,
+            "formaPago": "",
+            "formaPagoDescripcion": None,
+            "moneda": "",
+            "monedaDescripcion": None,
+        }
+        src.update(overrides)
+        return src
+
+    def test_no_findings_when_all_valid(self):
+        src = self._base_source(
+            usoCfdi="G03", usoCfdiDescripcion="Gastos en general",
+            metodoPago="PUE", metodoPagoDescripcion="Pago en una sola exhibición",
+            formaPago="03", formaPagoDescripcion="Transferencia electrónica de fondos",
+            moneda="MXN", monedaDescripcion="Peso Mexicano",
+        )
+        self.assertEqual(self._fn(src), [])
+
+    def test_no_findings_when_fields_absent(self):
+        """Campos ausentes (None) no producen findings."""
+        self.assertEqual(self._fn(self._base_source()), [])
+
+    def test_uso_cfdi_invalido_genera_finding(self):
+        src = self._base_source(usoCfdi="ZZZ", usoCfdiDescripcion="No existe en el catálogo")
+        findings = self._fn(src)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["id"], "catalog-uso-cfdi-ZZZ")
+        self.assertEqual(findings[0]["severity"], "warning")
+        self.assertEqual(findings[0]["declared"], "ZZZ")
+
+    def test_metodo_pago_invalido_genera_finding(self):
+        src = self._base_source(metodoPago="ZZ", metodoPagoDescripcion="No existe en el catálogo")
+        findings = self._fn(src)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["id"], "catalog-metodo-pago-ZZ")
+
+    def test_forma_pago_invalida_genera_finding(self):
+        src = self._base_source(formaPago="ZZ", formaPagoDescripcion="No existe en el catálogo")
+        findings = self._fn(src)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["id"], "catalog-forma-pago-ZZ")
+
+    def test_moneda_invalida_genera_finding(self):
+        src = self._base_source(moneda="ZZZ", monedaDescripcion="No existe en el catálogo")
+        findings = self._fn(src)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["id"], "catalog-moneda-ZZZ")
+
+    def test_multiples_invalidos_generan_un_finding_cada_uno(self):
+        src = self._base_source(
+            usoCfdi="ZZZ", usoCfdiDescripcion="No existe en el catálogo",
+            moneda="QQQ", monedaDescripcion="No existe en el catálogo",
+        )
+        findings = self._fn(src)
+        ids = {f["id"] for f in findings}
+        self.assertIn("catalog-uso-cfdi-ZZZ", ids)
+        self.assertIn("catalog-moneda-QQQ", ids)
+        self.assertEqual(len(findings), 2)
+
+    def test_metodo_pago_ausente_no_genera_finding(self):
+        """Campo ausente (None descriptor) con código vacío → sin finding."""
+        src = self._base_source(metodoPago="", metodoPagoDescripcion=None)
+        self.assertEqual(self._fn(src), [])
+
+    def test_current_ts_sin_campos_no_genera_finding(self):
+        """current_ts no emite campos de cabecera → source.get() devuelve None → sin finding."""
+        src = {"conceptos": []}
+        self.assertEqual(self._fn(src), [])
+
+
 if __name__ == "__main__":
     unittest.main()

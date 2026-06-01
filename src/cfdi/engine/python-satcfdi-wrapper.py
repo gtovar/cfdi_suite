@@ -111,6 +111,14 @@ def normalize_concept(concepto):
     }
 
 
+def catalog_desc_or_sentinel(field_value):
+    """Returns description string if valid, sentinel if code unknown, None if field absent."""
+    if field_value is None:
+        return None
+    desc = getattr(field_value, "description", None)
+    return desc if desc is not None else "No existe en el catálogo"
+
+
 def build_cfdi_payload(cfdi):
     complemento = cfdi.get("Complemento", {})
     conceptos = [normalize_concept(concepto) for concepto in cfdi.get("Conceptos", [])]
@@ -119,17 +127,31 @@ def build_cfdi_payload(cfdi):
         impuestos_globales.extend(normalize_tax_lines(cfdi["Impuestos"].get("Traslados"), "Traslado"))
         impuestos_globales.extend(normalize_tax_lines(cfdi["Impuestos"].get("Retenciones"), "Retencion"))
 
+    receptor = cfdi.get("Receptor", {})
+    uso_cfdi = receptor.get("UsoCFDI")
+    mp = cfdi.get("MetodoPago")
+    fp = cfdi.get("FormaPago")
+    mon = cfdi.get("Moneda")
+
     return {
         "version": cfdi.get("Version", ""),
         "fecha": scalar_to_json(cfdi.get("Fecha")) or "",
         "uuid": extract_uuid(complemento),
         "emisor": cfdi.get("Emisor", {}).get("Nombre") or cfdi.get("Emisor", {}).get("Rfc", ""),
-        "receptor": cfdi.get("Receptor", {}).get("Nombre") or cfdi.get("Receptor", {}).get("Rfc", ""),
+        "receptor": receptor.get("Nombre") or receptor.get("Rfc", ""),
         "subtotal": decimal_to_number(cfdi.get("SubTotal")),
         "descuento": decimal_to_number(cfdi.get("Descuento")) if cfdi.get("Descuento") is not None else 0,
         "total": decimal_to_number(cfdi.get("Total")),
         "conceptos": conceptos,
         "impuestosGlobales": impuestos_globales,
+        "usoCfdi": code_or_raw(uso_cfdi),
+        "usoCfdiDescripcion": catalog_desc_or_sentinel(uso_cfdi),
+        "metodoPago": code_or_raw(mp),
+        "metodoPagoDescripcion": catalog_desc_or_sentinel(mp),
+        "formaPago": code_or_raw(fp),
+        "formaPagoDescripcion": catalog_desc_or_sentinel(fp),
+        "moneda": code_or_raw(mon),
+        "monedaDescripcion": catalog_desc_or_sentinel(mon),
     }
 
 

@@ -26,6 +26,13 @@ from ..providers.python_satcfdi import (
 
 _IMP_NOMBRES = {"001": "ISR", "002": "IVA", "003": "IEPS"}
 
+_HEADER_CATALOG_FIELDS = [
+    ("usoCfdi", "usoCfdiDescripcion", "catalog-uso-cfdi", "Uso de CFDI", "c_UsoCFDI"),
+    ("metodoPago", "metodoPagoDescripcion", "catalog-metodo-pago", "Método de pago", "c_MetodoPago"),
+    ("formaPago", "formaPagoDescripcion", "catalog-forma-pago", "Forma de pago", "c_FormaPago"),
+    ("moneda", "monedaDescripcion", "catalog-moneda", "Moneda", "c_Moneda"),
+]
+
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
@@ -544,6 +551,8 @@ def _collect_sat_rounding_findings(
 
 
 def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+
     claves_invalidas: dict[str, list[int]] = {}
     for i, concept in enumerate(source.get("conceptos", [])):
         desc = concept.get("claveProdServDescripcion")
@@ -551,21 +560,31 @@ def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
         if desc == "No existe en el catálogo" and code:
             claves_invalidas.setdefault(code, []).append(i)
 
-    findings: list[dict[str, Any]] = []
     for invalid_code, indexes in claves_invalidas.items():
         count = len(indexes)
-        title = f"Clave de producto/servicio inválida: {invalid_code}"
-        summary = (
-            f"{count} concepto(s) usan la clave SAT '{invalid_code}' "
-            f"que no existe en el catálogo oficial del SAT."
-        )
         findings.append({
             "id": f"catalog-clave-prod-serv-{invalid_code}",
             "severity": "warning",
-            "title": title,
-            "summary": summary,
+            "title": f"Clave de producto/servicio inválida: {invalid_code}",
+            "summary": (
+                f"{count} concepto(s) usan la clave SAT '{invalid_code}' "
+                f"que no existe en el catálogo oficial del SAT."
+            ),
             "declared": invalid_code,
         })
+
+    for code_field, desc_field, prefix, label, catalog in _HEADER_CATALOG_FIELDS:
+        code = source.get(code_field, "")
+        desc = source.get(desc_field)
+        if desc == "No existe en el catálogo" and code:
+            findings.append({
+                "id": f"{prefix}-{code}",
+                "severity": "warning",
+                "title": f"{label} inválido: {code}",
+                "summary": f"El código '{code}' no existe en el catálogo SAT {catalog}.",
+                "declared": code,
+            })
+
     return findings
 
 

@@ -26,13 +26,14 @@
 | Auditoría de impuestos agrupados | TypeScript (`cfdiAnalysisService.ts`) | ✅ |
 | Extracción a tabla (ingresos / pagos) | Python wrapper + TS | ✅ |
 | Validación catálogo `claveProdServ` | TypeScript parcial | ✅ parcial |
+| Validación catálogos `usoCFDI`, `metodoPago`, `formaPago`, `moneda` | Python wrapper + backend | ✅ (pertenencia al catálogo) |
 | Validación de RFC (formato) | Frontend + API SAT | ✅ |
 | Consulta estado SAT (vigente/cancelado) | Frontend → API SAT | ✅ |
 | XmlNodeViewer (árbol de nodos con edición sugerida) | Frontend | ✅ |
 | Findings sidebar con `differenceLabel` para descuadres | Frontend | ✅ |
 
 ### Lo que NO existe todavía
-- Validación de catálogos completos (usoCFDI, metodoPago, formaPago, moneda, claveUnidad)
+- Validación de catálogos completos (claveUnidad — pendiente)
 - Verificación criptográfica de firma digital (sello SAT/PAC)
 - Validación XSD/estructura XML contra esquemas oficiales
 - Findings desde el backend Python (siempre llegan vacíos)
@@ -50,7 +51,8 @@
 | Findings contextuales con correctionSteps | ✅ | ❌ | **Solo en nuestra app** |
 | Extracción a tabla CSV/Excel | ✅ | ❌ | **Solo en nuestra app** |
 | Catálogo `claveProdServ` | ✅ parcial | ✅ completo y actualizado | **Superconjunto satcfdi** |
-| Catálogos usoCFDI, metodoPago, formaPago, moneda, claveUnidad | ❌ | ✅ | **Solo en satcfdi — agregar** |
+| Catálogos usoCFDI, metodoPago, formaPago, moneda | ✅ pertenencia | ✅ | **Implementado via wrapper** |
+| Catálogo claveUnidad | ❌ | ✅ | **Solo en satcfdi — agregar** |
 | Validación XSD / estructura XML | ❌ | ✅ `transform` module | **Solo en satcfdi — agregar** |
 | Verificación firma digital (sello SAT/PAC) | ❌ | ✅ `cfdi.verifica_url` / `sign` | **Solo en satcfdi — evaluar** |
 | Validación RFC formato | ✅ | ✅ `models/rfc` | **Probablemente duplicado — unificar** |
@@ -66,6 +68,17 @@
 ## Backlog priorizado
 
 ### ✅ Frente A — Findings desde backend Python: catálogos (completado 2026-06-01)
+
+### ✅ Frente B-ext — Ampliar catálogos de cabecera (completado 2026-06-01)
+**Qué se hizo:** Se extendió el patrón sentinel de `claveProdServ` a `usoCFDI`, `metodoPago`, `formaPago` y `moneda`.
+
+**Contrato:** El wrapper emite `"No existe en el catálogo"` en el campo `*Descripcion` cuando satcfdi devuelve `description=None`. El backend detecta el sentinel en `_collect_catalog_findings`. El frontend maneja los IDs `catalog-uso-cfdi-*`, `catalog-metodo-pago-*`, `catalog-forma-pago-*`, `catalog-moneda-*`.
+
+**Alcance:** Valida pertenencia al catálogo (el código existe), NO validez contextual (p. ej. usoCFDI válido para el régimen del receptor). Valida solo a nivel header; `FormaDePagoP` del complemento Pagos queda pendiente.
+
+**Tests:** 76 tests pasando (21 nuevos).
+
+---
 **Por qué primero:** El wrapper Python ya extrae `claveProdServ`, `usoCFDI`, `metodoPago`, `formaPago`, `moneda` pero no valida ninguno. satcfdi tiene catálogos completos. El canal de findings ya existe en el frontend.
 
 **Archivos:**
@@ -144,6 +157,7 @@
 | 2026-06-01 | Eliminar `FinancialSummaryCard`; integrar `differenceLabel` en findings globales | `7463296` |
 | 2026-06-01 | Análisis satcfdi vs nuestra app; definir roadmap maestro; priorizar catálogos como Frente A | este doc |
 | 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | `38989e8` |
+| 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | pendiente commit |
 
 ---
 
