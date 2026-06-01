@@ -120,11 +120,16 @@ export function useFindingContexts(cfdi: CFDIData | null) {
           };
         }
 
+        const declaredVal = finding.declared != null ? parseFloat(finding.declared) : null;
+        const expectedVal = finding.expected != null ? parseFloat(finding.expected) : null;
+        const diff = declaredVal != null && expectedVal != null ? declaredVal - expectedVal : null;
+
         return {
           findingId: finding.id,
           explanation: 'Este hallazgo resume una discrepancia global del comprobante y no señala por sí solo un concepto individual.',
           relationshipLabel: 'Sin concepto directo',
           whyItMatters: 'Sirve para interpretar el estado general del comprobante, pero no para elegir por sí solo un concepto específico.',
+          differenceLabel: diff != null ? `Dif. ${formatSignedExact(diff)}` : undefined,
           conceptLinks: [],
         };
       }

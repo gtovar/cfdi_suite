@@ -26,7 +26,6 @@ import EmisoresPage from './components/EmisoresPage';
 import ExtractWorkspace from './components/ExtractWorkspace';
 import type { ExtractMode } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
-import FinancialSummaryCard from './components/FinancialSummaryCard';
 import FileUpload from './components/FileUpload';
 import InspectorHeader from './components/InspectorHeader';
 import ResolutionPanel from './components/ResolutionPanel';
@@ -298,15 +297,6 @@ export default function App() {
                 {inspectorTab !== 'nodo-xml' && (
                   <>
                     <CfdiSummaryHeader summaryFields={summaryFields} />
-                    {activeDatasetType === 'ingresos' && (
-                      <FinancialSummaryCard
-                        subtotal={cfdi.subtotal}
-                        subtotalCalculado={cfdi.subtotalCalculado}
-                        total={cfdi.total}
-                        totalCalculado={cfdi.totalCalculado}
-                        formatExact={formatExact}
-                      />
-                    )}
                   </>
                 )}
 
