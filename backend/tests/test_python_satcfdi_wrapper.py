@@ -29,6 +29,7 @@ _wrapper = _load_wrapper()
 normalize_concept = _wrapper.normalize_concept
 build_cfdi_payload = _wrapper.build_cfdi_payload
 catalog_desc_or_sentinel = _wrapper.catalog_desc_or_sentinel
+SENTINEL_INVALIDO = _wrapper.SENTINEL_INVALIDO
 
 
 def _make_concepto(clave_prod_serv, description, importe="100.00"):
@@ -81,7 +82,7 @@ class TestNormalizeConceptClaveProdServ(unittest.TestCase):
         El wrapper debe emitir el sentinel que _collect_catalog_findings detecta.
         """
         result = self._run(None)
-        self.assertEqual(result["claveProdServDescripcion"], "No existe en el catálogo")
+        self.assertEqual(result["claveProdServDescripcion"], SENTINEL_INVALIDO)
 
     def test_clave_ausente_no_emite_sentinel(self):
         """Concepto sin ClaveProdServ (cprod=None) → descripción None, sin sentinel."""
@@ -133,7 +134,7 @@ class TestCatalogDescOrSentinel(unittest.TestCase):
     def test_invalid_code_returns_sentinel(self):
         """Código desconocido (description=None) → emite sentinel."""
         code = self._make_code(None)
-        self.assertEqual(catalog_desc_or_sentinel(code), "No existe en el catálogo")
+        self.assertEqual(catalog_desc_or_sentinel(code), SENTINEL_INVALIDO)
 
 
 class TestBuildCfdiPayloadHeaderCatalogs(unittest.TestCase):
@@ -167,7 +168,7 @@ class TestBuildCfdiPayloadHeaderCatalogs(unittest.TestCase):
         cfdi = self._make_cfdi(uso_cfdi=self._make_code("ZZZ", None))
         payload = build_cfdi_payload(cfdi)
         self.assertEqual(payload["usoCfdi"], "ZZZ")
-        self.assertEqual(payload["usoCfdiDescripcion"], "No existe en el catálogo")
+        self.assertEqual(payload["usoCfdiDescripcion"], SENTINEL_INVALIDO)
 
     def test_uso_cfdi_valido_no_emite_sentinel(self):
         cfdi = self._make_cfdi(uso_cfdi=self._make_code("G03", "Gastos en general"))
@@ -184,7 +185,7 @@ class TestBuildCfdiPayloadHeaderCatalogs(unittest.TestCase):
         cfdi = self._make_cfdi(mp=self._make_code("ZZ", None))
         payload = build_cfdi_payload(cfdi)
         self.assertEqual(payload["metodoPago"], "ZZ")
-        self.assertEqual(payload["metodoPagoDescripcion"], "No existe en el catálogo")
+        self.assertEqual(payload["metodoPagoDescripcion"], SENTINEL_INVALIDO)
 
     def test_metodo_pago_ausente_devuelve_none(self):
         """Campo MetodoPago ausente (None) → no debe generar sentinel (regresión clave)."""
@@ -196,13 +197,13 @@ class TestBuildCfdiPayloadHeaderCatalogs(unittest.TestCase):
         cfdi = self._make_cfdi(fp=self._make_code("ZZ", None))
         payload = build_cfdi_payload(cfdi)
         self.assertEqual(payload["formaPago"], "ZZ")
-        self.assertEqual(payload["formaPagoDescripcion"], "No existe en el catálogo")
+        self.assertEqual(payload["formaPagoDescripcion"], SENTINEL_INVALIDO)
 
     def test_moneda_invalida_emite_sentinel(self):
         cfdi = self._make_cfdi(mon=self._make_code("ZZZ", None))
         payload = build_cfdi_payload(cfdi)
         self.assertEqual(payload["moneda"], "ZZZ")
-        self.assertEqual(payload["monedaDescripcion"], "No existe en el catálogo")
+        self.assertEqual(payload["monedaDescripcion"], SENTINEL_INVALIDO)
 
     def test_moneda_valida_no_emite_sentinel(self):
         cfdi = self._make_cfdi(mon=self._make_code("MXN", "Peso Mexicano"))

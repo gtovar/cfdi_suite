@@ -24,6 +24,11 @@ from ..providers.python_satcfdi import (
     default_python_satcfdi_provider,
 )
 
+# Contrato con python-satcfdi-wrapper.py: este es el valor que el wrapper emite
+# en los campos *Descripcion cuando el código no existe en el catálogo SAT.
+# Debe coincidir con SENTINEL_INVALIDO definido en el wrapper.
+_SENTINEL_INVALIDO = "No existe en el catálogo"
+
 _IMP_NOMBRES = {"001": "ISR", "002": "IVA", "003": "IEPS"}
 
 _HEADER_CATALOG_FIELDS = [
@@ -557,7 +562,7 @@ def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
     for i, concept in enumerate(source.get("conceptos", [])):
         desc = concept.get("claveProdServDescripcion")
         code = concept.get("claveProdServ", "")
-        if desc == "No existe en el catálogo" and code:
+        if desc == _SENTINEL_INVALIDO and code:
             claves_invalidas.setdefault(code, []).append(i)
 
     for invalid_code, indexes in claves_invalidas.items():
@@ -576,7 +581,7 @@ def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
     for code_field, desc_field, prefix, label, catalog in _HEADER_CATALOG_FIELDS:
         code = source.get(code_field, "")
         desc = source.get(desc_field)
-        if desc == "No existe en el catálogo" and code:
+        if desc == _SENTINEL_INVALIDO and code:
             findings.append({
                 "id": f"{prefix}-{code}",
                 "severity": "warning",

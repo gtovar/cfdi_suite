@@ -6,6 +6,11 @@ import xml.etree.ElementTree as ET
 from decimal import Decimal
 from datetime import date, datetime
 
+# Contrato interno: este valor es el sentinel que indica "código no existe en el catálogo SAT".
+# _collect_catalog_findings (analyze_cfdi.py) lo detecta para generar findings.
+# Si cambias este valor, debes cambiarlo también en analyze_cfdi.py y en todos los tests.
+SENTINEL_INVALIDO = "No existe en el catálogo"
+
 
 def detect_profile(root):
     complemento = find_child_by_local_name(root, "Complemento")
@@ -102,7 +107,7 @@ def normalize_concept(concepto):
         "valorUnitario": decimal_to_number(concepto.get("ValorUnitario")),
         "importe": decimal_to_number(concepto.get("Importe")),
         "claveProdServ": code_or_raw(cprod),
-        "claveProdServDescripcion": (getattr(cprod, "description", None) or "No existe en el catálogo") if cprod else None,
+        "claveProdServDescripcion": (getattr(cprod, "description", None) or SENTINEL_INVALIDO) if cprod else None,
         "impuestos": (
             normalize_tax_lines(impuestos.get("Traslados"), "Traslado")
             + normalize_tax_lines(impuestos.get("Retenciones"), "Retencion")
@@ -116,7 +121,7 @@ def catalog_desc_or_sentinel(field_value):
     if field_value is None:
         return None
     desc = getattr(field_value, "description", None)
-    return desc if desc is not None else "No existe en el catálogo"
+    return desc if desc is not None else SENTINEL_INVALIDO
 
 
 def build_cfdi_payload(cfdi):

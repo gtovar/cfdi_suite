@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import importlib.util
+import types
 import unittest
+from pathlib import Path
 
 from backend.app.observability import LOGGER_NAME, reset_metrics, snapshot_metrics
+
+# Importar SENTINEL_INVALIDO desde el wrapper para no duplicar la cadena
+_WRAPPER_PATH = Path(__file__).parents[2] / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
+_spec = importlib.util.spec_from_file_location("python_satcfdi_wrapper", _WRAPPER_PATH)
+_wrapper_mod: types.ModuleType = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_wrapper_mod)
+SENTINEL_INVALIDO = _wrapper_mod.SENTINEL_INVALIDO
 from backend.app.providers.base import (
     ProviderCapabilities,
     ProviderDiagnostics,
@@ -335,7 +345,7 @@ class CollectCatalogFindingsTests(unittest.TestCase):
         self.assertEqual(self._fn(self._base_source()), [])
 
     def test_uso_cfdi_invalido_genera_finding(self):
-        src = self._base_source(usoCfdi="ZZZ", usoCfdiDescripcion="No existe en el catálogo")
+        src = self._base_source(usoCfdi="ZZZ", usoCfdiDescripcion=SENTINEL_INVALIDO)
         findings = self._fn(src)
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["id"], "catalog-uso-cfdi-ZZZ")
@@ -343,27 +353,27 @@ class CollectCatalogFindingsTests(unittest.TestCase):
         self.assertEqual(findings[0]["declared"], "ZZZ")
 
     def test_metodo_pago_invalido_genera_finding(self):
-        src = self._base_source(metodoPago="ZZ", metodoPagoDescripcion="No existe en el catálogo")
+        src = self._base_source(metodoPago="ZZ", metodoPagoDescripcion=SENTINEL_INVALIDO)
         findings = self._fn(src)
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["id"], "catalog-metodo-pago-ZZ")
 
     def test_forma_pago_invalida_genera_finding(self):
-        src = self._base_source(formaPago="ZZ", formaPagoDescripcion="No existe en el catálogo")
+        src = self._base_source(formaPago="ZZ", formaPagoDescripcion=SENTINEL_INVALIDO)
         findings = self._fn(src)
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["id"], "catalog-forma-pago-ZZ")
 
     def test_moneda_invalida_genera_finding(self):
-        src = self._base_source(moneda="ZZZ", monedaDescripcion="No existe en el catálogo")
+        src = self._base_source(moneda="ZZZ", monedaDescripcion=SENTINEL_INVALIDO)
         findings = self._fn(src)
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["id"], "catalog-moneda-ZZZ")
 
     def test_multiples_invalidos_generan_un_finding_cada_uno(self):
         src = self._base_source(
-            usoCfdi="ZZZ", usoCfdiDescripcion="No existe en el catálogo",
-            moneda="QQQ", monedaDescripcion="No existe en el catálogo",
+            usoCfdi="ZZZ", usoCfdiDescripcion=SENTINEL_INVALIDO,
+            moneda="QQQ", monedaDescripcion=SENTINEL_INVALIDO,
         )
         findings = self._fn(src)
         ids = {f["id"] for f in findings}

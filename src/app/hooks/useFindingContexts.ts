@@ -4,6 +4,13 @@ import type { CorrectionStep, FindingConceptLink, FindingContext } from '../../c
 import { formatSignedExact } from '../utils/cfdiFormatters';
 import { getConceptPriorityScore, parseMathFindingId } from '../utils/findingUtils';
 
+const HEADER_CATALOG_PREFIXES: Record<string, { label: string; catalog: string }> = {
+  'catalog-uso-cfdi-': { label: 'Uso de CFDI', catalog: 'c_UsoCFDI' },
+  'catalog-metodo-pago-': { label: 'Método de pago', catalog: 'c_MetodoPago' },
+  'catalog-forma-pago-': { label: 'Forma de pago', catalog: 'c_FormaPago' },
+  'catalog-moneda-': { label: 'Moneda', catalog: 'c_Moneda' },
+};
+
 function buildConceptLink(cfdi: CFDIData, conceptIndex: number, reason: string): FindingConceptLink | null {
   const concept = cfdi.conceptos[conceptIndex];
   if (!concept) return null;
@@ -172,12 +179,6 @@ export function useFindingContexts(cfdi: CFDIData | null) {
         };
       }
 
-      const HEADER_CATALOG_PREFIXES: Record<string, { label: string; catalog: string }> = {
-        'catalog-uso-cfdi-': { label: 'Uso de CFDI', catalog: 'c_UsoCFDI' },
-        'catalog-metodo-pago-': { label: 'Método de pago', catalog: 'c_MetodoPago' },
-        'catalog-forma-pago-': { label: 'Forma de pago', catalog: 'c_FormaPago' },
-        'catalog-moneda-': { label: 'Moneda', catalog: 'c_Moneda' },
-      };
       const matchedHeaderCatalog = Object.entries(HEADER_CATALOG_PREFIXES).find(([prefix]) =>
         finding.id.startsWith(prefix),
       );
