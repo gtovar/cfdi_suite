@@ -143,7 +143,7 @@
 | ~2026-05-xx | XmlNodeViewer con virtual scroll para XMLs pesados | `48d127d` |
 | 2026-06-01 | Eliminar `FinancialSummaryCard`; integrar `differenceLabel` en findings globales | `7463296` |
 | 2026-06-01 | Análisis satcfdi vs nuestra app; definir roadmap maestro; priorizar catálogos como Frente A | este doc |
-| 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | pendiente commit |
+| 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | `38989e8` |
 
 ---
 
