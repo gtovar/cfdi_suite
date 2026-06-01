@@ -19,7 +19,6 @@ from .base import (
     ProviderResult,
 )
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER_PATH = REPO_ROOT / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
 REPO_VENV_PYTHON = REPO_ROOT / ".venv-satcfdi" / "bin" / "python"
@@ -53,8 +52,6 @@ class PythonSatcfdiProvider(CfdiAnalysisProvider):
             ) from error
 
         stdout = completed.stdout.strip()
-        stderr = completed.stderr.strip()
-
         if completed.returncode != 0 and not stdout:
             raise PythonSatcfdiProviderError("No se pudo ejecutar el provider python-satcfdi")
 
@@ -138,6 +135,7 @@ def _to_provider_result(payload: dict[str, Any]) -> ProviderResult:
         ),
         structured_cfdi=cfdi,
         ingreso_rows=payload.get("ingresoRows", []),
+        ingreso_row_header=payload.get("ingresoRowHeader", {}),
         pago_rows=payload.get("pagoRows", []),
         provider_issues=provider_issues,
         diagnostics=ProviderDiagnostics(

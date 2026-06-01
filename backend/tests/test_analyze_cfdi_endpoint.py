@@ -85,7 +85,7 @@ class AnalyzeCfdiEndpointTests(unittest.TestCase):
 
     def test_endpoint_rejects_oversized_xml_with_contractual_response(self) -> None:
         with self.assertLogs(LOGGER_NAME, level="WARNING"):
-            response = self.client.post("/api/cfdi/analyze", json={"xml": "x" * 1_000_001})
+            response = self.client.post("/api/cfdi/analyze", json={"xml": "x" * 20_000_001})
 
         self.assertEqual(response.status_code, 422)
         payload = response.json()

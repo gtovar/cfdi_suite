@@ -46,7 +46,8 @@ interface PythonWrapperPayload {
   errorMessage?: string;
   traceback?: string;
   cfdi?: PythonWrapperCfdi;
-  ingresoRows?: CFDIIngresoRow[];
+  ingresoRows?: Record<string, string>[];
+  ingresoRowHeader?: Record<string, string>;
   pagoRows?: CFDIPagoRow[];
 }
 
@@ -118,11 +119,16 @@ export async function analyzeCfdiWithPythonSatcfdiEngine(
     ));
   }
 
+  const header = payload.ingresoRowHeader;
+  const ingresoRows: CFDIIngresoRow[] = (header && Object.keys(header).length > 0)
+    ? (payload.ingresoRows ?? []).map((row) => ({ ...header, ...row }) as unknown as CFDIIngresoRow)
+    : (payload.ingresoRows ?? []) as unknown as CFDIIngresoRow[];
+
   return {
     engine: 'python-satcfdi',
     profile,
     cfdi: payload.cfdi ? toCfdiData(payload.cfdi) : null,
-    ingresoRows: payload.ingresoRows ?? [],
+    ingresoRows,
     pagoRows: payload.pagoRows ?? [],
     issues,
   };

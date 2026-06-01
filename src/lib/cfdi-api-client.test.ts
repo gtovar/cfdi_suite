@@ -32,7 +32,7 @@ describe('cfdi-api-client', () => {
       }),
     );
 
-    const response = await analyzeCFDI('<xml />');
+    const response = await analyzeCFDI(new File(['<xml />'], 'test.xml', { type: 'text/xml' }));
 
     expect(response.engine).toBe('api');
     expect(response.meta.requestId).toBe('req-api-1');
@@ -42,7 +42,7 @@ describe('cfdi-api-client', () => {
   it('throws on network errors instead of falling back locally', async () => {
     vi.mocked(globalThis.fetch).mockRejectedValue(new TypeError('network down'));
 
-    await expect(analyzeCFDI('<xml />')).rejects.toThrow('network down');
+    await expect(analyzeCFDI(new File(['<xml />'], 'test.xml', { type: 'text/xml' }))).rejects.toThrow('network down');
   });
 
   it('throws on backend http errors without a contractual body', async () => {
@@ -50,7 +50,7 @@ describe('cfdi-api-client', () => {
       new Response('bad request', { status: 400 }),
     );
 
-    await expect(analyzeCFDI('<xml />')).rejects.toThrow('La API respondió 400');
+    await expect(analyzeCFDI(new File(['<xml />'], 'test.xml', { type: 'text/xml' }))).rejects.toThrow('La API respondió 400');
   });
 
   it('uses backend contractual fallback responses without invoking local fallback', async () => {
@@ -76,7 +76,7 @@ describe('cfdi-api-client', () => {
       }),
     );
 
-    const response = await analyzeCFDI('<xml />');
+    const response = await analyzeCFDI(new File(['<xml />'], 'test.xml', { type: 'text/xml' }));
 
     expect(response.engine).toBe('api');
     expect(response.meta.provider).toBe('current-ts');

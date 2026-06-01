@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-
 ProviderMode = Literal["primary", "fallback", "comparison", "bridge"]
 ProviderProfile = Literal["ingreso", "pagos", "unknown"]
 ProviderIssueCode = Literal[
@@ -51,6 +50,7 @@ class ProviderResult:
     document_signal: ProviderDocumentSignal = field(default_factory=ProviderDocumentSignal)
     structured_cfdi: dict[str, Any] | None = None
     ingreso_rows: list[dict[str, str]] = field(default_factory=list)
+    ingreso_row_header: dict[str, str] = field(default_factory=dict)
     pago_rows: list[dict[str, str]] = field(default_factory=list)
     provider_issues: list[ProviderIssue] = field(default_factory=list)
     diagnostics: ProviderDiagnostics = field(default_factory=ProviderDiagnostics)

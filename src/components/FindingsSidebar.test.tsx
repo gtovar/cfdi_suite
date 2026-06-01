@@ -60,6 +60,8 @@ describe('FindingsSidebar', () => {
         findingContexts={emptyFindingContexts}
         getFindingOriginLabel={() => 'Matematico'}
         onSelectConcept={() => {}}
+        selectedFindingId={null}
+        onSelectFinding={() => {}}
       />,
     );
 
@@ -78,6 +80,8 @@ describe('FindingsSidebar', () => {
         findingContexts={emptyFindingContexts}
         getFindingOriginLabel={() => 'Matematico'}
         onSelectConcept={() => {}}
+        selectedFindingId={null}
+        onSelectFinding={() => {}}
       />,
     );
 
@@ -98,6 +102,8 @@ describe('FindingsSidebar', () => {
         findingContexts={emptyFindingContexts}
         getFindingOriginLabel={() => 'Matematico'}
         onSelectConcept={() => {}}
+        selectedFindingId={null}
+        onSelectFinding={() => {}}
       />,
     );
 

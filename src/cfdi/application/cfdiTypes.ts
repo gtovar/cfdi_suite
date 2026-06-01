@@ -6,6 +6,7 @@ export interface CFDIConcept {
   importeCalculado: number;
   diferencia: number;
   claveProdServ: string;
+  claveProdServDescripcion?: string | null;
   impuestos: CFDIImpuesto[];
 }
 
@@ -25,6 +26,8 @@ export interface AuditFinding {
   severity: 'critical' | 'warning';
   title: string;
   summary: string;
+  declared?: string;
+  expected?: string;
 }
 
 export interface CFDIIngresoRow {

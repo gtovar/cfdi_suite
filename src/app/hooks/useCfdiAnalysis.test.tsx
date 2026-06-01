@@ -52,7 +52,7 @@ function buildResult(overrides: Partial<CfdiAnalysisContractResult> = {}): CfdiA
 }
 
 function HookProbe(props: {
-  xml: string;
+  file: File;
   onSnapshot: (snapshot: ReturnType<typeof useCfdiAnalysis>) => void;
   onBeforeApply?: (profile: 'ingreso' | 'pagos' | 'unknown') => void;
   onAfterApply?: () => void;
@@ -64,7 +64,7 @@ function HookProbe(props: {
   }, [analysis, props]);
 
   useEffect(() => {
-    void analysis.handleFileSelect(props.xml, {
+    void analysis.handleFileSelect(props.file, {
       onBeforeApply: props.onBeforeApply,
       onAfterApply: props.onAfterApply,
     });
@@ -113,7 +113,7 @@ describe('useCfdiAnalysis', () => {
 
     const rendered = renderReact(
       <HookProbe
-        xml="<xml />"
+        file={new File(['<xml />'], 'test.xml', { type: 'text/xml' })}
         onSnapshot={(snapshot) => snapshots.push(snapshot)}
         onBeforeApply={beforeApply}
         onAfterApply={afterApply}
@@ -157,16 +157,12 @@ describe('useCfdiAnalysis', () => {
       meta: undefined,
     });
 
-    const alerts: string[] = [];
-    vi.mocked(globalThis.alert).mockImplementation((message?: string) => {
-      alerts.push(String(message ?? ''));
-    });
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const snapshots: Array<ReturnType<typeof useCfdiAnalysis>> = [];
 
     const rendered = renderReact(
       <HookProbe
-        xml="<xml />"
-        onSnapshot={() => {}}
+        file={new File(['<xml />'], 'test.xml', { type: 'text/xml' })}
+        onSnapshot={(snapshot) => snapshots.push(snapshot)}
       />,
     );
 
@@ -175,8 +171,9 @@ describe('useCfdiAnalysis', () => {
       await Promise.resolve();
     });
 
-    expect(alerts).toEqual(['Error al procesar el XML. Asegúrate de que sea un CFDI válido.']);
-    expect(consoleError).toHaveBeenCalled();
+    const latest = snapshots.at(-1);
+    expect(latest?.errorMessage).toBe('Error al procesar el XML. Asegúrate de que sea un CFDI válido.');
+    expect(latest?.cfdi).toBeNull();
 
     rendered.unmount();
   });

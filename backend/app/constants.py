@@ -1,0 +1,5 @@
+from __future__ import annotations
+
+TAX_RATE_PRECISION = 6
+ROUNDING_TOLERANCE = 0.01
+MAX_CONCEPT_DIFFS_SHOWN = 3

@@ -27,6 +27,7 @@ export interface CFDIAnalysisProgress {
 
 interface ApiAnalyzeResponse extends Omit<CfdiAnalysisContractResult, 'engine'> {
   meta: CFDIAnalysisMeta;
+  ingresoRowHeader?: Record<string, string>;
 }
 
 function resolveApiBaseUrl() {
@@ -38,7 +39,7 @@ function resolveApiBaseUrl() {
 }
 
 export async function analyzeCFDI(
-  xml: string,
+  file: File,
   onProgress?: (progress: CFDIAnalysisProgress) => void,
 ): Promise<CFDIAnalysisResponse> {
   onProgress?.({
@@ -47,6 +48,7 @@ export async function analyzeCFDI(
     detail: 'Enviando el archivo al backend Python.',
   });
 
+  const xml = await file.text();
   const response = await fetch(`${resolveApiBaseUrl()}/api/cfdi/analyze`, {
     method: 'POST',
     headers: {
@@ -68,11 +70,16 @@ export async function analyzeCFDI(
       : `La API respondió ${response.status}`);
   }
 
+  const header = payload.ingresoRowHeader;
+  const ingresoRows = (header && Object.keys(header).length > 0)
+    ? payload.ingresoRows.map((row) => ({ ...header, ...row }) as import('../cfdi/application/cfdiTypes').CFDIIngresoRow)
+    : payload.ingresoRows as import('../cfdi/application/cfdiTypes').CFDIIngresoRow[];
+
   const result: CfdiAnalysisContractResult = {
     engine: payload.meta.provider === 'current-ts' ? 'current-ts' : 'python-satcfdi',
     profile: payload.profile,
     cfdi: payload.cfdi,
-    ingresoRows: payload.ingresoRows,
+    ingresoRows,
     pagoRows: payload.pagoRows,
     issues: payload.issues,
   };

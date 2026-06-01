@@ -15,14 +15,7 @@ describe('pythonSatcfdiEngine', () => {
     expect(result.profile).toBe('ingreso');
     expect(result.cfdi?.uuid).toBe('INGRESO-CLEAN-UUID');
     expect(result.ingresoRows).toHaveLength(1);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'UNSUPPORTED_CAPABILITY',
-          fatal: false,
-        }),
-      ]),
-    );
+    expect(result.issues.filter((i) => i.fatal)).toHaveLength(0);
   });
 
   it('detects pagos profile through the python wrapper', async () => {

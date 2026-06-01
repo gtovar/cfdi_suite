@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from 'react';
+import clsx from 'clsx';
+import { useEffect, useMemo, useState } from 'react';
 import type { CFDIIngresoRow, CFDIPagoRow } from './cfdi/public';
 import { useCfdiAnalysis } from './app/hooks/useCfdiAnalysis';
 import { useCfdiExports } from './app/hooks/useCfdiExports';
@@ -11,12 +12,14 @@ import { useDiagnoseState } from './app/hooks/useDiagnoseState';
 import { useExtractGridState } from './app/hooks/useExtractGridState';
 import { useFindingContexts } from './app/hooks/useFindingContexts';
 import { useSatEnquiry } from './app/hooks/useSatEnquiry';
+import { useRfcValidation } from './app/hooks/useRfcValidation';
 import { buildSummaryFields, getProfileLabel } from './app/view-models/cfdiViewModels';
 import { formatExact, getExplainedMeaning, getExplainedTaxLabel } from './app/utils/cfdiFormatters';
 import { getFindingOriginLabel } from './app/utils/findingUtils';
 import AppSidebar, { type AppView } from './components/AppNav';
 import AppHeader from './components/AppHeader';
 import CfdiSummaryHeader from './components/CfdiSummaryHeader';
+import CleanStatePanel from './components/CleanStatePanel';
 import ConceptDetailModal from './components/ConceptDetailModal';
 import ConsultasSATPage from './components/ConsultasSATPage';
 import EmisoresPage from './components/EmisoresPage';
@@ -26,7 +29,9 @@ import FindingsSidebar from './components/FindingsSidebar';
 import FinancialSummaryCard from './components/FinancialSummaryCard';
 import FileUpload from './components/FileUpload';
 import InspectorHeader from './components/InspectorHeader';
+import ResolutionPanel from './components/ResolutionPanel';
 import TaxAuditPanel from './components/TaxAuditPanel';
+import XmlNodeViewer from './components/XmlNodeViewer';
 
 const INGRESO_COLUMNS = [
   { key: 'uuid', label: 'UUID' },
@@ -62,15 +67,37 @@ export default function App() {
     analysisStageLabel,
     analysisStageProgress,
     analysisStageDetail,
+    sourceFile,
     handleFileSelect,
     resetAnalysis,
   } = useCfdiAnalysis();
 
   const [taxAuditExpanded, setTaxAuditExpanded] = useState(false);
+  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<'auditoria' | 'nodo-xml'>('auditoria');
+  const [modifiedXml, setModifiedXml] = useState<string | null>(null);
 
   const diagnose = useDiagnoseState(cfdi);
   const findingContexts = useFindingContexts(cfdi);
+
+  useEffect(() => {
+    const defaultId = findingContexts.find((ctx) => ctx.correctionSteps)?.findingId ?? null;
+    setSelectedFindingId(defaultId);
+    setInspectorTab('auditoria');
+    setModifiedXml(null);
+  }, [cfdi?.uuid]);
+
+  const selectedFindingContext = useMemo(
+    () => findingContexts.find((ctx) => ctx.findingId === selectedFindingId) ?? null,
+    [selectedFindingId, findingContexts],
+  );
+
+  const selectedFinding = useMemo(
+    () => cfdi?.findings.find((f) => f.id === selectedFindingId) ?? null,
+    [selectedFindingId, cfdi],
+  );
   const satEnquiry = useSatEnquiry();
+  const rfcValidation = useRfcValidation();
 
   const activeDatasetType: ExtractMode = profile === 'pagos' ? 'pagos' : 'ingresos';
   const extractColumns = activeDatasetType === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
@@ -109,6 +136,8 @@ export default function App() {
 
   const rfcEmisor =
     (profile === 'pagos' ? pagoRows[0]?.rfcEmisor : ingresoRows[0]?.rfcEmisor) ?? '';
+  const nombreEmisor =
+    (profile === 'pagos' ? '' : ingresoRows[0]?.nombreEmisor) ?? '';
   const rfcReceptor =
     (profile === 'pagos' ? pagoRows[0]?.rfcReceptor : ingresoRows[0]?.rfcReceptor) ?? '';
   const satEnquiryData =
@@ -116,11 +145,34 @@ export default function App() {
       ? { uuid: cfdi.uuid, rfcEmisor, rfcReceptor, total: cfdi.total }
       : null;
 
+  const rfcValidationProps = rfcEmisor
+    ? {
+        rfc: rfcEmisor,
+        razonSocial: nombreEmisor || undefined,
+        formatLoading: rfcValidation.formatLoading,
+        satLoading: rfcValidation.satLoading,
+        formatResult: rfcValidation.formatResult,
+        satResult: rfcValidation.satResult,
+        satError: rfcValidation.satError,
+        fielStatus: rfcValidation.fielStatus,
+        onValidateFormat: () => {
+          rfcValidation.validateFormat({ rfc: rfcEmisor, razonSocial: nombreEmisor || undefined });
+          if (!rfcValidation.fielStatus) {
+            rfcValidation.checkFielStatus();
+          }
+        },
+        onValidateSat: () =>
+          rfcValidation.validateSat({ rfc: rfcEmisor, razonSocial: nombreEmisor || undefined }),
+      }
+    : null;
+
   function resetForFileSelect(nextProfile: ExtractMode) {
     resetForNewAnalysis(nextProfile);
     diagnose.reset();
     satEnquiry.reset();
+    rfcValidation.reset();
     setTaxAuditExpanded(false);
+    setSelectedFindingId(null);
   }
 
   function resetAll() {
@@ -128,7 +180,21 @@ export default function App() {
     resetExtractState();
     diagnose.reset();
     satEnquiry.reset();
+    rfcValidation.reset();
     setTaxAuditExpanded(false);
+    setSelectedFindingId(null);
+    setModifiedXml(null);
+  }
+
+  function handleDownloadModified() {
+    if (!modifiedXml || !cfdi) return;
+    const blob = new Blob([modifiedXml], { type: 'text/xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cfdi-corregido-${cfdi.uuid.slice(0, 8)}.xml`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -162,8 +228,8 @@ export default function App() {
                   </p>
                 </div>
                 <FileUpload
-                  onFileSelect={(xml) =>
-                    handleFileSelect(xml, {
+                  onFileSelect={(file) =>
+                    handleFileSelect(file, {
                       onBeforeApply: (nextProfile) => {
                         resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
                       },
@@ -173,6 +239,35 @@ export default function App() {
                   analysisProgress={analysisStageProgress}
                   analysisDetail={analysisStageDetail}
                 />
+
+                {/* Capability map */}
+                <div className="mt-5 rounded-xl border border-gray-200 bg-white px-5 py-4">
+                  <p className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Qué puedes hacer</p>
+                  <div className="space-y-2">
+                    {([
+                      { dot: 'bg-emerald-400', label: 'Sin configurar nada', desc: 'Leer el XML · Ver todos los campos y conceptos · Validar el formato del RFC · Exportar a Excel' },
+                      { dot: 'bg-blue-400',    label: 'Con credenciales Diverza (una por RFC emisor)', desc: 'Consultar si el CFDI está vigente, cancelado o puede cancelarse ante el SAT' },
+                      { dot: 'bg-violet-400',  label: 'Con e.Firma (una sola para toda la app)', desc: 'Verificar si un RFC existe en el SAT y validar que la Razón Social coincida' },
+                    ] as const).map(({ dot, label, desc }) => (
+                      <div key={label} className="flex items-start gap-3">
+                        <span className={`mt-1.5 size-2 shrink-0 rounded-full ${dot}`} />
+                        <div className="text-xs leading-snug">
+                          <span className="font-medium text-gray-700">{label}</span>
+                          <span className="text-gray-400"> — {desc}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[11px] text-gray-400">
+                    Credenciales y e.Firma se configuran en{' '}
+                    <button
+                      onClick={() => setActiveView('emisores')}
+                      className="font-medium text-primary-600 hover:underline"
+                    >
+                      Emisores →
+                    </button>
+                  </p>
+                </div>
               </div>
             </div>
           ) : (
@@ -190,24 +285,32 @@ export default function App() {
                 onConsultarSat={() =>
                   satEnquiryData && satEnquiry.consult(satEnquiryData)
                 }
+                rfcValidation={rfcValidationProps}
+                inspectorTab={cfdi.findings.length > 0 ? inspectorTab : undefined}
+                onTabChange={setInspectorTab}
+                hasFindings={cfdi.findings.length > 0}
+                modifiedXml={modifiedXml}
+                onDownloadModified={handleDownloadModified}
               />
 
               <main className="flex-1 min-h-0 flex flex-col overflow-hidden bg-gray-50 p-4 gap-4">
-                {/* Fila 1: 4 stat cards */}
-                <CfdiSummaryHeader summaryFields={summaryFields} />
-
-                {/* Fila 2: banner financiero (solo ingresos) */}
-                {activeDatasetType === 'ingresos' && cfdi && (
-                  <FinancialSummaryCard
-                    subtotal={cfdi.subtotal}
-                    subtotalCalculado={cfdi.subtotalCalculado}
-                    total={cfdi.total}
-                    totalCalculado={cfdi.totalCalculado}
-                    formatExact={formatExact}
-                  />
+                {/* Fila 1 y 2: ocultas en modo Nodo XML para pantalla limpia */}
+                {inspectorTab !== 'nodo-xml' && (
+                  <>
+                    <CfdiSummaryHeader summaryFields={summaryFields} />
+                    {activeDatasetType === 'ingresos' && (
+                      <FinancialSummaryCard
+                        subtotal={cfdi.subtotal}
+                        subtotalCalculado={cfdi.subtotalCalculado}
+                        total={cfdi.total}
+                        totalCalculado={cfdi.totalCalculado}
+                        formatExact={formatExact}
+                      />
+                    )}
+                  </>
                 )}
 
-                {/* Fila 3: [Hallazgos si los hay] + Tarjeta de tabla */}
+                {/* Fila 3: [Hallazgos si los hay] + panel principal */}
                 <div className="relative flex flex-1 min-h-0 gap-4 overflow-hidden">
                   {cfdi.findings.length > 0 && (
                     <FindingsSidebar
@@ -215,24 +318,51 @@ export default function App() {
                       findingContexts={findingContexts}
                       getFindingOriginLabel={getFindingOriginLabel}
                       onSelectConcept={diagnose.setSelectedConcept}
+                      selectedFindingId={selectedFindingId}
+                      onSelectFinding={setSelectedFindingId}
                     />
                   )}
 
-                  <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white shadow-sm overflow-hidden">
-                    <TaxAuditPanel
-                      cfdi={cfdi}
-                      taxAuditExpanded={taxAuditExpanded}
-                      onToggle={() => setTaxAuditExpanded((current) => !current)}
-                      getExplainedMeaning={getExplainedMeaning}
-                      getExplainedTaxLabel={getExplainedTaxLabel}
-                      formatExact={formatExact}
+                  {inspectorTab === 'nodo-xml' && cfdi.findings.length > 0 ? (
+                    <XmlNodeViewer
+                      finding={selectedFinding}
+                      sourceFile={sourceFile}
+                      modifiedXml={modifiedXml}
+                      onAcceptChange={setModifiedXml}
                     />
-                    <ExtractWorkspace
-                      embedded
-                      activeDatasetType={activeDatasetType}
-                      grid={extractGrid}
-                    />
-                  </div>
+                  ) : (
+                    <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white shadow-sm overflow-hidden">
+                      {/* Panel contextual: limpio / resolución / auditoría */}
+                      {cfdi.findings.length === 0 ? (
+                        <CleanStatePanel
+                          showDetail={taxAuditExpanded}
+                          onToggleDetail={() => setTaxAuditExpanded((v) => !v)}
+                        />
+                      ) : selectedFinding && selectedFindingContext?.correctionSteps ? (
+                        <ResolutionPanel
+                          finding={selectedFinding}
+                          findingContext={selectedFindingContext}
+                          correctionSteps={selectedFindingContext.correctionSteps}
+                          uuid={cfdi.uuid}
+                          onSelectConcept={diagnose.setSelectedConcept}
+                        />
+                      ) : (
+                        <TaxAuditPanel
+                          cfdi={cfdi}
+                          taxAuditExpanded={taxAuditExpanded}
+                          onToggle={() => setTaxAuditExpanded((current) => !current)}
+                          getExplainedMeaning={getExplainedMeaning}
+                          getExplainedTaxLabel={getExplainedTaxLabel}
+                          formatExact={formatExact}
+                        />
+                      )}
+                      <ExtractWorkspace
+                        embedded
+                        activeDatasetType={activeDatasetType}
+                        grid={extractGrid}
+                      />
+                    </div>
+                  )}
 
                   <ConceptDetailModal
                     selectedConcept={diagnose.selectedConcept}

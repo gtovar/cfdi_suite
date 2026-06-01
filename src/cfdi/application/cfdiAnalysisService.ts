@@ -125,6 +125,8 @@ export function buildCfdiData(xml: string): CFDIData {
       severity: concepto.diferencia > 0.01 ? 'critical' : 'warning',
       title: `Importe inconsistente en concepto ${index + 1}`,
       summary: `${concepto.descripcion}: ${summarizeDifference(concepto.importe, concepto.importeCalculado)}`,
+      declared: String(concepto.importe),
+      expected: String(concepto.importeCalculado),
     });
     if (!data.impactedConceptIndexes.includes(index)) data.impactedConceptIndexes.push(index);
   });

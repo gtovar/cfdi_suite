@@ -41,3 +41,8 @@
     @apply h-full bg-gray-50 font-sans text-sm leading-5 text-gray-700 antialiased;
   }
 }
+
+@keyframes xml-highlight {
+  0%   { background-color: rgb(254 240 138); border-radius: 2px; }
+  100% { background-color: transparent; }
+}

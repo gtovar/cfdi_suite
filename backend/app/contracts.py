@@ -48,6 +48,7 @@ class AnalyzeCfdiResponse(BaseModel):
     profile: Literal["ingreso", "pagos", "unknown"]
     cfdi: dict[str, Any] | None
     ingresoRows: list[dict[str, str]]
+    ingresoRowHeader: dict[str, str] = Field(default_factory=dict)
     pagoRows: list[dict[str, str]]
     issues: list[AnalysisIssue]
     meta: AnalyzeCfdiMeta

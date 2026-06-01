@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { useEffect, useRef, useState } from 'react';
-import { Building2, Eye, EyeOff, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Building2, Eye, EyeOff, KeyRound, Loader2, Pencil, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 import {
   type Emisor,
   type EmisorCreate,
@@ -9,6 +9,12 @@ import {
   listEmisores,
   updateEmisor,
 } from '../lib/emisores-api-client';
+import {
+  type FielStatus,
+  configureFiel,
+  deleteFiel,
+  getFielStatus,
+} from '../lib/rfc-validation-api-client';
 
 // ---------------------------------------------------------------------------
 // Modal form
@@ -99,13 +105,6 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
           </div>
 
           <div>
-            <label className={labelClass}>PAC</label>
-            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
-              Diverza
-            </div>
-          </div>
-
-          <div>
             <label className={labelClass}>Credential ID *</label>
             <input
               value={credentialId}
@@ -113,6 +112,7 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
               className={inputClass}
               placeholder="12345"
             />
+            <p className="mt-1 text-[11px] text-gray-400">El ID numérico que te asigna Diverza para este RFC.</p>
           </div>
 
           <div>
@@ -135,6 +135,7 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
                 {showToken ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
+            <p className="mt-1 text-[11px] text-gray-400">La clave secreta de tu cuenta Diverza. Se guarda cifrada.</p>
           </div>
 
           <div>
@@ -145,6 +146,7 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
               className={inputClass}
               placeholder="00001000000712142342"
             />
+            <p className="mt-1 text-[11px] text-gray-400">El número que aparece en tu certificado SAT (20 dígitos). Lo proporciona Diverza si lo requieren.</p>
           </div>
 
           {error && (
@@ -170,6 +172,193 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FIEL configuration card
+// ---------------------------------------------------------------------------
+function FielCard() {
+  const [status, setStatus] = useState<FielStatus | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [cerFile, setCerFile] = useState<File | null>(null);
+  const [keyFile, setKeyFile] = useState<File | null>(null);
+  const [password, setPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  useEffect(() => {
+    getFielStatus().then(setStatus).catch(() => {});
+  }, []);
+
+  async function handleSave(e: { preventDefault: () => void }) {
+    e.preventDefault();
+    if (!cerFile || !keyFile || !password) {
+      setFormError('Todos los campos son obligatorios');
+      return;
+    }
+    setSaving(true);
+    setFormError('');
+    try {
+      const updated = await configureFiel(cerFile, keyFile, password);
+      setStatus(updated);
+      setShowForm(false);
+      setPassword('');
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Error configurando FIEL');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRemove() {
+    if (!confirm('¿Eliminar la configuración FIEL?')) return;
+    setRemoving(true);
+    try {
+      const updated = await deleteFiel();
+      setStatus(updated);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  const inputClass = clsx(
+    'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none',
+    'placeholder:text-gray-400 transition-colors duration-200',
+    'focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30',
+  );
+
+  return (
+    <div className="mt-10">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="size-2 rounded-full bg-violet-400 shrink-0" />
+            <h2 className="text-sm font-semibold text-gray-900">e.Firma (FIEL)</h2>
+          </div>
+          <p className="mt-1 text-xs text-gray-500 ml-4">
+            Tu firma electrónica emitida por el SAT: dos archivos (<strong className="font-medium text-gray-700">.cer</strong> + <strong className="font-medium text-gray-700">.key</strong>) y una contraseña.
+            Se configura <strong className="font-medium text-gray-700">una sola vez</strong> para toda la app — no es por RFC.
+            Habilita: verificar si un RFC existe en el SAT y validar que la Razón Social coincida.
+          </p>
+        </div>
+        {status?.configurada ? (
+          <button
+            onClick={handleRemove}
+            disabled={removing}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition-colors duration-200 hover:border-red-300 hover:bg-red-50 disabled:opacity-50"
+          >
+            {removing ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+            Eliminar FIEL
+          </button>
+        ) : (
+          <button
+            onClick={() => setShowForm((v) => !v)}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-xs font-medium text-white transition-colors duration-200 hover:bg-primary-700"
+          >
+            <KeyRound size={14} />
+            Configurar FIEL
+          </button>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-gray-200 bg-white shadow-soft">
+        {status?.configurada ? (
+          <div className="flex items-center gap-3 px-5 py-4">
+            <div className="flex size-9 items-center justify-center rounded-full bg-emerald-100">
+              <ShieldCheck size={18} className="text-emerald-600" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">FIEL configurada</p>
+              <p className="text-xs text-gray-500">RFC: {status.rfc ?? '—'}</p>
+            </div>
+          </div>
+        ) : showForm ? (
+          <form onSubmit={handleSave} className="space-y-4 p-5">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Certificado (.cer) *
+              </label>
+              <input
+                type="file"
+                accept=".cer"
+                onChange={(e) => setCerFile(e.target.files?.[0] ?? null)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Llave privada (.key) *
+              </label>
+              <input
+                type="file"
+                accept=".key"
+                onChange={(e) => setKeyFile(e.target.files?.[0] ?? null)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Contraseña FIEL *
+              </label>
+              <div className="flex gap-2">
+                <input
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  type={showPass ? 'text' : 'password'}
+                  className={clsx(inputClass, 'flex-1')}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPass((v) => !v)}
+                  className="flex size-[38px] shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-700"
+                >
+                  {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
+
+            {formError && (
+              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {formError}
+              </p>
+            )}
+
+            <div className="flex gap-2.5 pt-1">
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex-1 rounded-lg bg-primary-600 py-2.5 text-xs font-medium text-white transition-colors duration-200 hover:bg-primary-700 disabled:opacity-50"
+              >
+                {saving ? 'Guardando…' : 'Guardar FIEL'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowForm(false)}
+                className="rounded-lg border border-gray-200 px-4 py-2.5 text-xs font-medium text-gray-700 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100"
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-3 p-10 text-center">
+            <div className="flex size-10 items-center justify-center rounded-full bg-gray-100 text-gray-400">
+              <KeyRound size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-700">Sin e.Firma configurada</p>
+              <p className="mt-1 text-xs text-gray-500 max-w-xs">
+                Sube tu certificado .cer, llave .key y contraseña para habilitar la validación contra el portal SAT.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -228,17 +417,32 @@ export default function EmisoresPage() {
     <div className="flex flex-1 flex-col min-h-0 overflow-auto bg-gray-50">
       <div className="mx-auto w-full max-w-4xl px-6 py-8">
         {/* Page heading */}
-        <div className="mb-8 flex items-start justify-between gap-4">
+        <div className="mb-6">
+          <h2 className="text-base font-semibold text-gray-900">Configuración</h2>
+          <p className="mt-1 text-sm text-gray-500">
+            Aquí defines qué puede hacer la app con el SAT. Sin configurar nada ya puedes leer XMLs y exportar; lo de abajo desbloquea más.
+          </p>
+        </div>
+
+        {/* Diverza section heading */}
+        <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold text-gray-900">Emisores</h2>
-            <p className="mt-1 text-xs text-gray-500">Credenciales por RFC — Diverza PAC</p>
+            <div className="flex items-center gap-2">
+              <span className="size-2 rounded-full bg-blue-400 shrink-0" />
+              <h3 className="text-sm font-semibold text-gray-900">Credenciales Diverza</h3>
+            </div>
+            <p className="mt-1 text-xs text-gray-500 ml-4">
+              Diverza es un proveedor autorizado por el SAT (PAC). Sus credenciales permiten consultar el estado de los CFDIs directamente ante el SAT.
+              Necesitas una cuenta en Diverza y agregar las credenciales de cada RFC emisor que uses.
+              Habilita: botón <strong className="font-medium text-gray-700">"Consultar SAT"</strong> en el Inspector y la página <strong className="font-medium text-gray-700">Consultas SAT</strong>.
+            </p>
           </div>
           <button
             onClick={() => setModal('create')}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-xs font-medium text-white transition-colors duration-200 hover:bg-primary-700"
           >
             <Plus size={14} />
-            Agregar emisor
+            Agregar RFC
           </button>
         </div>
 
@@ -275,7 +479,7 @@ export default function EmisoresPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50 text-left">
-                    {['RFC Emisor', 'PAC', 'Credential ID', 'Certificado', ''].map((h) => (
+                    {['RFC Emisor', 'Credential ID', 'Certificado', ''].map((h) => (
                       <th key={h} className="px-5 py-3 text-tiny font-medium uppercase tracking-wider text-gray-500">
                         {h}
                       </th>
@@ -286,7 +490,6 @@ export default function EmisoresPage() {
                   {emisores.map((em) => (
                     <tr key={em.rfc} className="transition-colors duration-150 hover:bg-gray-50">
                       <td className="px-5 py-3 text-xs-plus font-semibold text-gray-900">{em.rfc}</td>
-                      <td className="px-5 py-3 text-xs text-gray-500 capitalize">{em.pac}</td>
                       <td className="px-5 py-3 text-xs text-gray-600">{em.credential_id}</td>
                       <td className="px-5 py-3 text-xs text-gray-500">{em.certificate_number || '—'}</td>
                       <td className="px-5 py-3">
@@ -317,6 +520,8 @@ export default function EmisoresPage() {
             </div>
           )}
         </div>
+
+        <FielCard />
       </div>
 
       {modal !== null && (

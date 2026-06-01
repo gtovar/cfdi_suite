@@ -1,0 +1,18 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP"]
+ignore = ["E501", "N815"]
+
+[tool.pytest.ini_options]
+addopts = "--tb=short"
+testpaths = ["backend/tests"]
+
+[tool.coverage.run]
+source = ["backend/app"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true

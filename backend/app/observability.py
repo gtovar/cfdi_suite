@@ -9,7 +9,6 @@ from typing import Any
 
 from .contracts import AnalyzeCfdiResponse
 
-
 LOGGER_NAME = "cfdi_platform.observability"
 _LATENCY_BUCKETS = (
     (100, "le_100ms"),

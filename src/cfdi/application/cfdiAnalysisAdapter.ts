@@ -146,6 +146,8 @@ export function enrichCfdiWithMathDiagnosis(data: CFDIData, canonical: Canonical
       severity: mapMathSeverity(finding.severity),
       title: buildMathFindingTitle(finding),
       summary: buildMathFindingSummary(finding),
+      declared: finding.declared != null ? String(finding.declared) : undefined,
+      expected: finding.calculated != null ? String(finding.calculated) : undefined,
     });
 
     if (finding.severity === 'error') {

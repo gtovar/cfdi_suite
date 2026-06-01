@@ -95,12 +95,14 @@ def normalize_tax_lines(container, tax_type):
 
 def normalize_concept(concepto):
     impuestos = concepto.get("Impuestos", {})
+    cprod = concepto.get("ClaveProdServ")
     return {
         "descripcion": concepto.get("Descripcion", ""),
         "cantidad": decimal_to_number(concepto.get("Cantidad")),
         "valorUnitario": decimal_to_number(concepto.get("ValorUnitario")),
         "importe": decimal_to_number(concepto.get("Importe")),
-        "claveProdServ": code_or_raw(concepto.get("ClaveProdServ")),
+        "claveProdServ": code_or_raw(cprod),
+        "claveProdServDescripcion": cprod.description if cprod and hasattr(cprod, "description") else None,
         "impuestos": (
             normalize_tax_lines(impuestos.get("Traslados"), "Traslado")
             + normalize_tax_lines(impuestos.get("Retenciones"), "Retencion")
@@ -131,16 +133,15 @@ def build_cfdi_payload(cfdi):
     }
 
 
-def build_ingreso_rows(cfdi):
+def build_ingreso_row_header(cfdi):
     uuid = extract_uuid(cfdi.get("Complemento", {}))
     emisor = cfdi.get("Emisor", {})
     receptor = cfdi.get("Receptor", {})
-    rows = []
-    base_row = {
+    return {
         "uuid": uuid,
         "fecha": scalar_to_json(cfdi.get("Fecha")) or "",
-        "serie": cfdi.get("Serie", ""),
-        "folio": cfdi.get("Folio", ""),
+        "serie": cfdi.get("Serie", "") or "",
+        "folio": cfdi.get("Folio", "") or "",
         "rfcEmisor": emisor.get("Rfc", ""),
         "nombreEmisor": emisor.get("Nombre", ""),
         "rfcReceptor": receptor.get("Rfc", ""),
@@ -155,9 +156,12 @@ def build_ingreso_rows(cfdi):
         "total": decimal_to_string(cfdi.get("Total")),
     }
 
+
+def build_ingreso_rows(cfdi):
+    rows = []
+
     for concepto in cfdi.get("Conceptos", []):
         concept_base = {
-            **base_row,
             "claveProdServ": code_or_raw(concepto.get("ClaveProdServ")),
             "cantidad": decimal_to_string(concepto.get("Cantidad")),
             "descripcion": concepto.get("Descripcion", ""),
@@ -287,17 +291,31 @@ def build_pago_rows(cfdi):
     return rows
 
 
-def parse_payload(xml):
-    root = ET.fromstring(xml)
-    local_name = root.tag.split("}", 1)[-1]
-    if local_name != "Comprobante":
-        raise ValueError("No se encontró el nodo Comprobante")
+def detect_profile_from_cfdi(cfdi):
+    complemento = cfdi.get("Complemento", {}) or {}
+    if complemento.get("Pagos"):
+        return "pagos"
+    tipo = cfdi.get("TipoDeComprobante")
+    tipo_code = tipo.code if hasattr(tipo, "code") else str(tipo or "")
+    if tipo_code == "I":
+        return "ingreso"
+    if cfdi.get("Conceptos"):
+        return "ingreso"
+    return "unknown"
 
+
+def parse_payload(xml):
     try:
         from satcfdi.cfdi import CFDI
         satcfdi_available = True
     except ModuleNotFoundError:
         satcfdi_available = False
+
+    if not satcfdi_available:
+        root = ET.fromstring(xml)
+        local_name = root.tag.split("}", 1)[-1]
+        if local_name != "Comprobante":
+            raise ValueError("No se encontró el nodo Comprobante")
         return {
             "ok": False,
             "profile": detect_profile(root),
@@ -307,8 +325,14 @@ def parse_payload(xml):
             ],
         }
 
-    profile = detect_profile(root)
-    cfdi = CFDI.from_string(xml.encode())
+    # Un solo parse: cualquier fallo de CFDI.from_string es un error de parseo
+    try:
+        cfdi = CFDI.from_string(xml.encode())
+    except ET.ParseError:
+        raise  # capturado en main() como errorType: "parse"
+    except Exception as e:
+        raise ValueError(f"No se pudo parsear el CFDI: {e}") from e
+    profile = detect_profile_from_cfdi(cfdi)
     cfdi_payload = build_cfdi_payload(cfdi)
 
     return {
@@ -317,10 +341,10 @@ def parse_payload(xml):
         "satcfdiAvailable": True,
         "cfdi": cfdi_payload,
         "ingresoRows": build_ingreso_rows(cfdi) if profile == "ingreso" else [],
+        "ingresoRowHeader": build_ingreso_row_header(cfdi) if profile == "ingreso" else {},
         "pagoRows": build_pago_rows(cfdi) if profile == "pagos" else [],
-        "unsupportedCapabilities": [
-            "Hallazgos equivalentes al motor current-ts aún no implementados"
-        ],
+        "unsupportedCapabilities": [],
+        "findingsImplemented": True,
     }
 
 

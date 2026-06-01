@@ -105,8 +105,23 @@ export default function ConsultasSATPage() {
         {/* Page heading */}
         <div className="mb-8">
           <h2 className="text-base font-semibold text-gray-900">Consultas SAT</h2>
-          <p className="mt-1 text-xs text-gray-500">
-            Vigencia y cancelabilidad de CFDIs vía Diverza
+          <p className="mt-1 text-sm text-gray-500">
+            Verifica el estado de tus CFDIs ante el SAT: si están vigentes o si ya fueron cancelados.
+          </p>
+          <p className="mt-2 text-xs text-gray-400">
+            Sube un archivo Excel con tu lista de facturas y obtén el estado de cada una en un solo paso.
+          </p>
+        </div>
+
+        {/* Prerequisites notice */}
+        <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700 space-y-1">
+          <p className="font-medium">¿Qué necesitas para usar esto?</p>
+          <p>
+            Credenciales Diverza configuradas para cada RFC emisor de las facturas que quieras consultar.
+            Si no eres el emisor y no tienes cuenta Diverza, esas facturas mostrarán error.
+          </p>
+          <p>
+            Configura en <span className="font-medium">Emisores</span> (menú izquierdo → Configuración).
           </p>
         </div>
 

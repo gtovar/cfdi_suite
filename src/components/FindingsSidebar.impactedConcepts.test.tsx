@@ -68,8 +68,8 @@ function renderSidebar(element: ReactElement) {
 }
 
 describe('FindingsSidebar impacted concepts', () => {
-  it('renders impacted concepts and delegates selection through the callback', () => {
-    const selected: string[] = [];
+  it('renders finding cards and shows resolution button for findings with concept links', () => {
+    const selectedFindings: string[] = [];
     const findingContexts: FindingContext[] = [
       {
         findingId: 'tax-group-002|Tasa|0.16',
@@ -100,29 +100,30 @@ describe('FindingsSidebar impacted concepts', () => {
         })}
         findingContexts={findingContexts}
         getFindingOriginLabel={() => 'Matematico'}
-        onSelectConcept={(concept) => selected.push(concept.descripcion ?? '')}
+        onSelectConcept={() => {}}
+        selectedFindingId={null}
+        onSelectFinding={(id) => { if (id) selectedFindings.push(id); }}
       />,
     );
 
-    expect(container.textContent).toContain('Hallazgo enfocado');
-    expect(container.textContent).toContain('Guía de revisión');
-    expect(container.textContent).toContain('Hallazgo: Diferencia en traslado 002 16.00%');
-    expect(container.textContent).toContain('Por qué importa');
-    expect(container.textContent).toContain('Prioridad');
-    expect(container.textContent).toContain('Empieza por el concepto 1.');
-    expect(container.textContent).toContain('Concepto sugerido');
-    expect(container.textContent).toContain('Concepto A');
-    expect(container.textContent).not.toContain('Concepto D');
-    expect(container.textContent).toContain('4 conceptos adicionales disponibles en la tabla');
-    expect(container.textContent).toContain('Participa en el grupo fiscal 002 16.00%.');
+    // Finding card content is visible
+    expect(container.textContent).toContain('Diferencia en traslado 002 16.00%');
+    expect(container.textContent).toContain('Detalle 100.00 vs agrupado 100.02.');
+    expect(container.textContent).toContain('5 concepto(s) en el grupo 002 16.00%');
+    expect(container.textContent).toContain('Dif. real +0.02');
 
-    const conceptButton = findButtonByText(container, 'Abrir concepto sugerido');
-    expect(conceptButton).toBeTruthy();
+    // Resolution button present for finding with concept links
+    const resolveButton = findButtonByText(container, 'Ver cómo resolver');
+    expect(resolveButton).toBeTruthy();
 
+    // Clicking it calls onSelectFinding with the finding id
     act(() => {
-      conceptButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      resolveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
+    expect(selectedFindings).toEqual(['tax-group-002|Tasa|0.16']);
 
-    expect(selected).toEqual(['Concepto A']);
+    // Guía de revisión section is no longer in the sidebar (moved to ResolutionPanel)
+    expect(container.textContent).not.toContain('Guía de revisión');
+    expect(container.textContent).not.toContain('Abrir concepto sugerido');
   });
 });

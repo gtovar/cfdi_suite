@@ -15,7 +15,6 @@ from .base import (
     ProviderResult,
 )
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER_PATH = REPO_ROOT / "src" / "cfdi" / "engine" / "current-ts-wrapper.ts"
 

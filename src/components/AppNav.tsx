@@ -7,6 +7,7 @@ export type AppView = 'inspector' | 'consultas-sat' | 'reprint' | 'cancelaciones
 interface NavItem {
   id: AppView;
   label: string;
+  hint: string;
   Icon: LucideIcon;
   disabled?: boolean;
   phase?: string;
@@ -19,19 +20,19 @@ interface NavSection {
 
 const NAVIGATION: NavSection[] = [
   {
-    items: [{ id: 'inspector', label: 'Inspector', Icon: FileSearch2 }],
+    items: [{ id: 'inspector', label: 'Inspector', hint: 'Carga un XML y analiza el contenido del CFDI', Icon: FileSearch2 }],
   },
   {
     label: 'Operaciones',
     items: [
-      { id: 'consultas-sat', label: 'Consultas SAT', Icon: Search },
-      { id: 'reprint', label: 'Reprint', Icon: Printer, disabled: true, phase: 'F3' },
-      { id: 'cancelaciones', label: 'Cancelaciones', Icon: XCircle, disabled: true, phase: 'F4' },
+      { id: 'consultas-sat', label: 'Consultas SAT', hint: 'Verifica si tus CFDIs están vigentes o cancelados — procesa varios a la vez', Icon: Search },
+      { id: 'reprint', label: 'Reprint', hint: 'Genera PDF de un CFDI (próximamente)', Icon: Printer, disabled: true, phase: 'F3' },
+      { id: 'cancelaciones', label: 'Cancelaciones', hint: 'Envía solicitudes de cancelación al SAT (próximamente)', Icon: XCircle, disabled: true, phase: 'F4' },
     ],
   },
   {
     label: 'Configuración',
-    items: [{ id: 'emisores', label: 'Emisores', Icon: Building2 }],
+    items: [{ id: 'emisores', label: 'Emisores', hint: 'Configura los RFCs y e.Firmas de tus empresas', Icon: Building2 }],
   },
 ];
 
@@ -86,7 +87,7 @@ export default function AppSidebar({
                     key={item.id}
                     disabled={item.disabled}
                     onClick={() => !item.disabled && onViewChange(item.id)}
-                    title={collapsed ? item.label : undefined}
+                    title={collapsed ? item.label : item.hint}
                     style={{ height: '34px' }}
                     className={clsx(
                       'flex w-full items-center rounded-lg text-xs-plus tracking-wide outline-hidden transition-colors duration-200',
