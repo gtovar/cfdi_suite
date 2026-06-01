@@ -32,10 +32,10 @@ _SENTINEL_INVALIDO = "No existe en el catálogo"
 _IMP_NOMBRES = {"001": "ISR", "002": "IVA", "003": "IEPS"}
 
 _HEADER_CATALOG_FIELDS = [
-    ("usoCfdi", "usoCfdiDescripcion", "catalog-uso-cfdi", "Uso de CFDI", "c_UsoCFDI"),
-    ("metodoPago", "metodoPagoDescripcion", "catalog-metodo-pago", "Método de pago", "c_MetodoPago"),
-    ("formaPago", "formaPagoDescripcion", "catalog-forma-pago", "Forma de pago", "c_FormaPago"),
-    ("moneda", "monedaDescripcion", "catalog-moneda", "Moneda", "c_Moneda"),
+    ("usoCfdi",    "usoCfdiDescripcion",    "catalog-uso-cfdi",    "Uso de CFDI",    "c_UsoCFDI",    "inválido"),
+    ("metodoPago", "metodoPagoDescripcion", "catalog-metodo-pago", "Método de pago", "c_MetodoPago", "inválido"),
+    ("formaPago",  "formaPagoDescripcion",  "catalog-forma-pago",  "Forma de pago",  "c_FormaPago",  "inválida"),
+    ("moneda",     "monedaDescripcion",     "catalog-moneda",      "Moneda",         "c_Moneda",     "inválida"),
 ]
 
 
@@ -578,14 +578,14 @@ def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
             "declared": invalid_code,
         })
 
-    for code_field, desc_field, prefix, label, catalog in _HEADER_CATALOG_FIELDS:
+    for code_field, desc_field, prefix, label, catalog, adj in _HEADER_CATALOG_FIELDS:
         code = source.get(code_field, "")
         desc = source.get(desc_field)
         if desc == _SENTINEL_INVALIDO and code:
             findings.append({
                 "id": f"{prefix}-{code}",
                 "severity": "warning",
-                "title": f"{label} inválido: {code}",
+                "title": f"{label} {adj}: {code}",
                 "summary": f"El código '{code}' no existe en el catálogo SAT {catalog}.",
                 "declared": code,
             })
