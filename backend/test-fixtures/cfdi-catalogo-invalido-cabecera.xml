@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Fixture de prueba: UsoCFDI y FormaPago con códigos inexistentes en el catálogo SAT.
+     ClaveUnidad="ZZZZ" en el segundo concepto es inválida para test_catalog_integration.py.
      Usado por: test_catalog_integration.py, prueba manual en el Inspector. -->
 <cfdi:Comprobante
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -16,7 +17,9 @@
     <cfdi:Emisor Rfc=" AAA010101AAA" RegimenFiscal="622" Nombre="Esta es una demostración" />
     <cfdi:Receptor Rfc="BASJ600902KL9" UsoCFDI="ZZZ" Nombre="Juanito Bananas De la Sierra" DomicilioFiscalReceptor="99999" RegimenFiscalReceptor="630" />
     <cfdi:Conceptos>
-      <cfdi:Concepto ClaveProdServ="84111506" Cantidad="1" ClaveUnidad="ACT" Descripcion="Descripcion"
+      <cfdi:Concepto ClaveProdServ="84111506" Cantidad="1" ClaveUnidad="ACT" Descripcion="Concepto valido"
+      ValorUnitario="0" Importe="0" ObjetoImp="01" />
+      <cfdi:Concepto ClaveProdServ="84111506" Cantidad="1" ClaveUnidad="ZZZZ" Descripcion="Concepto con claveUnidad invalida"
       ValorUnitario="0" Importe="0" ObjetoImp="01" />
     </cfdi:Conceptos>
   <cfdi:Complemento>

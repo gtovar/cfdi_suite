@@ -33,7 +33,7 @@
 | Findings sidebar con `differenceLabel` para descuadres | Frontend | ✅ |
 
 ### Lo que NO existe todavía
-- Validación de catálogos completos (claveUnidad — pendiente)
+- Validación de catálogos completos (claveUnidad — ✅ completado 2026-06-01)
 - Verificación criptográfica de firma digital (sello SAT/PAC)
 - Validación XSD/estructura XML contra esquemas oficiales
 - Findings desde el backend Python (siempre llegan vacíos)
@@ -52,9 +52,9 @@
 | Extracción a tabla CSV/Excel | ✅ | ❌ | **Solo en nuestra app** |
 | Catálogo `claveProdServ` | ✅ parcial | ✅ completo y actualizado | **Superconjunto satcfdi** |
 | Catálogos usoCFDI, metodoPago, formaPago, moneda | ✅ pertenencia | ✅ | **Implementado via wrapper** |
-| Catálogo claveUnidad | ❌ | ✅ | **Solo en satcfdi — agregar** |
+| Catálogo claveUnidad | ✅ pertenencia | ✅ | **Implementado via wrapper** |
 | Validación XSD / estructura XML | ❌ | ✅ `transform` module | **Solo en satcfdi — agregar** |
-| Verificación firma digital (sello SAT/PAC) | ❌ | ✅ `cfdi.verifica_url` / `sign` | **Solo en satcfdi — evaluar** |
+| Verificación firma digital (sello emisor) | ✅ offline | ✅ | **Implementado via wrapper** |
 | Validación RFC formato | ✅ | ✅ `models/rfc` | **Probablemente duplicado — unificar** |
 | Consulta estado SAT | ✅ | ✅ `portal` | **Duplicado — mantener el nuestro** |
 | Render CFDI como tabla HTML semántica | ❌ (árbol XML) | ✅ `py2html` | **Diferente — base para PDF** |
@@ -76,7 +76,7 @@
 
 **Alcance:** Valida pertenencia al catálogo (el código existe), NO validez contextual (p. ej. usoCFDI válido para el régimen del receptor). Valida solo a nivel header; `FormaDePagoP` del complemento Pagos queda pendiente.
 
-**Tests:** 76 tests pasando (21 nuevos).
+**Tests:** 99 tests pasando (12 por claveUnidad + 4 gaps decision-expander: impactedConceptIndexes, cobertura de dos claves distintas).
 
 ---
 **Por qué primero:** El wrapper Python ya extrae `claveProdServ`, `usoCFDI`, `metodoPago`, `formaPago`, `moneda` pero no valida ninguno. satcfdi tiene catálogos completos. El canal de findings ya existe en el frontend.
@@ -93,14 +93,20 @@
 
 ---
 
-### 🟡 Frente B — Verificación de firma digital
-**Por qué segundo:** Alto valor para perfil técnico (Diverza/PAC). Capacidad completamente ausente en nuestra app.
+### ✅ Frente B — Verificación de firma digital (completado 2026-06-01)
 
-**Precondición:** Verificar si `satcfdi.transform` puede verificar firma offline (sin credenciales SAT). Si requiere conexión SAT activa → es un flujo diferente con auth, no aplica al inspector sin login.
+**Qué se implementó:** Verificación offline del sello del emisor (atributo `Sello` del `cfdi:Comprobante`) usando `Certificate.verify_sha256()` y `verify_certificate()` de satcfdi con certificados raíz del SAT incluidos en la librería (`CertsProd.zip`).
 
-**Archivos (si es offline):**
-- `src/cfdi/engine/python-satcfdi-wrapper.py` — llamada a verificación de sello
+**Alcance:** Solo sello del emisor. El `TimbreFiscalDigital` (sello del PAC/SAT) requiere conexión SAT → fuera de alcance.
+
+**Resultado para CFDIs UAT/pruebas:** `certificadoSAT: false` (cert de pruebas no está en producción), `selloFirma: true` (firma válida). **Status: `invalid`** — comportamiento correcto.
+
+**Archivos modificados:**
+- `src/cfdi/engine/python-satcfdi-wrapper.py` — `verify_sello(cfdi)` + `"selloVerificacion"` en `build_cfdi_payload`
+- `backend/app/services/analyze_cfdi.py` — `_collect_sello_findings(source)` + llamada en `_normalize_cfdi`
 - `src/app/hooks/useFindingContexts.ts` — handler para findings `firma-*`
+
+**Tests:** 116 pasando (17 nuevos: 8 unitarios + 7 integración con fixture real).
 
 ---
 
@@ -158,6 +164,7 @@
 | 2026-06-01 | Análisis satcfdi vs nuestra app; definir roadmap maestro; priorizar catálogos como Frente A | este doc |
 | 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | `38989e8` |
 | 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | `1148e08` |
+| 2026-06-01 | claveUnidad: sentinel pattern extendido a concepto.ClaveUnidad; handler frontend; 12 tests nuevos | pendiente commit |
 
 ---
 

@@ -263,7 +263,13 @@ def _normalize_cfdi(source: dict[str, Any] | None) -> dict[str, Any] | None:
     findings += rounding_f
     hallazgos += rounding_h
 
-    findings += _collect_catalog_findings(source)
+    catalog_f, catalog_i = _collect_catalog_findings(source)
+    findings += catalog_f
+    for i in catalog_i:
+        if i not in impacted:
+            impacted.append(i)
+
+    findings += _collect_sello_findings(source)
 
     findings = _deduplicate_findings(findings)
     impacted.sort()
@@ -331,6 +337,9 @@ def _process_concepts(source: dict[str, Any]) -> list[dict[str, Any]]:
             "importeCalculado": round(cantidad * valor_unitario, TAX_RATE_PRECISION),
             "diferencia": abs(importe - (cantidad * valor_unitario)),
             "claveProdServ": concept.get("claveProdServ", ""),
+            "claveProdServDescripcion": concept.get("claveProdServDescripcion"),
+            "claveUnidad": concept.get("claveUnidad", ""),
+            "claveUnidadDescripcion": concept.get("claveUnidadDescripcion"),
             "impuestos": [_map_tax_entry(tax) for tax in concept.get("impuestos", [])],
         })
     return conceptos
@@ -555,7 +564,7 @@ def _collect_sat_rounding_findings(
     return findings, hallazgos
 
 
-def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
+def _collect_catalog_findings(source: dict[str, Any]) -> tuple[list[dict[str, Any]], list[int]]:
     findings: list[dict[str, Any]] = []
 
     claves_invalidas: dict[str, list[int]] = {}
@@ -578,6 +587,26 @@ def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
             "declared": invalid_code,
         })
 
+    claves_unidad_invalidas: dict[str, list[int]] = {}
+    for i, concept in enumerate(source.get("conceptos", [])):
+        desc = concept.get("claveUnidadDescripcion")
+        code = concept.get("claveUnidad", "")
+        if desc == _SENTINEL_INVALIDO and code:
+            claves_unidad_invalidas.setdefault(code, []).append(i)
+
+    for invalid_code, indexes in claves_unidad_invalidas.items():
+        count = len(indexes)
+        findings.append({
+            "id": f"catalog-clave-unidad-{invalid_code}",
+            "severity": "warning",
+            "title": f"Clave de unidad inválida: {invalid_code}",
+            "summary": (
+                f"{count} concepto(s) usan la clave de unidad '{invalid_code}' "
+                f"que no existe en el catálogo oficial del SAT (c_ClaveUnidad)."
+            ),
+            "declared": invalid_code,
+        })
+
     for code_field, desc_field, prefix, label, catalog, adj in _HEADER_CATALOG_FIELDS:
         code = source.get(code_field, "")
         desc = source.get(desc_field)
@@ -589,6 +618,72 @@ def _collect_catalog_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
                 "summary": f"El código '{code}' no existe en el catálogo SAT {catalog}.",
                 "declared": code,
             })
+
+    impacted: list[int] = []
+    for indexes in claves_invalidas.values():
+        for i in indexes:
+            if i not in impacted:
+                impacted.append(i)
+    for indexes in claves_unidad_invalidas.values():
+        for i in indexes:
+            if i not in impacted:
+                impacted.append(i)
+
+    return findings, impacted
+
+
+def _collect_sello_findings(source: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    sv = source.get("selloVerificacion")
+    if not sv or sv.get("status") in (None, "missing"):
+        return findings
+
+    if sv.get("status") == "error":
+        findings.append({
+            "id": "firma-error-verificacion",
+            "severity": "warning",
+            "title": "No se pudo verificar la firma digital",
+            "summary": f"Error al procesar el sello: {sv.get('error', 'desconocido')}",
+        })
+        return findings
+
+    checks = sv.get("checks", {})
+
+    if not checks.get("selloFirma"):
+        findings.append({
+            "id": "firma-sello-invalido",
+            "severity": "critical",
+            "title": "Sello digital inválido",
+            "summary": "La firma del CFDI no corresponde al contenido del comprobante. El XML puede haber sido modificado.",
+        })
+
+    if not checks.get("certificadoSAT"):
+        # Si la firma es criptográficamente válida pero el cert no está en el trust store
+        # de producción, es probable que sea un CFDI de entorno UAT — severity warning.
+        # Si además la firma es inválida, ambos problemas son críticos.
+        cert_severity = "warning" if checks.get("selloFirma") else "critical"
+        findings.append({
+            "id": "firma-certificado-invalido",
+            "severity": cert_severity,
+            "title": "Certificado no emitido por el SAT",
+            "summary": "El certificado incluido en el CFDI no pudo validarse contra los certificados raíz del SAT.",
+        })
+
+    if not checks.get("numeroCertificado"):
+        findings.append({
+            "id": "firma-numero-certificado-invalido",
+            "severity": "warning",
+            "title": "Número de certificado no coincide",
+            "summary": "El atributo NoCertificado no coincide con el número del certificado incluido.",
+        })
+
+    if not checks.get("rfcEmisor"):
+        findings.append({
+            "id": "firma-rfc-emisor-invalido",
+            "severity": "warning",
+            "title": "RFC del emisor no coincide con el certificado",
+            "summary": "El RFC del emisor en el CFDI no coincide con el RFC registrado en el certificado digital.",
+        })
 
     return findings
 

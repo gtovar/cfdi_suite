@@ -227,6 +227,64 @@ export function useFindingContexts(cfdi: CFDIData | null) {
         };
       }
 
+      if (finding.id.startsWith('catalog-clave-unidad-')) {
+        const invalidCode = finding.declared ?? '';
+        const affectedConcepts = cfdi.conceptos
+          .map((c, i) => ({ c, i }))
+          .filter(({ c }) => c.claveUnidad === invalidCode)
+          .slice(0, 5);
+        const conceptLinks = affectedConcepts
+          .map(({ i }) => buildConceptLink(cfdi, i, `Usa la clave de unidad inválida '${invalidCode}'.`))
+          .filter((l): l is FindingConceptLink => Boolean(l));
+
+        const correctionSteps: CorrectionStep[] = [
+          { text: 'Identifica este CFDI en tu sistema de facturación por su UUID', copyValue: cfdi.uuid, copyLabel: 'Copiar UUID' },
+          { text: `La clave de unidad '${invalidCode}' no existe en el catálogo SAT c_ClaveUnidad. Consulta el catálogo oficial en el portal del SAT para encontrar la clave correcta.` },
+          { text: 'Actualiza la clave de unidad en tu sistema de facturación y reemite el CFDI corregido' },
+        ];
+
+        const totalAfectados = cfdi.conceptos.filter((c) => c.claveUnidad === invalidCode).length;
+        return {
+          findingId: finding.id,
+          explanation: `La clave de unidad '${invalidCode}' no está registrada en el catálogo SAT c_ClaveUnidad. El SAT puede rechazar o marcar este CFDI como inválido.`,
+          relationshipLabel: `${totalAfectados} concepto(s) afectados`,
+          whyItMatters: 'El SAT exige claves de unidad válidas del catálogo c_ClaveUnidad para la correcta descripción de la cantidad facturada.',
+          conceptLinks,
+          correctionSteps,
+        };
+      }
+
+      if (finding.id.startsWith('firma-')) {
+        const explanations: Record<string, string> = {
+          'firma-sello-invalido':
+            'El sistema verificó la firma RSA-SHA256 del comprobante contra el certificado incluido en el XML y no coinciden. Esto ocurre cuando el contenido del XML fue modificado después de sellarse.',
+          'firma-certificado-invalido':
+            'El sistema validó el certificado incluido en el XML contra los certificados raíz del SAT (verificación offline). El certificado no pertenece a la cadena de confianza del SAT de producción.',
+          'firma-numero-certificado-invalido':
+            'El atributo NoCertificado del comprobante no coincide con el número de serie del certificado incluido en el campo Certificado.',
+          'firma-rfc-emisor-invalido':
+            'El RFC registrado en el certificado digital no coincide con el RFC del emisor declarado en el comprobante.',
+          'firma-error-verificacion':
+            'Ocurrió un error técnico al intentar procesar el sello o el certificado. El XML puede contener valores con formato incorrecto.',
+        };
+        const correctionSteps: CorrectionStep[] =
+          finding.id === 'firma-sello-invalido'
+            ? [
+                { text: 'Identifica este CFDI en tu sistema de facturación por su UUID', copyValue: cfdi.uuid, copyLabel: 'Copiar UUID' },
+                { text: 'El sello digital no corresponde al contenido del comprobante. Esto puede indicar que el XML fue modificado después de ser sellado por el PAC.' },
+                { text: 'Solicita al emisor un XML original sin modificaciones, o verifica la integridad del archivo.' },
+              ]
+            : [];
+        return {
+          findingId: finding.id,
+          explanation: explanations[finding.id] ?? 'El sistema detectó un problema en la firma digital del comprobante.',
+          relationshipLabel: 'Integridad del comprobante',
+          whyItMatters: 'Un sello inválido puede indicar alteración del comprobante o un error en el proceso de emisión. El SAT puede rechazar CFDIs con firma inválida.',
+          conceptLinks: [],
+          correctionSteps: correctionSteps.length > 0 ? correctionSteps : undefined,
+        };
+      }
+
       return {
         findingId: finding.id,
         explanation: 'Hallazgo operativo sin relacion detallada con conceptos en esta version.',

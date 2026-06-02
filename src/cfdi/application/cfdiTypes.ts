@@ -7,6 +7,8 @@ export interface CFDIConcept {
   diferencia: number;
   claveProdServ: string;
   claveProdServDescripcion?: string | null;
+  claveUnidad?: string;
+  claveUnidadDescripcion?: string | null;
   impuestos: CFDIImpuesto[];
 }
 

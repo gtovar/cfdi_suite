@@ -18,3 +18,8 @@ __pycache__/
 .claude/governance.json
 .claude/settings.json
 .claude/hooks/
+
+# Artefactos temporales de desarrollo
+.coverage
+verify-*.mjs
+verify_consultas_sat.mjs

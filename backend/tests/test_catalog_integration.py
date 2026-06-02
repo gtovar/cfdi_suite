@@ -86,6 +86,40 @@ class TestCatalogIntegrationRealSatcfdi(unittest.TestCase):
         self.assertEqual(catalog_findings[0]["severity"], "warning")
         self.assertEqual(catalog_findings[0]["declared"], "ZZZ")
 
+    def test_clave_unidad_invalida_emite_sentinel_real(self):
+        """El segundo concepto del fixture tiene ClaveUnidad='ZZZZ' → sentinel en wrapper."""
+        cfdi = self.parse_result["cfdi"]
+        conceptos = cfdi.get("conceptos", [])
+        self.assertGreaterEqual(len(conceptos), 2)
+        segundo = conceptos[1]
+        self.assertEqual(segundo["claveUnidad"], "ZZZZ")
+        self.assertEqual(segundo["claveUnidadDescripcion"], _wrapper.SENTINEL_INVALIDO)
+
+    def test_normalize_cfdi_genera_finding_clave_unidad(self):
+        from backend.app.services.analyze_cfdi import _normalize_cfdi
+
+        normalized = _normalize_cfdi(self.parse_result["cfdi"])
+        self.assertIsNotNone(normalized)
+        finding_ids = {f["id"] for f in normalized["findings"]}
+        self.assertIn("catalog-clave-unidad-ZZZZ", finding_ids)
+
+    def test_finding_clave_unidad_tiene_severity_warning(self):
+        from backend.app.services.analyze_cfdi import _normalize_cfdi
+
+        normalized = _normalize_cfdi(self.parse_result["cfdi"])
+        findings = [f for f in normalized["findings"] if f["id"] == "catalog-clave-unidad-ZZZZ"]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "warning")
+        self.assertEqual(findings[0]["declared"], "ZZZZ")
+
+    def test_clave_unidad_valida_no_genera_finding(self):
+        """El primer concepto tiene ClaveUnidad='ACT' (válida) → no genera finding."""
+        from backend.app.services.analyze_cfdi import _normalize_cfdi
+
+        normalized = _normalize_cfdi(self.parse_result["cfdi"])
+        findings = [f for f in normalized["findings"] if f["id"] == "catalog-clave-unidad-ACT"]
+        self.assertEqual(findings, [])
+
 
 if __name__ == "__main__":
     unittest.main()

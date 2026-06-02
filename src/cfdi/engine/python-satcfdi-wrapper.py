@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import json
 import sys
 import traceback
@@ -101,6 +102,7 @@ def normalize_tax_lines(container, tax_type):
 def normalize_concept(concepto):
     impuestos = concepto.get("Impuestos", {})
     cprod = concepto.get("ClaveProdServ")
+    cunidad = concepto.get("ClaveUnidad")
     return {
         "descripcion": concepto.get("Descripcion", ""),
         "cantidad": decimal_to_number(concepto.get("Cantidad")),
@@ -108,6 +110,8 @@ def normalize_concept(concepto):
         "importe": decimal_to_number(concepto.get("Importe")),
         "claveProdServ": code_or_raw(cprod),
         "claveProdServDescripcion": (getattr(cprod, "description", None) or SENTINEL_INVALIDO) if cprod else None,
+        "claveUnidad": code_or_raw(cunidad),
+        "claveUnidadDescripcion": (getattr(cunidad, "description", None) or SENTINEL_INVALIDO) if cunidad else None,
         "impuestos": (
             normalize_tax_lines(impuestos.get("Traslados"), "Traslado")
             + normalize_tax_lines(impuestos.get("Retenciones"), "Retencion")
@@ -122,6 +126,65 @@ def catalog_desc_or_sentinel(field_value):
         return None
     desc = getattr(field_value, "description", None)
     return desc if desc is not None else SENTINEL_INVALIDO
+
+
+def verify_sello(cfdi):
+    """
+    Verifica la firma del CFDI (sello del emisor) de forma completamente offline.
+    Usa los certificados raíz del SAT incluidos en python-satcfdi (CertsProd.zip).
+    Retorna un dict con status y resultados de cada check individual.
+    """
+    sello = cfdi.get("Sello") or ""
+    certificado = cfdi.get("Certificado") or ""
+    no_cert = cfdi.get("NoCertificado") or ""
+    fecha = cfdi.get("Fecha")
+    rfc_emisor = (cfdi.get("Emisor") or {}).get("Rfc", "")
+
+    if not sello or not certificado:
+        return {"status": "missing", "checks": {}, "error": None}
+
+    try:
+        from datetime import timezone as _tz
+        from satcfdi.models.certificate import Certificate
+        from satcfdi.transform import verify_certificate
+
+        cert = Certificate.load_certificate(base64.b64decode(certificado))
+        cadena = cfdi.cadena_original()
+
+        # verify_certificate requiere datetime timezone-aware; CFDI usa naive → UTC
+        fecha_aware = None
+        if fecha is not None:
+            fecha_aware = fecha if fecha.tzinfo else fecha.replace(tzinfo=_tz.utc)
+
+        try:
+            cert_valido = verify_certificate(cert, at=fecha_aware) if fecha_aware else False
+        except Exception:
+            cert_valido = False
+
+        # CFDI 3.2/3.3 usa SHA-1; CFDI 4.0 usa SHA-256
+        version = code_or_raw(cfdi.get("Version", "4.0")) or "4.0"
+        verify_fn = cert.verify_sha1 if version in ("3.2", "3.3") else cert.verify_sha256
+        sello_valido = verify_fn(
+            data=cadena.encode(),
+            signature=base64.b64decode(sello),
+        )
+        num_cert_cuadra = cert.certificate_number == no_cert
+        rfc_cuadra = cert.rfc == rfc_emisor.strip()
+
+        status = "valid" if (cert_valido and sello_valido and num_cert_cuadra and rfc_cuadra) else "invalid"
+
+        return {
+            "status": status,
+            "checks": {
+                "certificadoSAT": cert_valido,
+                "selloFirma": sello_valido,
+                "numeroCertificado": num_cert_cuadra,
+                "rfcEmisor": rfc_cuadra,
+            },
+            "error": None,
+        }
+    except Exception as e:
+        return {"status": "error", "checks": {}, "error": str(e)}
 
 
 def build_cfdi_payload(cfdi):
@@ -157,6 +220,7 @@ def build_cfdi_payload(cfdi):
         "formaPagoDescripcion": catalog_desc_or_sentinel(fp),
         "moneda": code_or_raw(mon),
         "monedaDescripcion": catalog_desc_or_sentinel(mon),
+        "selloVerificacion": verify_sello(cfdi),
     }
 
 

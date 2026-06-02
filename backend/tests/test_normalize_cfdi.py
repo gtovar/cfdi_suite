@@ -7,6 +7,7 @@ from backend.app.services.analyze_cfdi import (
     _collect_catalog_findings,
     _collect_concept_diffs,
     _collect_math_findings,
+    _collect_sello_findings,
     _collect_tax_audit_group_findings,
     _map_tax_entry,
     _normalize_cfdi,
@@ -234,7 +235,7 @@ class TestCollectCatalogFindings(unittest.TestCase):
             "claveProdServ": "99999999",
             "claveProdServDescripcion": "No existe en el catálogo",
         }])
-        findings = _collect_catalog_findings(source)
+        findings, _ = _collect_catalog_findings(source)
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["severity"], "warning")
         self.assertIn("99999999", findings[0]["title"])
@@ -244,8 +245,90 @@ class TestCollectCatalogFindings(unittest.TestCase):
             "claveProdServ": "84111506",
             "claveProdServDescripcion": "Servicios de tecnología",
         }])
-        findings = _collect_catalog_findings(source)
+        findings, impacted = _collect_catalog_findings(source)
         self.assertEqual(findings, [])
+        self.assertEqual(impacted, [])
+
+    def test_invalid_clave_unidad_creates_warning(self):
+        source = _make_cfdi(conceptos=[{
+            "claveProdServ": "84111506",
+            "claveUnidad": "ZZZZ",
+            "claveUnidadDescripcion": "No existe en el catálogo",
+        }])
+        findings, _ = _collect_catalog_findings(source)
+        ids = [f["id"] for f in findings]
+        self.assertIn("catalog-clave-unidad-ZZZZ", ids)
+        finding = next(f for f in findings if f["id"] == "catalog-clave-unidad-ZZZZ")
+        self.assertEqual(finding["severity"], "warning")
+        self.assertEqual(finding["declared"], "ZZZZ")
+
+    def test_valid_clave_unidad_no_creates_finding(self):
+        source = _make_cfdi(conceptos=[{
+            "claveProdServ": "84111506",
+            "claveUnidad": "ACT",
+            "claveUnidadDescripcion": "Actividad",
+        }])
+        findings, _ = _collect_catalog_findings(source)
+        unidad_findings = [f for f in findings if f["id"].startswith("catalog-clave-unidad-")]
+        self.assertEqual(unidad_findings, [])
+
+    def test_absent_clave_unidad_no_creates_finding(self):
+        """Concepto sin claveUnidad → no debe generar finding."""
+        source = _make_cfdi(conceptos=[{
+            "claveProdServ": "84111506",
+        }])
+        findings, _ = _collect_catalog_findings(source)
+        unidad_findings = [f for f in findings if f["id"].startswith("catalog-clave-unidad-")]
+        self.assertEqual(unidad_findings, [])
+
+    def test_two_concepts_same_invalid_clave_unidad_one_finding(self):
+        source = _make_cfdi(conceptos=[
+            {"claveProdServ": "84111506", "claveUnidad": "ZZZZ", "claveUnidadDescripcion": "No existe en el catálogo"},
+            {"claveProdServ": "84111506", "claveUnidad": "ZZZZ", "claveUnidadDescripcion": "No existe en el catálogo"},
+        ])
+        findings, _ = _collect_catalog_findings(source)
+        unidad_findings = [f for f in findings if f["id"].startswith("catalog-clave-unidad-")]
+        self.assertEqual(len(unidad_findings), 1)
+        self.assertIn("2 concepto(s)", unidad_findings[0]["summary"])
+
+    def test_two_concepts_different_invalid_clave_unidad_two_findings(self):
+        source = _make_cfdi(conceptos=[
+            {"claveProdServ": "84111506", "claveUnidad": "AAAA", "claveUnidadDescripcion": "No existe en el catálogo"},
+            {"claveProdServ": "84111506", "claveUnidad": "BBBB", "claveUnidadDescripcion": "No existe en el catálogo"},
+        ])
+        findings, _ = _collect_catalog_findings(source)
+        unidad_findings = [f for f in findings if f["id"].startswith("catalog-clave-unidad-")]
+        self.assertEqual(len(unidad_findings), 2)
+        ids = {f["id"] for f in unidad_findings}
+        self.assertIn("catalog-clave-unidad-AAAA", ids)
+        self.assertIn("catalog-clave-unidad-BBBB", ids)
+
+    def test_invalid_clave_prod_serv_populates_impacted(self):
+        source = _make_cfdi(conceptos=[{
+            "claveProdServ": "99999999",
+            "claveProdServDescripcion": "No existe en el catálogo",
+        }])
+        _, impacted = _collect_catalog_findings(source)
+        self.assertIn(0, impacted)
+
+    def test_invalid_clave_unidad_populates_impacted(self):
+        source = _make_cfdi(conceptos=[{
+            "claveProdServ": "84111506",
+            "claveUnidad": "ZZZZ",
+            "claveUnidadDescripcion": "No existe en el catálogo",
+        }])
+        _, impacted = _collect_catalog_findings(source)
+        self.assertIn(0, impacted)
+
+    def test_valid_catalogs_no_impacted(self):
+        source = _make_cfdi(conceptos=[{
+            "claveProdServ": "84111506",
+            "claveProdServDescripcion": "TI",
+            "claveUnidad": "ACT",
+            "claveUnidadDescripcion": "Actividad",
+        }])
+        _, impacted = _collect_catalog_findings(source)
+        self.assertEqual(impacted, [])
 
 
 class TestBuildVerdict(unittest.TestCase):
@@ -300,6 +383,77 @@ class TestNormalizeCfdiIntegration(unittest.TestCase):
         self.assertEqual(result["version"], "4.0")
         self.assertIn("supportText", result)
         self.assertIn("taxAuditGroups", result)
+
+
+class TestCollectSelloFindings(unittest.TestCase):
+    def _sv(self, status, checks=None, error=None):
+        return {"selloVerificacion": {"status": status, "checks": checks or {}, "error": error}}
+
+    def test_missing_sello_returns_empty(self):
+        findings = _collect_sello_findings(self._sv("missing"))
+        self.assertEqual(findings, [])
+
+    def test_none_sello_verif_returns_empty(self):
+        findings = _collect_sello_findings({})
+        self.assertEqual(findings, [])
+
+    def test_valid_all_checks_true_returns_empty(self):
+        checks = {"certificadoSAT": True, "selloFirma": True, "numeroCertificado": True, "rfcEmisor": True}
+        findings = _collect_sello_findings(self._sv("valid", checks))
+        self.assertEqual(findings, [])
+
+    def test_error_status_emits_warning_finding(self):
+        findings = _collect_sello_findings(self._sv("error", error="algo salió mal"))
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["id"], "firma-error-verificacion")
+        self.assertEqual(findings[0]["severity"], "warning")
+        self.assertIn("algo salió mal", findings[0]["summary"])
+
+    def test_sello_firma_false_emits_critical(self):
+        checks = {"certificadoSAT": True, "selloFirma": False, "numeroCertificado": True, "rfcEmisor": True}
+        findings = _collect_sello_findings(self._sv("invalid", checks))
+        ids = [f["id"] for f in findings]
+        self.assertIn("firma-sello-invalido", ids)
+        finding = next(f for f in findings if f["id"] == "firma-sello-invalido")
+        self.assertEqual(finding["severity"], "critical")
+
+    def test_certificado_sat_false_sello_valido_emits_warning(self):
+        """Cert no en trust store pero firma válida → probablemente UAT → warning, no critical."""
+        checks = {"certificadoSAT": False, "selloFirma": True, "numeroCertificado": True, "rfcEmisor": True}
+        findings = _collect_sello_findings(self._sv("invalid", checks))
+        ids = [f["id"] for f in findings]
+        self.assertIn("firma-certificado-invalido", ids)
+        finding = next(f for f in findings if f["id"] == "firma-certificado-invalido")
+        self.assertEqual(finding["severity"], "warning")
+
+    def test_certificado_sat_false_sello_invalido_emits_critical(self):
+        """Cert no en trust store Y firma inválida → critical."""
+        checks = {"certificadoSAT": False, "selloFirma": False, "numeroCertificado": True, "rfcEmisor": True}
+        findings = _collect_sello_findings(self._sv("invalid", checks))
+        cert_finding = next(f for f in findings if f["id"] == "firma-certificado-invalido")
+        self.assertEqual(cert_finding["severity"], "critical")
+
+    def test_numero_certificado_false_emits_warning(self):
+        checks = {"certificadoSAT": True, "selloFirma": True, "numeroCertificado": False, "rfcEmisor": True}
+        findings = _collect_sello_findings(self._sv("invalid", checks))
+        ids = [f["id"] for f in findings]
+        self.assertIn("firma-numero-certificado-invalido", ids)
+        finding = next(f for f in findings if f["id"] == "firma-numero-certificado-invalido")
+        self.assertEqual(finding["severity"], "warning")
+
+    def test_rfc_emisor_false_emits_warning(self):
+        checks = {"certificadoSAT": True, "selloFirma": True, "numeroCertificado": True, "rfcEmisor": False}
+        findings = _collect_sello_findings(self._sv("invalid", checks))
+        ids = [f["id"] for f in findings]
+        self.assertIn("firma-rfc-emisor-invalido", ids)
+
+    def test_multiple_checks_false_emits_multiple_findings(self):
+        checks = {"certificadoSAT": False, "selloFirma": False, "numeroCertificado": True, "rfcEmisor": True}
+        findings = _collect_sello_findings(self._sv("invalid", checks))
+        ids = {f["id"] for f in findings}
+        self.assertIn("firma-sello-invalido", ids)
+        self.assertIn("firma-certificado-invalido", ids)
+        self.assertEqual(len(findings), 2)
 
 
 if __name__ == "__main__":

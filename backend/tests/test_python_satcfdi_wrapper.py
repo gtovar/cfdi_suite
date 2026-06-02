@@ -107,11 +107,12 @@ class TestNormalizeConceptClaveProdServ(unittest.TestCase):
 
         result = self._run(None)
         source = {"conceptos": [result]}
-        findings = _collect_catalog_findings(source)
+        findings, impacted = _collect_catalog_findings(source)
 
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["severity"], "warning")
         self.assertIn("catalog-clave-prod-serv-", findings[0]["id"])
+        self.assertIn(0, impacted)
 
 
 class TestCatalogDescOrSentinel(unittest.TestCase):
@@ -217,10 +218,202 @@ class TestBuildCfdiPayloadHeaderCatalogs(unittest.TestCase):
         cfdi = self._make_cfdi(uso_cfdi=self._make_code("ZZZ", None))
         payload = build_cfdi_payload(cfdi)
         source = {**payload, "conceptos": []}
-        findings = _collect_catalog_findings(source)
+        findings, _ = _collect_catalog_findings(source)
 
         ids = [f["id"] for f in findings]
         self.assertIn("catalog-uso-cfdi-ZZZ", ids)
         finding = next(f for f in findings if f["id"] == "catalog-uso-cfdi-ZZZ")
         self.assertEqual(finding["severity"], "warning")
         self.assertEqual(finding["declared"], "ZZZ")
+
+
+class TestNormalizeConceptClaveUnidad(unittest.TestCase):
+    """Verifica que normalize_concept maneja ClaveUnidad con el mismo patrón sentinel que ClaveProdServ."""
+
+    def _run(self, description):
+        cunidad = MagicMock()
+        cunidad.description = description
+        concepto = {
+            "ClaveProdServ": None,
+            "ClaveUnidad": cunidad,
+            "Descripcion": "Servicio prueba",
+            "Cantidad": "1",
+            "ValorUnitario": "100.00",
+            "Importe": "100.00",
+            "ObjetoImp": None,
+            "Impuestos": {},
+        }
+        return normalize_concept(concepto)
+
+    def test_clave_unidad_valida_usa_descripcion_real(self):
+        result = self._run("Actividad")
+        self.assertEqual(result["claveUnidadDescripcion"], "Actividad")
+
+    def test_clave_unidad_invalida_emite_sentinel(self):
+        result = self._run(None)
+        self.assertEqual(result["claveUnidadDescripcion"], SENTINEL_INVALIDO)
+
+    def test_clave_unidad_ausente_devuelve_none(self):
+        concepto = {
+            "ClaveProdServ": None,
+            "ClaveUnidad": None,
+            "Descripcion": "Sin unidad",
+            "Cantidad": "1",
+            "ValorUnitario": "0",
+            "Importe": "0",
+            "ObjetoImp": None,
+            "Impuestos": {},
+        }
+        result = normalize_concept(concepto)
+        self.assertIsNone(result["claveUnidadDescripcion"])
+
+    def test_sentinel_clave_unidad_activa_catalog_finding(self):
+        """Integración: sentinel en claveUnidad → finding generado por _collect_catalog_findings."""
+        from backend.app.services.analyze_cfdi import _collect_catalog_findings
+
+        result = self._run(None)
+        source = {"conceptos": [result]}
+        findings, impacted = _collect_catalog_findings(source)
+
+        ids = [f["id"] for f in findings]
+        unidad_findings = [fid for fid in ids if fid.startswith("catalog-clave-unidad-")]
+        self.assertEqual(len(unidad_findings), 1)
+        finding = next(f for f in findings if f["id"].startswith("catalog-clave-unidad-"))
+        self.assertEqual(finding["severity"], "warning")
+        self.assertIn(0, impacted)
+
+
+_FIXTURE_SELLO_REAL = Path(__file__).parents[2] / "backend" / "test-fixtures" / "pago_h_e951128469_ingreso_ieps_exento.xml"
+
+
+class TestVerifySelloRealFixture(unittest.TestCase):
+    """Integración real con satcfdi: verifica que verify_sello funciona con un CFDI con sello real."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not _FIXTURE_SELLO_REAL.exists():
+            raise unittest.SkipTest(f"Fixture no encontrado: {_FIXTURE_SELLO_REAL}")
+        cls.xml = _FIXTURE_SELLO_REAL.read_text(encoding="utf-8")
+        result = _wrapper.parse_payload(cls.xml)
+        if not result.get("satcfdiAvailable"):
+            raise unittest.SkipTest("python-satcfdi no disponible")
+        cls.parse_result = result
+        cls.sv = result["cfdi"]["selloVerificacion"]
+
+    def test_sello_verif_presente_en_payload(self):
+        self.assertIn("selloVerificacion", self.parse_result["cfdi"])
+
+    def test_status_no_es_missing(self):
+        """El fixture tiene sello y certificado reales → no debe ser 'missing'."""
+        self.assertNotEqual(self.sv["status"], "missing")
+
+    def test_status_no_es_error(self):
+        """No debe haber errores de procesamiento (solo valid/invalid esperado)."""
+        self.assertNotEqual(self.sv["status"], "error", msg=self.sv.get("error"))
+
+    def test_sello_firma_es_valida(self):
+        """La firma criptográfica del CFDI debe ser válida (fixture UAT con sello correcto)."""
+        self.assertTrue(self.sv["checks"]["selloFirma"])
+
+    def test_numero_certificado_cuadra(self):
+        self.assertTrue(self.sv["checks"]["numeroCertificado"])
+
+    def test_rfc_emisor_cuadra(self):
+        self.assertTrue(self.sv["checks"]["rfcEmisor"])
+
+    def test_cfdi_valido_no_produce_findings_firma_sello(self):
+        """Un CFDI con sello criptográficamente válido no debe emitir el finding firma-sello-invalido."""
+        from backend.app.services.analyze_cfdi import _normalize_cfdi
+        normalized = _normalize_cfdi(self.parse_result["cfdi"])
+        self.assertIsNotNone(normalized)
+        firma_sello_findings = [f for f in normalized["findings"] if f["id"] == "firma-sello-invalido"]
+        self.assertEqual(firma_sello_findings, [])
+
+
+class TestVerifySelloMissing(unittest.TestCase):
+    """Verifica comportamiento cuando Sello/Certificado están vacíos."""
+
+    def _make_minimal_cfdi(self, sello="", certificado=""):
+        from unittest.mock import MagicMock
+        cfdi = {}
+        cfdi["Sello"] = sello
+        cfdi["Certificado"] = certificado
+        cfdi["NoCertificado"] = "30001000000400002460"
+        cfdi["Fecha"] = None
+        cfdi["Emisor"] = {"Rfc": "TEST010101AAA"}
+        return cfdi
+
+    def test_empty_sello_returns_missing(self):
+        cfdi = self._make_minimal_cfdi(sello="", certificado="")
+        result = _wrapper.verify_sello(cfdi)
+        self.assertEqual(result["status"], "missing")
+        self.assertEqual(result["checks"], {})
+        self.assertIsNone(result["error"])
+
+
+class TestVerifySelloVersionAlgorithm(unittest.TestCase):
+    """Verifica que verify_sello selecciona SHA-1 para CFDI 3.x y SHA-256 para CFDI 4.0."""
+
+    def _make_cfdi_stub(self, version, sello, certificado):
+        """Stub mínimo que imita la interfaz del objeto CFDI de satcfdi."""
+        from unittest.mock import MagicMock, patch
+        cfdi = MagicMock()
+        cfdi.get = lambda k, default=None: {
+            "Version": version,
+            "Sello": sello,
+            "Certificado": certificado,
+            "NoCertificado": "00000000000000000000",
+            "Fecha": None,
+            "Emisor": {"Rfc": "TEST010101AAA"},
+        }.get(k, default)
+        cfdi.cadena_original = MagicMock(return_value="||cadena||")
+        return cfdi
+
+    def test_version_40_usa_sha256(self):
+        """Para CFDI 4.0 se debe llamar a verify_sha256, no a verify_sha1."""
+        from unittest.mock import MagicMock, patch
+        import base64
+        cfdi = self._make_cfdi_stub("4.0", "ZmFrZXNlbGxv", "ZmFrZWNlcnQ=")
+        with patch("satcfdi.models.certificate.Certificate.load_certificate") as mock_load, \
+             patch("satcfdi.transform.verify_certificate", return_value=False):
+            mock_cert = MagicMock()
+            mock_cert.certificate_number = "00000000000000000000"
+            mock_cert.rfc = "TEST010101AAA"
+            mock_cert.verify_sha256 = MagicMock(return_value=True)
+            mock_cert.verify_sha1 = MagicMock(return_value=True)
+            mock_load.return_value = mock_cert
+            _wrapper.verify_sello(cfdi)
+            mock_cert.verify_sha256.assert_called_once()
+            mock_cert.verify_sha1.assert_not_called()
+
+    def test_version_33_usa_sha1(self):
+        """Para CFDI 3.3 se debe llamar a verify_sha1, no a verify_sha256."""
+        from unittest.mock import MagicMock, patch
+        cfdi = self._make_cfdi_stub("3.3", "ZmFrZXNlbGxv", "ZmFrZWNlcnQ=")
+        with patch("satcfdi.models.certificate.Certificate.load_certificate") as mock_load, \
+             patch("satcfdi.transform.verify_certificate", return_value=False):
+            mock_cert = MagicMock()
+            mock_cert.certificate_number = "00000000000000000000"
+            mock_cert.rfc = "TEST010101AAA"
+            mock_cert.verify_sha256 = MagicMock(return_value=True)
+            mock_cert.verify_sha1 = MagicMock(return_value=True)
+            mock_load.return_value = mock_cert
+            _wrapper.verify_sello(cfdi)
+            mock_cert.verify_sha1.assert_called_once()
+            mock_cert.verify_sha256.assert_not_called()
+
+    def test_version_32_usa_sha1(self):
+        """Para CFDI 3.2 se debe llamar a verify_sha1."""
+        from unittest.mock import MagicMock, patch
+        cfdi = self._make_cfdi_stub("3.2", "ZmFrZXNlbGxv", "ZmFrZWNlcnQ=")
+        with patch("satcfdi.models.certificate.Certificate.load_certificate") as mock_load, \
+             patch("satcfdi.transform.verify_certificate", return_value=False):
+            mock_cert = MagicMock()
+            mock_cert.certificate_number = "00000000000000000000"
+            mock_cert.rfc = "TEST010101AAA"
+            mock_cert.verify_sha256 = MagicMock(return_value=True)
+            mock_cert.verify_sha1 = MagicMock(return_value=True)
+            mock_load.return_value = mock_cert
+            _wrapper.verify_sello(cfdi)
+            mock_cert.verify_sha1.assert_called_once()
+            mock_cert.verify_sha256.assert_not_called()
