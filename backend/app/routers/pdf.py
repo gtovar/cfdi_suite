@@ -17,8 +17,9 @@ async def generate_pdf(file: UploadFile) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"No se pudo generar el PDF: {exc}") from exc
 
-    uuid = cfdi.get("Complemento", {}).get("TimbreFiscalDigital", {}).get("UUID", "cfdi")
-    filename = f"cfdi-{str(uuid)[:8]}.pdf"
+    tfd = (cfdi.get("Complemento") or {}).get("TimbreFiscalDigital") or {}
+    uuid_prefix = str(tfd.get("UUID", "")).replace("-", "")[:8]
+    filename = f"cfdi-{uuid_prefix}.pdf" if uuid_prefix else "cfdi.pdf"
     return Response(
         content=pdf,
         media_type="application/pdf",
