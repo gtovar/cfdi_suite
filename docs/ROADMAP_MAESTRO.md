@@ -108,17 +108,30 @@
 
 ---
 
-### 🟡 Frente C — XML → PDF (exploración primero)
-**Qué es:** satcfdi tiene `py2html` que renderiza CFDI como tabla HTML semántica. Base potencial para flujo XML → PDF con layouts personalizables.
+### ✅ Frente C — XML → PDF (completado 2026-06-01, optimización pendiente)
 
-**Esto NO es extensión del inspector — es un segundo flujo** dentro de la app.
+**Qué se implementó:**
+- `py2html` descartado — es conversor genérico dict→HTML, no específico de CFDI
+- Motor: `satcfdi.render.html_str()` → Playwright/Chromium (swap de weasyprint que colgaba)
+- Arquitectura: SSE jobs — `POST /api/cfdi/pdf/start` → `GET /progress` → `GET /download`
+- Chunking paralelo: CHUNK_SIZE=1500, MAX_PARALLEL_PAGES=4, merge con pypdf
+- Chunks 2..N: solo tabla de conceptos (sin header repetido) via lxml post-processing
+- Feedback SSE: "Generando parte 3 de 11…" en el header del inspector
 
-**Experimento mínimo antes de planear:**
-1. Llamar `satcfdi.models.py2html.dumps()` con un CFDI real
-2. Ver si el HTML contiene emisor, receptor, UUID, conceptos y totales de forma legible
-3. Decidir: ¿es base viable para PDF con CSS encima, o necesitamos renderer propio?
+**Tiempos medidos (XML MINISO 6.6MB, 15,404 conceptos):**
+| Fase | Tiempo |
+|---|---|
+| Parse satcfdi | ~5s |
+| HTML generation | ~4s |
+| Playwright chunks paralelos | ~11-15s |
+| **Total** | **~20-25s** |
 
-**Criterio go/no-go:** HTML generado es semántico y legible sin post-procesamiento.
+**Pendiente de optimización:** 20-25s sigue siendo alto. Próxima sesión debe perfilar si el cuello está en `page.set_content()` o `page.pdf()`, y explorar browser singleton precalentado + más workers paralelos. Ver prompt de reentrada al final.
+
+**Archivos clave:**
+- `backend/app/routers/pdf.py` — lógica completa de jobs, chunking, SSE
+- `src/components/InspectorHeader.tsx` — panel de fases con progress_detail
+- `src/App.tsx` — cliente SSE con EventSource
 
 ---
 
@@ -163,6 +176,7 @@
 | 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | `38989e8` |
 | 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | `1148e08` |
 | 2026-06-01 | claveUnidad + sello offline: catálogo en conceptos, verificación criptográfica offline, handlers frontend, 29 tests nuevos | `b36576b` |
+| 2026-06-01 | Frente C: PDF con SSE progress, Playwright+chunking paralelo, lxml header-fix. ~20-25s para 6.6MB | `696d9af`→`a319e40` |
 
 ---
 
@@ -173,6 +187,25 @@ Leer en este orden:
 2. `docs/roadmap/python-backend-platform/STATUS.md` — estado del backend
 3. `backend/app/contracts.py` — contrato HTTP v1
 4. `src/cfdi/engine/python-satcfdi-wrapper.py` — estado del wrapper Python
+
+## Prompt de reentrada — optimización PDF generation
+
+```
+Contexto: cfdi_inspector en /Users/gil/Documents/cfdi_inspector
+Leer ROADMAP_MAESTRO antes de continuar.
+
+El Frente C (XML→PDF) funciona pero ~20-25s para 6.6MB es aún lento.
+Motor actual: Playwright/Chromium con chunking paralelo (CHUNK_SIZE=1500,
+MAX_PARALLEL_PAGES=4). Código: backend/app/routers/pdf.py.
+
+Benchmark disponible: /Users/gil/Downloads/MIN420260228T0257/MIN420260228T0029.xml
+
+Investigar y planear con decision-expander antes de implementar:
+1. ¿El cuello está en set_content() o en page.pdf()? Medir con timestamps.
+2. ¿Browser singleton precalentado reduce overhead por job?
+3. ¿Más workers (6-8) mejoran sin degradar memoria?
+4. ¿Reducir CSS/HTML de chunks 2..N antes de renderear?
+```
 
 Si se va a tocar findings: leer también `src/cfdi/application/cfdiAnalysisAdapter.ts` y `src/app/hooks/useFindingContexts.ts`.
 
