@@ -185,7 +185,8 @@
 | 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | `1148e08` |
 | 2026-06-01 | claveUnidad + sello offline: catálogo en conceptos, verificación criptográfica offline, handlers frontend, 29 tests nuevos | `b36576b` |
 | 2026-06-01 | Frente C: PDF con SSE progress, Playwright+chunking paralelo, lxml header-fix. ~20-25s para 6.6MB | `696d9af`→`a319e40` |
-| 2026-06-02 | Frente C optimización: benchmark por fase, pipeline html→render, endpoint /status. 18.6s→16.2s | pendiente commit |
+| 2026-06-02 | Frente C optimización: benchmark por fase, pipeline html→render, endpoint /status. 18.6s→16.2s | `6cd2b8c` |
+| 2026-06-02 | Engine B ReportLab: dual-engine PDF, layout personalizable, QR SAT. 7.2s para 15k conceptos | `138c761` |
 
 ---
 
