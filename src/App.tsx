@@ -188,13 +188,14 @@ export default function App() {
     setModifiedXml(null);
   }
 
-  async function handleDownloadPdf() {
+  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' = 'playwright') {
     if (!sourceFile) return;
     setPdfPhase('parsing');
     setPdfError(undefined);
     try {
       const form = new FormData();
       form.append('file', sourceFile);
+      form.append('engine', engine);
       const startRes = await fetch('/api/cfdi/pdf/start', { method: 'POST', body: form });
       if (!startRes.ok) throw new Error(`HTTP ${startRes.status}`);
       const { jobId } = await startRes.json();
@@ -344,6 +345,7 @@ export default function App() {
                 modifiedXml={modifiedXml}
                 onDownloadModified={handleDownloadModified}
                 onDownloadPdf={sourceFile && pdfPhase === 'idle' ? handleDownloadPdf : undefined}
+                onDownloadPdfReportlab={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('reportlab') : undefined}
                 pdfPhase={pdfPhase}
                 pdfProgressDetail={pdfProgressDetail}
                 pdfError={pdfError}

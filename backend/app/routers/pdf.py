@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from satcfdi.cfdi import CFDI
 from satcfdi.render import html_str
@@ -77,7 +77,7 @@ def _uuid_prefix(cfdi: CFDI) -> str:
     return str(tfd.get("UUID", "")).replace("-", "")[:8]
 
 
-async def _process(job_id: str, xml: bytes) -> None:
+async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) -> None:
     from playwright.async_api import async_playwright
     from pypdf import PdfReader, PdfWriter
 
@@ -85,6 +85,15 @@ async def _process(job_id: str, xml: bytes) -> None:
     try:
         job.status = "parsing"
         cfdi = await asyncio.to_thread(CFDI.from_string, xml)
+
+        if engine == "reportlab":
+            from app.services.pdf_reportlab import generate_pdf
+            job.status = "generating_pdf"
+            job.pdf = await asyncio.to_thread(generate_pdf, cfdi, template)
+            prefix = _uuid_prefix(cfdi)
+            job.filename = f"cfdi-{prefix}.pdf" if prefix else "cfdi.pdf"
+            job.status = "done"
+            return
 
         chunks = _split_cfdi(cfdi)
         n = len(chunks)
@@ -159,11 +168,21 @@ async def _process(job_id: str, xml: bytes) -> None:
 
 
 @router.post("/api/cfdi/pdf/start")
-async def start_pdf_job(file: UploadFile) -> dict:
+async def start_pdf_job(
+    file: UploadFile,
+    engine: str = Form("playwright"),
+    template: str | None = Form(None),
+) -> dict:
     xml = await file.read()
+    template_dict: dict | None = None
+    if template:
+        try:
+            template_dict = json.loads(template)
+        except Exception:
+            pass
     job_id = str(uuid4())
     _jobs[job_id] = _Job()
-    asyncio.create_task(_process(job_id, xml))
+    asyncio.create_task(_process(job_id, xml, engine, template_dict))
     return {"jobId": job_id}
 
 

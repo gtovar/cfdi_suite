@@ -43,6 +43,7 @@ interface InspectorHeaderProps {
   modifiedXml?: string | null;
   onDownloadModified?: () => void;
   onDownloadPdf?: () => void;
+  onDownloadPdfReportlab?: () => void;
   pdfPhase?: 'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error';
   pdfProgressDetail?: string;
   pdfError?: string;
@@ -95,6 +96,7 @@ export default function InspectorHeader({
   modifiedXml,
   onDownloadModified,
   onDownloadPdf,
+  onDownloadPdfReportlab,
   pdfPhase = 'idle',
   pdfProgressDetail,
   pdfError,
@@ -251,14 +253,25 @@ export default function InspectorHeader({
         )}
 
         {onDownloadPdf && pdfPhase === 'idle' && (
-          <button
-            onClick={onDownloadPdf}
-            title="Descarga este CFDI como PDF"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-50"
-          >
-            <Download size={13} />
-            PDF
-          </button>
+          <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+            <button
+              onClick={onDownloadPdf}
+              title="PDF oficial — layout SAT exacto"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors duration-200 hover:bg-gray-50 border-r border-gray-200"
+            >
+              <Download size={13} />
+              PDF
+            </button>
+            {onDownloadPdfReportlab && (
+              <button
+                onClick={onDownloadPdfReportlab}
+                title="PDF personalizado — diseño propio, generación rápida"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors duration-200 hover:bg-blue-50"
+              >
+                ⚡ PDF Pro
+              </button>
+            )}
+          </div>
         )}
 
         {pdfPhase !== 'idle' && (
