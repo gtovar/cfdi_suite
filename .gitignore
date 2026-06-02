@@ -21,5 +21,11 @@ __pycache__/
 
 # Artefactos temporales de desarrollo
 .coverage
-verify-*.mjs
+verify*.mjs
 verify_consultas_sat.mjs
+
+# Proyectos y directorios ajenos al repo
+.antigravitycli/
+Users/
+amigo/
+tailux/
