@@ -33,13 +33,11 @@
 | Findings sidebar con `differenceLabel` para descuadres | Frontend | ✅ |
 
 ### Lo que NO existe todavía
-- Validación de catálogos completos (claveUnidad — ✅ completado 2026-06-01)
-- Verificación criptográfica de firma digital (sello SAT/PAC)
 - Validación XSD/estructura XML contra esquemas oficiales
-- Findings desde el backend Python (siempre llegan vacíos)
 - XML → PDF / render del comprobante
 - Contabilidad electrónica / DIOT
 - Soporte completo de complementos (nómina, carta porte, comercio exterior)
+- Verificación sello del PAC/SAT (TimbreFiscalDigital) — requiere conexión SAT; fuera de alcance offline
 
 ---
 
@@ -76,7 +74,7 @@
 
 **Alcance:** Valida pertenencia al catálogo (el código existe), NO validez contextual (p. ej. usoCFDI válido para el régimen del receptor). Valida solo a nivel header; `FormaDePagoP` del complemento Pagos queda pendiente.
 
-**Tests:** 99 tests pasando (12 por claveUnidad + 4 gaps decision-expander: impactedConceptIndexes, cobertura de dos claves distintas).
+**Tests:** 120 pasando.
 
 ---
 **Por qué primero:** El wrapper Python ya extrae `claveProdServ`, `usoCFDI`, `metodoPago`, `formaPago`, `moneda` pero no valida ninguno. satcfdi tiene catálogos completos. El canal de findings ya existe en el frontend.
@@ -106,7 +104,7 @@
 - `backend/app/services/analyze_cfdi.py` — `_collect_sello_findings(source)` + llamada en `_normalize_cfdi`
 - `src/app/hooks/useFindingContexts.ts` — handler para findings `firma-*`
 
-**Tests:** 116 pasando (17 nuevos: 8 unitarios + 7 integración con fixture real).
+**Tests:** 120 pasando al cierre (17 nuevos de sello + 12 de claveUnidad).
 
 ---
 
@@ -164,7 +162,7 @@
 | 2026-06-01 | Análisis satcfdi vs nuestra app; definir roadmap maestro; priorizar catálogos como Frente A | este doc |
 | 2026-06-01 | Frente A: fix wrapper Python para emitir sentinel "No existe en el catálogo" en claveProdServ inválida | `38989e8` |
 | 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | `1148e08` |
-| 2026-06-01 | claveUnidad: sentinel pattern extendido a concepto.ClaveUnidad; handler frontend; 12 tests nuevos | pendiente commit |
+| 2026-06-01 | claveUnidad + sello offline: catálogo en conceptos, verificación criptográfica offline, handlers frontend, 29 tests nuevos | `b36576b` |
 
 ---
 
