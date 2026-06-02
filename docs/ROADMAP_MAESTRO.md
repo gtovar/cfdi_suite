@@ -5,7 +5,7 @@
 
 ---
 
-## Estado actual — 2026-06-01
+## Estado actual — 2026-06-02
 
 ### Stack
 - **Frontend:** React + TypeScript + Vite + TanStack Table + Tailwind (Tailux)
@@ -31,13 +31,15 @@
 | Consulta estado SAT (vigente/cancelado) | Frontend → API SAT | ✅ |
 | XmlNodeViewer (árbol de nodos con edición sugerida) | Frontend | ✅ |
 | Findings sidebar con `differenceLabel` para descuadres | Frontend | ✅ |
+| XML → PDF Engine A (layout SAT exacto via Playwright) | `backend/app/routers/pdf.py` | ✅ ~16s para 15k conceptos |
+| XML → PDF Engine B (layout personalizable via ReportLab) | `backend/app/services/pdf_reportlab.py` | ✅ ~7s para 15k conceptos, <1s normal |
 
 ### Lo que NO existe todavía
 - Validación XSD/estructura XML contra esquemas oficiales
-- XML → PDF / render del comprobante
 - Contabilidad electrónica / DIOT
 - Soporte completo de complementos (nómina, carta porte, comercio exterior)
 - Verificación sello del PAC/SAT (TimbreFiscalDigital) — requiere conexión SAT; fuera de alcance offline
+- PDF Engine B: builder visual de templates (V2 — logo, zonas drag-and-drop, campos configurables por empresa)
 
 ---
 
@@ -108,38 +110,47 @@
 
 ---
 
-### ✅ Frente C — XML → PDF (completado y optimizado 2026-06-01)
+### ✅ Frente C — XML → PDF dual-engine (completado 2026-06-02)
 
-**Qué se implementó:**
-- `py2html` descartado — es conversor genérico dict→HTML, no específico de CFDI
-- Motor: `satcfdi.render.html_str()` → Playwright/Chromium (swap de weasyprint que colgaba)
-- Arquitectura: SSE jobs — `POST /api/cfdi/pdf/start` → `GET /progress` → `GET /download`
-- Chunking: CHUNK_SIZE=1500, MAX_PARALLEL_PAGES=4, merge con pypdf
-- Chunks 2..N: solo tabla de conceptos (sin header repetido) via lxml post-processing
-- Feedback SSE: "Generando parte 3 de 11…" en el header del inspector
-- Pipeline html_str + render: despacha cada chunk al browser apenas su HTML está listo
+**Arquitectura dual-engine:**
+```
+POST /api/cfdi/pdf/start
+  engine = "playwright"   → Engine A: layout SAT exacto (lento, fidelidad máxima)
+  engine = "reportlab"    → Engine B: layout personalizable (rápido, feature estrella)
+  template = <JSON>       → config de Engine B: primary_color, logo_url, show_columns, footer_note
+```
+UI: botón partido **"PDF | ⚡ PDF Pro"** en `InspectorHeader`.
 
-**Tiempos medidos (XML MINISO 6.6MB, 15,404 conceptos — benchmark definitivo):**
-| Fase | Tiempo |
-|---|---|
-| Parse satcfdi | ~4s |
-| html_str (11 chunks, secuencial) | ~2.5s |
-| browser launch (Playwright) | ~0.2s |
-| page.pdf por chunk (1500 conceptos) | ~2.7s promedio |
-| **Total con pipeline** | **~16s** |
+**Engine A — Playwright (backup / PDF oficial):**
+- `satcfdi.render.html_str()` → Playwright/Chromium con pipeline html→render
+- CHUNK_SIZE=1500, MAX_PARALLEL_PAGES=4, merge con pypdf
+- **~16s** para 15k conceptos. Límite real del approach Playwright+Chromium.
+- Hallazgo clave: page.pdf() es el cuello (73%), no set_content(). Más workers empeoran (contención CPU).
 
-**Hallazgos de optimización (sesión 2026-06-01):**
-- `page.pdf()` domina: 73% del tiempo de Playwright. No es `set_content()` ni `new_page()`.
-- Aumentar MAX_PARALLEL_PAGES (6, 8) no ayuda: Chromium satura la CPU. page.pdf escala de 2.7s → 4s → 6s con 4/6/8 workers simultáneos. El beneficio de menos rondas se cancela con la contención.
-- Browser singleton: launch tarda 0.2s → no vale la complejidad.
-- html_str paralelo (asyncio.gather): falla — lxml no es thread-safe.
-- **Pipeline**: despachar render_one() apenas cada html esté listo (en vez de esperar todo el html) ahorró 2.4s reales (18.6s → 16.2s).
-- Límite real: ~16s para 15k conceptos con Playwright en este hardware. <10s requeriría un motor PDF diferente.
+**Engine B — ReportLab (feature estrella):**
+- Genera PDF directamente desde el objeto CFDI, sin HTML ni browser
+- Layout: header (logo+color), emisor/receptor, conceptos paginados, impuestos, totales, QR SAT verificable
+- Tablas pre-chunked (55 filas/chunk) para evitar paginación interna lenta de ReportLab
+- **~7s** para 15k conceptos, **<1s** para CFDIs normales (<500 conceptos)
+- Configurable: `primary_color` (hex), `logo_url` (URL o base64), `show_columns`, `footer_note`
+
+**Benchmarks definitivos (MINISO 6.6MB / 15,404 conceptos):**
+| Motor | Tiempo total | Notas |
+|---|---|---|
+| Playwright original | ~20-25s | Sin pipeline |
+| Playwright + pipeline | ~16s | Commit `6cd2b8c` |
+| **ReportLab** | **~7s** | Sin chunking, sin browser |
+
+**Próximo paso natural — Engine B V2:**
+- Builder visual de templates: el usuario configura logo, color, qué campos mostrar, qué columnas en conceptos
+- Guardar templates por empresa (requiere auth/multi-tenant)
+- Posible: exportar template como JSON que el usuario puede compartir
 
 **Archivos clave:**
-- `backend/app/routers/pdf.py` — jobs, pipeline, chunking, SSE, endpoint `/status`
-- `src/components/InspectorHeader.tsx` — panel de fases con progress_detail
-- `src/App.tsx` — cliente SSE con EventSource
+- `backend/app/routers/pdf.py` — router dual-engine, SSE jobs, endpoint `/status`
+- `backend/app/services/pdf_reportlab.py` — motor ReportLab completo
+- `src/components/InspectorHeader.tsx` — botón partido PDF | ⚡ PDF Pro
+- `src/App.tsx` — `handleDownloadPdf(engine)` con parámetro
 
 ---
 
@@ -165,6 +176,9 @@
 | 2026-04-27 | Sesión C: fallback local frontend removido | Commit `7292a44` |
 | 2026-06-01 | `FinancialSummaryCard` eliminado; validación matemática solo via findings | Commit `7463296` — duplicación arquitectónica resuelta |
 | 2026-06-01 | Catálogos completos: delegar a satcfdi/backend, no reimplementar en TypeScript | Decisión de esta sesión — ver `docs/ROADMAP_MAESTRO.md` |
+| 2026-06-02 | Playwright es herramienta de testing, no motor de producción PDF — no escala con workers | Benchmark exhaustivo; migrar features a Engine B (ReportLab) |
+| 2026-06-02 | Dual-engine: Playwright para fidelidad SAT, ReportLab para feature estrella personalizable | ReportLab genera desde datos, sin HTML, sin browser; 2.3× más rápido |
+| 2026-06-02 | Engine B V2 = builder visual de templates, no HTML libre — modelo de zonas estructuradas | HTML libre regresa a tiempos Playwright; zonas estructuradas mantienen velocidad |
 
 ---
 
@@ -198,6 +212,7 @@ Leer en este orden:
 3. `backend/app/contracts.py` — contrato HTTP v1
 4. `src/cfdi/engine/python-satcfdi-wrapper.py` — estado del wrapper Python
 
+Si se va a tocar PDF Engine B: leer `backend/app/services/pdf_reportlab.py` y `backend/app/routers/pdf.py`.
 Si se va a tocar findings: leer también `src/cfdi/application/cfdiAnalysisAdapter.ts` y `src/app/hooks/useFindingContexts.ts`.
 
 ---
