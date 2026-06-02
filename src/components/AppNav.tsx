@@ -1,8 +1,8 @@
 import clsx from 'clsx';
-import { Building2, FileSearch2, PanelLeftClose, PanelLeftOpen, Printer, Search, XCircle } from 'lucide-react';
+import { Building2, FileSearch2, Palette, PanelLeftClose, PanelLeftOpen, Printer, Search, XCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-export type AppView = 'inspector' | 'consultas-sat' | 'reprint' | 'cancelaciones' | 'emisores';
+export type AppView = 'inspector' | 'consultas-sat' | 'reprint' | 'cancelaciones' | 'emisores' | 'pdf-templates';
 
 interface NavItem {
   id: AppView;
@@ -32,7 +32,10 @@ const NAVIGATION: NavSection[] = [
   },
   {
     label: 'Configuración',
-    items: [{ id: 'emisores', label: 'Emisores', hint: 'Configura los RFCs y e.Firmas de tus empresas', Icon: Building2 }],
+    items: [
+      { id: 'emisores', label: 'Emisores', hint: 'Configura los RFCs y e.Firmas de tus empresas', Icon: Building2 },
+      { id: 'pdf-templates', label: 'Templates PDF', hint: 'Diseña el layout de tus PDF Pro', Icon: Palette },
+    ],
   },
 ];
 

@@ -14,6 +14,7 @@ from .observability import record_analyze_cfdi_error
 from .routers.emisores import router as emisores_router
 from .routers.pdf import router as pdf_router
 from .routers.rfc_validation import fiel_router
+from .routers.templates import router as templates_router
 from .routers.rfc_validation import router as rfc_router
 from .routers.sat_enquiry import router as sat_router
 from .services.analyze_cfdi import run_analyze_cfdi
@@ -33,6 +34,7 @@ app.add_middleware(
 
 app.include_router(emisores_router)
 app.include_router(pdf_router)
+app.include_router(templates_router)
 app.include_router(sat_router)
 app.include_router(rfc_router)
 app.include_router(fiel_router)

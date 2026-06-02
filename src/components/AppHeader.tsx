@@ -8,6 +8,7 @@ const BREADCRUMBS: Record<AppView, { section: string; label: string }> = {
   reprint: { section: 'Operaciones', label: 'Reprint' },
   cancelaciones: { section: 'Operaciones', label: 'Cancelaciones' },
   emisores: { section: 'Configuración', label: 'Emisores' },
+  'pdf-templates': { section: 'Configuración', label: 'Templates PDF' },
 };
 
 interface AppHeaderProps {

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import io
 import json
+import time
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 from uuid import uuid4
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import Response
 from satcfdi.cfdi import CFDI
 from satcfdi.render import html_str
@@ -19,6 +21,22 @@ router = APIRouter()
 CHUNK_SIZE = 1500
 MAX_PARALLEL_PAGES = 4
 _TIMEOUT_SECONDS = 60
+_MAX_UPLOAD = 50 * 1024 * 1024  # 50 MB
+
+# Cache de CFDIs parseados para el endpoint de preview (evita re-parsear en cada cambio de template)
+_cfdi_cache: dict[str, tuple[CFDI, float]] = {}
+_CACHE_TTL = 300  # 5 minutos
+
+
+async def _get_cfdi_cached(xml: bytes) -> CFDI:
+    key = hashlib.md5(xml, usedforsecurity=False).hexdigest()
+    if key in _cfdi_cache:
+        cfdi, ts = _cfdi_cache[key]
+        if time.monotonic() - ts < _CACHE_TTL:
+            return cfdi
+    cfdi = await asyncio.to_thread(CFDI.from_string, xml)
+    _cfdi_cache[key] = (cfdi, time.monotonic())
+    return cfdi
 
 
 @dataclass
@@ -167,17 +185,40 @@ async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) 
         job.error = str(exc)
 
 
-@router.post("/api/cfdi/pdf/start")
-async def start_pdf_job(
-    file: UploadFile,
-    engine: str = Form("playwright"),
-    template: str | None = Form(None),
-) -> dict:
+@router.post("/api/cfdi/pdf/preview")
+async def preview_pdf(request: Request) -> Response:
+    """Generate a fast preview PDF using cached CFDI parse. Used by the template builder."""
+    from app.services.pdf_reportlab import generate_preview
+    form = await request.form(max_part_size=_MAX_UPLOAD)
+    file = form["file"]
     xml = await file.read()
     template_dict: dict | None = None
-    if template:
+    raw_template = form.get("template")
+    if raw_template:
         try:
-            template_dict = json.loads(template)
+            template_dict = json.loads(raw_template)
+        except Exception:
+            pass
+    cfdi = await _get_cfdi_cached(xml)
+    pdf_bytes = await asyncio.to_thread(generate_preview, cfdi, template_dict)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=preview.pdf"},
+    )
+
+
+@router.post("/api/cfdi/pdf/start")
+async def start_pdf_job(request: Request) -> dict:
+    form = await request.form(max_part_size=_MAX_UPLOAD)
+    file = form["file"]
+    xml = await file.read()
+    engine = form.get("engine", "playwright")
+    template_dict: dict | None = None
+    raw_template = form.get("template")
+    if raw_template:
+        try:
+            template_dict = json.loads(raw_template)
         except Exception:
             pass
     job_id = str(uuid4())

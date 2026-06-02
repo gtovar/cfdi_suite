@@ -1,0 +1,18 @@
+{
+  "id": "default",
+  "name": "Estándar",
+  "description": "Layout limpio con todas las zonas visibles",
+  "primary_color": "#1a56db",
+  "logo_url": null,
+  "footer_note": "",
+  "zones": [
+    { "id": "header",    "visible": true,  "order": 1, "columns": [] },
+    { "id": "emisor",    "visible": true,  "order": 2, "columns": [] },
+    { "id": "receptor",  "visible": true,  "order": 3, "columns": [] },
+    { "id": "conceptos", "visible": true,  "order": 4,
+      "columns": ["#", "ClaveProdServ", "Descripcion", "ClaveUnidad", "Cantidad", "ValorUnitario", "Importe"] },
+    { "id": "impuestos", "visible": true,  "order": 5, "columns": [] },
+    { "id": "timbre",    "visible": true,  "order": 6, "columns": [] },
+    { "id": "footer",    "visible": true,  "order": 7, "columns": [] }
+  ]
+}

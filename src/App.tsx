@@ -28,6 +28,8 @@ import type { ExtractMode } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
 import FileUpload from './components/FileUpload';
 import InspectorHeader from './components/InspectorHeader';
+import { type TemplateConfig, DEFAULT_TEMPLATE } from './components/PdfTemplateBuilder';
+import PdfTemplatesPage from './components/PdfTemplatesPage';
 import ResolutionPanel from './components/ResolutionPanel';
 import TaxAuditPanel from './components/TaxAuditPanel';
 import XmlNodeViewer from './components/XmlNodeViewer';
@@ -78,6 +80,12 @@ export default function App() {
   const [pdfPhase, setPdfPhase] = useState<'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error'>('idle');
   const [pdfProgressDetail, setPdfProgressDetail] = useState<string | undefined>();
   const [pdfError, setPdfError] = useState<string | undefined>();
+  const [templateConfig, setTemplateConfig] = useState<TemplateConfig>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('cfdi-pdf-template') ?? '');
+      return stored ? { ...DEFAULT_TEMPLATE, ...stored } : DEFAULT_TEMPLATE;
+    } catch { return DEFAULT_TEMPLATE; }
+  });
 
   const diagnose = useDiagnoseState(cfdi);
   const findingContexts = useFindingContexts(cfdi);
@@ -188,7 +196,7 @@ export default function App() {
     setModifiedXml(null);
   }
 
-  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' = 'playwright') {
+  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' = 'playwright', template?: TemplateConfig) {
     if (!sourceFile) return;
     setPdfPhase('parsing');
     setPdfError(undefined);
@@ -196,8 +204,13 @@ export default function App() {
       const form = new FormData();
       form.append('file', sourceFile);
       form.append('engine', engine);
+      if (template) form.append('template', JSON.stringify(template));
       const startRes = await fetch('/api/cfdi/pdf/start', { method: 'POST', body: form });
-      if (!startRes.ok) throw new Error(`HTTP ${startRes.status}`);
+      if (!startRes.ok) {
+        let msg = `Error ${startRes.status}`;
+        try { const b = await startRes.json(); msg = b.detail ?? b.message ?? msg; } catch {}
+        throw new Error(msg);
+      }
       const { jobId } = await startRes.json();
 
       await new Promise<void>((resolve, reject) => {
@@ -219,7 +232,11 @@ export default function App() {
       });
 
       const dlRes = await fetch(`/api/cfdi/pdf/${jobId}/download`);
-      if (!dlRes.ok) throw new Error(`HTTP ${dlRes.status}`);
+      if (!dlRes.ok) {
+        let msg = `Error ${dlRes.status}`;
+        try { const b = await dlRes.json(); msg = b.detail ?? b.message ?? msg; } catch {}
+        throw new Error(msg);
+      }
       const blob = await dlRes.blob();
       const filename = dlRes.headers.get('content-disposition')?.match(/filename=(.+)/)?.[1] ?? 'cfdi.pdf';
       const url = URL.createObjectURL(blob);
@@ -237,6 +254,10 @@ export default function App() {
     }
     setPdfPhase('idle');
     setPdfProgressDetail(undefined);
+  }
+
+  function handleSaveTemplate(t: TemplateConfig) {
+    setTemplateConfig(t);
   }
 
   function handleDownloadModified() {
@@ -269,6 +290,13 @@ export default function App() {
       <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
       {activeView === 'consultas-sat' && <ConsultasSATPage />}
       {activeView === 'emisores' && <EmisoresPage />}
+      {activeView === 'pdf-templates' && (
+        <PdfTemplatesPage
+          sourceFile={sourceFile ?? null}
+          savedTemplate={templateConfig}
+          onSave={handleSaveTemplate}
+        />
+      )}
 
       {activeView === 'inspector' && (
         <>
@@ -345,7 +373,7 @@ export default function App() {
                 modifiedXml={modifiedXml}
                 onDownloadModified={handleDownloadModified}
                 onDownloadPdf={sourceFile && pdfPhase === 'idle' ? handleDownloadPdf : undefined}
-                onDownloadPdfReportlab={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('reportlab') : undefined}
+                onDownloadPdfReportlab={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('reportlab', templateConfig) : undefined}
                 pdfPhase={pdfPhase}
                 pdfProgressDetail={pdfProgressDetail}
                 pdfError={pdfError}
@@ -428,6 +456,7 @@ export default function App() {
       )}
       </div>
       </div>
+
     </div>
   );
 }
