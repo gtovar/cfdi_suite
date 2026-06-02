@@ -43,7 +43,8 @@ interface InspectorHeaderProps {
   modifiedXml?: string | null;
   onDownloadModified?: () => void;
   onDownloadPdf?: () => void;
-  pdfLoading?: boolean;
+  pdfPhase?: 'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error';
+  pdfError?: string;
 }
 
 function SatResultBadge({ result }: { result: EnquiryResult }) {
@@ -93,7 +94,8 @@ export default function InspectorHeader({
   modifiedXml,
   onDownloadModified,
   onDownloadPdf,
-  pdfLoading = false,
+  pdfPhase = 'idle',
+  pdfError,
 }: InspectorHeaderProps) {
   const canEnquire = !!satEnquiryData?.rfcEmisor && !satLoading;
   const profileBadge = PROFILE_BADGE[profileLabel];
@@ -246,21 +248,32 @@ export default function InspectorHeader({
           </button>
         )}
 
-        {onDownloadPdf && (
+        {onDownloadPdf && pdfPhase === 'idle' && (
           <button
             onClick={onDownloadPdf}
-            disabled={pdfLoading}
             title="Descarga este CFDI como PDF"
-            className={clsx(
-              'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-200',
-              pdfLoading
-                ? 'border-gray-200 text-gray-400 cursor-not-allowed opacity-50'
-                : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50',
-            )}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-50"
           >
-            {pdfLoading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            <Download size={13} />
             PDF
           </button>
+        )}
+
+        {pdfPhase !== 'idle' && (
+          <div className={clsx(
+            'inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium',
+            pdfPhase === 'error'
+              ? 'border-red-200 bg-red-50 text-red-700'
+              : 'border-blue-200 bg-blue-50 text-blue-700',
+          )}>
+            {pdfPhase === 'error' ? null : <Loader2 size={13} className="animate-spin shrink-0" />}
+            <span>
+              {pdfPhase === 'parsing' && 'Analizando XML…'}
+              {pdfPhase === 'rendering_html' && 'Generando vista…'}
+              {pdfPhase === 'generating_pdf' && 'Creando PDF…'}
+              {pdfPhase === 'error' && (pdfError ?? 'Error al generar PDF')}
+            </span>
+          </div>
         )}
 
         <button

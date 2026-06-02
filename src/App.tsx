@@ -75,7 +75,8 @@ export default function App() {
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'auditoria' | 'nodo-xml'>('auditoria');
   const [modifiedXml, setModifiedXml] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfPhase, setPdfPhase] = useState<'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error'>('idle');
+  const [pdfError, setPdfError] = useState<string | undefined>();
 
   const diagnose = useDiagnoseState(cfdi);
   const findingContexts = useFindingContexts(cfdi);
@@ -187,23 +188,50 @@ export default function App() {
   }
 
   async function handleDownloadPdf() {
-    if (!sourceFile || !cfdi) return;
-    setPdfLoading(true);
+    if (!sourceFile) return;
+    setPdfPhase('parsing');
+    setPdfError(undefined);
     try {
       const form = new FormData();
       form.append('file', sourceFile);
-      const res = await fetch('/api/cfdi/pdf', { method: 'POST', body: form });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
+      const startRes = await fetch('/api/cfdi/pdf/start', { method: 'POST', body: form });
+      if (!startRes.ok) throw new Error(`HTTP ${startRes.status}`);
+      const { jobId } = await startRes.json();
+
+      await new Promise<void>((resolve, reject) => {
+        const es = new EventSource(`/api/cfdi/pdf/${jobId}/progress`);
+        es.onmessage = (e) => {
+          const { status, error } = JSON.parse(e.data) as { status: string; error: string };
+          if (status === 'done') {
+            es.close();
+            resolve();
+          } else if (status === 'error') {
+            es.close();
+            reject(new Error(error || 'Error generando PDF'));
+          } else {
+            setPdfPhase(status as typeof pdfPhase);
+          }
+        };
+        es.onerror = () => { es.close(); reject(new Error('Conexión perdida')); };
+      });
+
+      const dlRes = await fetch(`/api/cfdi/pdf/${jobId}/download`);
+      if (!dlRes.ok) throw new Error(`HTTP ${dlRes.status}`);
+      const blob = await dlRes.blob();
+      const filename = dlRes.headers.get('content-disposition')?.match(/filename=(.+)/)?.[1] ?? 'cfdi.pdf';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `cfdi-${cfdi.uuid.slice(0, 8)}.pdf`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-    } finally {
-      setPdfLoading(false);
+    } catch (err) {
+      setPdfError(err instanceof Error ? err.message : 'Error generando PDF');
+      setPdfPhase('error');
+      setTimeout(() => setPdfPhase('idle'), 5000);
+      return;
     }
+    setPdfPhase('idle');
   }
 
   function handleDownloadModified() {
@@ -311,8 +339,9 @@ export default function App() {
                 hasFindings={cfdi.findings.length > 0}
                 modifiedXml={modifiedXml}
                 onDownloadModified={handleDownloadModified}
-                onDownloadPdf={sourceFile ? handleDownloadPdf : undefined}
-                pdfLoading={pdfLoading}
+                onDownloadPdf={sourceFile && pdfPhase === 'idle' ? handleDownloadPdf : undefined}
+                pdfPhase={pdfPhase}
+                pdfError={pdfError}
               />
 
               <main className="flex-1 min-h-0 flex flex-col overflow-hidden bg-gray-50 p-4 gap-4">
