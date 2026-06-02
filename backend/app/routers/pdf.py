@@ -47,6 +47,31 @@ def _split_cfdi(cfdi: CFDI, chunk_size: int) -> list[CFDI]:
     return chunks
 
 
+def _extract_head_styles(html: str) -> str:
+    from lxml import html as lh
+    doc = lh.fromstring(html.encode())
+    styles = doc.xpath("//style")
+    return lh.tostring(styles[0], encoding="unicode") if styles else ""
+
+
+def _extract_conceptos_table(html: str) -> tuple[str, str]:
+    from lxml import html as lh
+    doc = lh.fromstring(html.encode())
+    base = "//h5[contains(text(), 'Conceptos')]/following-sibling::table[1]"
+    theads = doc.xpath(f"{base}/thead")
+    tbodies = doc.xpath(f"{base}/tbody")
+    if not theads or not tbodies:
+        return "", ""
+    return lh.tostring(theads[0], encoding="unicode"), lh.tostring(tbodies[0], encoding="unicode")
+
+
+def _build_chunk_html(style: str, thead: str, tbody: str) -> str:
+    return (
+        f"<!DOCTYPE html><html><head>{style}</head>"
+        f"<body><table>{thead}{tbody}</table></body></html>"
+    )
+
+
 def _uuid_prefix(cfdi: CFDI) -> str:
     tfd = (cfdi.get("Complemento") or {}).get("TimbreFiscalDigital") or {}
     return str(tfd.get("UUID", "")).replace("-", "")[:8]
@@ -106,7 +131,16 @@ async def _process(job_id: str, xml: bytes) -> None:
 
         job.status = "rendering_html"
         chunks = _split_cfdi(cfdi, CHUNK_SIZE)
-        htmls = [await asyncio.to_thread(html_str, c) for c in chunks]
+        htmls: list[str] = []
+        head_style = ""
+        for i, c in enumerate(chunks):
+            raw = await asyncio.to_thread(html_str, c)
+            if i == 0:
+                head_style = _extract_head_styles(raw)
+                htmls.append(raw)
+            else:
+                thead, tbody = _extract_conceptos_table(raw)
+                htmls.append(_build_chunk_html(head_style, thead, tbody))
 
         job.status = "generating_pdf"
         total = len(htmls)
