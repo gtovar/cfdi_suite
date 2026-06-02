@@ -75,6 +75,7 @@ export default function App() {
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'auditoria' | 'nodo-xml'>('auditoria');
   const [modifiedXml, setModifiedXml] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
 
   const diagnose = useDiagnoseState(cfdi);
   const findingContexts = useFindingContexts(cfdi);
@@ -185,6 +186,26 @@ export default function App() {
     setModifiedXml(null);
   }
 
+  async function handleDownloadPdf() {
+    if (!sourceFile || !cfdi) return;
+    setPdfLoading(true);
+    try {
+      const form = new FormData();
+      form.append('file', sourceFile);
+      const res = await fetch('/api/cfdi/pdf', { method: 'POST', body: form });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cfdi-${cfdi.uuid.slice(0, 8)}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setPdfLoading(false);
+    }
+  }
+
   function handleDownloadModified() {
     if (!modifiedXml || !cfdi) return;
     const blob = new Blob([modifiedXml], { type: 'text/xml' });
@@ -290,6 +311,8 @@ export default function App() {
                 hasFindings={cfdi.findings.length > 0}
                 modifiedXml={modifiedXml}
                 onDownloadModified={handleDownloadModified}
+                onDownloadPdf={sourceFile ? handleDownloadPdf : undefined}
+                pdfLoading={pdfLoading}
               />
 
               <main className="flex-1 min-h-0 flex flex-col overflow-hidden bg-gray-50 p-4 gap-4">

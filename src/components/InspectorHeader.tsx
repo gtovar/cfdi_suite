@@ -42,6 +42,8 @@ interface InspectorHeaderProps {
   hasFindings?: boolean;
   modifiedXml?: string | null;
   onDownloadModified?: () => void;
+  onDownloadPdf?: () => void;
+  pdfLoading?: boolean;
 }
 
 function SatResultBadge({ result }: { result: EnquiryResult }) {
@@ -90,6 +92,8 @@ export default function InspectorHeader({
   hasFindings = false,
   modifiedXml,
   onDownloadModified,
+  onDownloadPdf,
+  pdfLoading = false,
 }: InspectorHeaderProps) {
   const canEnquire = !!satEnquiryData?.rfcEmisor && !satLoading;
   const profileBadge = PROFILE_BADGE[profileLabel];
@@ -239,6 +243,23 @@ export default function InspectorHeader({
           >
             <Download size={13} />
             Descargar corregido
+          </button>
+        )}
+
+        {onDownloadPdf && (
+          <button
+            onClick={onDownloadPdf}
+            disabled={pdfLoading}
+            title="Descarga este CFDI como PDF"
+            className={clsx(
+              'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-200',
+              pdfLoading
+                ? 'border-gray-200 text-gray-400 cursor-not-allowed opacity-50'
+                : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50',
+            )}
+          >
+            {pdfLoading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            PDF
           </button>
         )}
 

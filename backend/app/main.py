@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
 from .observability import record_analyze_cfdi_error
 from .routers.emisores import router as emisores_router
+from .routers.pdf import router as pdf_router
 from .routers.rfc_validation import fiel_router
 from .routers.rfc_validation import router as rfc_router
 from .routers.sat_enquiry import router as sat_router
@@ -31,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(emisores_router)
+app.include_router(pdf_router)
 app.include_router(sat_router)
 app.include_router(rfc_router)
 app.include_router(fiel_router)
