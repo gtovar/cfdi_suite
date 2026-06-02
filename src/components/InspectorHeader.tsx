@@ -44,6 +44,7 @@ interface InspectorHeaderProps {
   onDownloadModified?: () => void;
   onDownloadPdf?: () => void;
   pdfPhase?: 'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error';
+  pdfProgressDetail?: string;
   pdfError?: string;
 }
 
@@ -95,6 +96,7 @@ export default function InspectorHeader({
   onDownloadModified,
   onDownloadPdf,
   pdfPhase = 'idle',
+  pdfProgressDetail,
   pdfError,
 }: InspectorHeaderProps) {
   const canEnquire = !!satEnquiryData?.rfcEmisor && !satLoading;
@@ -266,12 +268,17 @@ export default function InspectorHeader({
               ? 'border-red-200 bg-red-50 text-red-700'
               : 'border-blue-200 bg-blue-50 text-blue-700',
           )}>
-            {pdfPhase === 'error' ? null : <Loader2 size={13} className="animate-spin shrink-0" />}
-            <span>
-              {pdfPhase === 'parsing' && 'Analizando XML…'}
-              {pdfPhase === 'rendering_html' && 'Generando vista…'}
-              {pdfPhase === 'generating_pdf' && 'Creando PDF…'}
-              {pdfPhase === 'error' && (pdfError ?? 'Error al generar PDF')}
+            {pdfPhase !== 'error' && <Loader2 size={13} className="animate-spin shrink-0" />}
+            <span className="flex flex-col leading-tight">
+              <span>
+                {pdfPhase === 'parsing' && 'Analizando XML…'}
+                {pdfPhase === 'rendering_html' && 'Generando vista…'}
+                {pdfPhase === 'generating_pdf' && 'Creando PDF…'}
+                {pdfPhase === 'error' && (pdfError ?? 'Error al generar PDF')}
+              </span>
+              {pdfProgressDetail && pdfPhase !== 'error' && (
+                <span className="text-blue-500 font-normal">{pdfProgressDetail}</span>
+              )}
             </span>
           </div>
         )}

@@ -76,6 +76,7 @@ export default function App() {
   const [inspectorTab, setInspectorTab] = useState<'auditoria' | 'nodo-xml'>('auditoria');
   const [modifiedXml, setModifiedXml] = useState<string | null>(null);
   const [pdfPhase, setPdfPhase] = useState<'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error'>('idle');
+  const [pdfProgressDetail, setPdfProgressDetail] = useState<string | undefined>();
   const [pdfError, setPdfError] = useState<string | undefined>();
 
   const diagnose = useDiagnoseState(cfdi);
@@ -201,7 +202,8 @@ export default function App() {
       await new Promise<void>((resolve, reject) => {
         const es = new EventSource(`/api/cfdi/pdf/${jobId}/progress`);
         es.onmessage = (e) => {
-          const { status, error } = JSON.parse(e.data) as { status: string; error: string };
+          const { status, progress_detail, error } = JSON.parse(e.data) as { status: string; progress_detail: string; error: string };
+          if (progress_detail !== undefined) setPdfProgressDetail(progress_detail || undefined);
           if (status === 'done') {
             es.close();
             resolve();
@@ -227,11 +229,13 @@ export default function App() {
       URL.revokeObjectURL(url);
     } catch (err) {
       setPdfError(err instanceof Error ? err.message : 'Error generando PDF');
+      setPdfProgressDetail(undefined);
       setPdfPhase('error');
       setTimeout(() => setPdfPhase('idle'), 5000);
       return;
     }
     setPdfPhase('idle');
+    setPdfProgressDetail(undefined);
   }
 
   function handleDownloadModified() {
@@ -341,6 +345,7 @@ export default function App() {
                 onDownloadModified={handleDownloadModified}
                 onDownloadPdf={sourceFile && pdfPhase === 'idle' ? handleDownloadPdf : undefined}
                 pdfPhase={pdfPhase}
+                pdfProgressDetail={pdfProgressDetail}
                 pdfError={pdfError}
               />
 

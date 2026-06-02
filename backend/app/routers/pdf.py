@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import io
 import json
 from dataclasses import dataclass, field
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Callable
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, UploadFile
@@ -14,12 +16,15 @@ from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter()
 
-_TIMEOUT_SECONDS = 180
+CHUNK_SIZE = 1500
+MAX_PARALLEL_PAGES = 4
+_TIMEOUT_SECONDS = 60  # por chunk individual
 
 
 @dataclass
 class _Job:
-    status: str = "queued"   # queued | parsing | rendering_html | generating_pdf | done | error
+    status: str = "queued"
+    progress_detail: str = ""
     pdf: bytes = field(default=b"", repr=False)
     filename: str = "cfdi.pdf"
     error: str = ""
@@ -28,10 +33,69 @@ class _Job:
 _jobs: dict[str, _Job] = {}
 
 
+def _split_cfdi(cfdi: CFDI, chunk_size: int) -> list[CFDI]:
+    conceptos = cfdi.get("Conceptos") or []
+    if isinstance(conceptos, dict):
+        conceptos = [conceptos]
+    if len(conceptos) <= chunk_size:
+        return [cfdi]
+    chunks = []
+    for i in range(0, len(conceptos), chunk_size):
+        c = copy.copy(cfdi)
+        c["Conceptos"] = conceptos[i : i + chunk_size]
+        chunks.append(c)
+    return chunks
+
+
 def _uuid_prefix(cfdi: CFDI) -> str:
     tfd = (cfdi.get("Complemento") or {}).get("TimbreFiscalDigital") or {}
-    prefix = str(tfd.get("UUID", "")).replace("-", "")[:8]
-    return prefix
+    return str(tfd.get("UUID", "")).replace("-", "")[:8]
+
+
+async def _render_chunks_parallel(
+    htmls: list[str],
+    on_chunk_done: Callable[[int, int], None] | None = None,
+) -> bytes:
+    from playwright.async_api import async_playwright
+    from pypdf import PdfReader, PdfWriter
+
+    sem = asyncio.Semaphore(MAX_PARALLEL_PAGES)
+    results: list[tuple[int, bytes]] = []
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+
+        async def render_one(idx: int, html: str) -> tuple[int, bytes]:
+            async with sem:
+                page = await browser.new_page()
+                await asyncio.wait_for(
+                    page.set_content(html, wait_until="domcontentloaded"),
+                    timeout=_TIMEOUT_SECONDS,
+                )
+                pdf = await asyncio.wait_for(
+                    page.pdf(format="Letter", print_background=True),
+                    timeout=_TIMEOUT_SECONDS,
+                )
+                await page.close()
+                return idx, pdf
+
+        tasks = [render_one(i, h) for i, h in enumerate(htmls)]
+        done_count = 0
+        for coro in asyncio.as_completed(tasks):
+            idx, pdf = await coro
+            results.append((idx, pdf))
+            done_count += 1
+            if on_chunk_done:
+                on_chunk_done(done_count, len(htmls))
+
+        await browser.close()
+
+    writer = PdfWriter()
+    for _, pdf_bytes in sorted(results):
+        writer.append(PdfReader(io.BytesIO(pdf_bytes)))
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
 
 
 async def _process(job_id: str, xml: bytes) -> None:
@@ -41,14 +105,21 @@ async def _process(job_id: str, xml: bytes) -> None:
         cfdi = await asyncio.to_thread(CFDI.from_string, xml)
 
         job.status = "rendering_html"
-        html = await asyncio.to_thread(html_str, cfdi)
+        chunks = _split_cfdi(cfdi, CHUNK_SIZE)
+        htmls = [await asyncio.to_thread(html_str, c) for c in chunks]
 
         job.status = "generating_pdf"
-        pdf_bytes = await _playwright_pdf(html)
+        total = len(htmls)
+        job.progress_detail = f"Generando parte 1 de {total}…" if total > 1 else ""
+
+        def on_chunk_done(done: int, t: int) -> None:
+            job.progress_detail = f"Generando parte {done} de {t}…" if t > 1 else ""
+
+        job.pdf = await _render_chunks_parallel(htmls, on_chunk_done=on_chunk_done)
 
         prefix = _uuid_prefix(cfdi)
         job.filename = f"cfdi-{prefix}.pdf" if prefix else "cfdi.pdf"
-        job.pdf = pdf_bytes
+        job.progress_detail = ""
         job.status = "done"
 
     except asyncio.TimeoutError:
@@ -60,24 +131,6 @@ async def _process(job_id: str, xml: bytes) -> None:
     except Exception as exc:
         job.status = "error"
         job.error = str(exc)
-
-
-async def _playwright_pdf(html: str) -> bytes:
-    from playwright.async_api import async_playwright
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page()
-        await asyncio.wait_for(
-            page.set_content(html, wait_until="domcontentloaded"),
-            timeout=_TIMEOUT_SECONDS,
-        )
-        pdf = await asyncio.wait_for(
-            page.pdf(format="Letter", print_background=True),
-            timeout=_TIMEOUT_SECONDS,
-        )
-        await browser.close()
-        return pdf
 
 
 @router.post("/api/cfdi/pdf/start")
@@ -95,14 +148,21 @@ async def pdf_progress(job_id: str) -> EventSourceResponse:
         raise HTTPException(status_code=404, detail="Job no encontrado")
 
     async def _stream() -> AsyncGenerator[dict, None]:
-        last = ""
+        last_key = ""
         while True:
             job = _jobs.get(job_id)
             if job is None:
                 break
-            if job.status != last:
-                last = job.status
-                yield {"data": json.dumps({"status": job.status, "error": job.error})}
+            key = f"{job.status}:{job.progress_detail}"
+            if key != last_key:
+                last_key = key
+                yield {
+                    "data": json.dumps({
+                        "status": job.status,
+                        "progress_detail": job.progress_detail,
+                        "error": job.error,
+                    })
+                }
             if job.status in ("done", "error"):
                 break
             await asyncio.sleep(0.3)
@@ -117,8 +177,7 @@ async def download_pdf(job_id: str) -> Response:
         raise HTTPException(status_code=404, detail="Job no encontrado")
     if job.status != "done":
         raise HTTPException(status_code=409, detail=f"Job status: {job.status}")
-
-    _jobs.pop(job_id, None)  # limpiar después de descargar
+    _jobs.pop(job_id, None)
     return Response(
         content=job.pdf,
         media_type="application/pdf",
