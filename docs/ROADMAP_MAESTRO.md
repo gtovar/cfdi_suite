@@ -154,6 +154,38 @@ UI: botón partido **"PDF | ⚡ PDF Pro"** en `InspectorHeader`.
 
 ---
 
+### ✅ Frente F — Canvas Template Editor (Engine B V2) — completado 2026-06-02
+
+**Qué se implementó:**
+- Editor visual de zonas reemplaza la lista con botones ▲▼
+- Drag-and-drop para reordenar secciones via `@dnd-kit/sortable` (handle `≡` por zona)
+- Click en zona → panel de propiedades inline (Conceptos muestra columnas visibles)
+- Resize del encabezado: handle en borde inferior del bloque + slider (56pt default, rango 32–120pt)
+- Controles de márgenes: 4 inputs numéricos en cm (Superior/Inferior/Izquierdo/Derecho)
+- Toggle de visibilidad por zona, indicador de color por sección
+- `TemplateConfig` extendido: `header_height`, `column_widths`, `margin_*`
+- Backend `PdfTemplate.from_dict` lee todos los campos nuevos con defaults backward-compat
+- Márgenes y `header_height` cablea directamente en `SimpleDocTemplate` y `_header_table`
+- `column_widths` cablea en `_conceptos_tables` (override de pesos relativos por columna)
+
+**Estado de campos:**
+- `header_height`, `margin_*` — cableados completamente front→backend ✅
+- `column_widths` — **deferred**: backend lo lee y aplica, pero no hay UI para editar aún (V2.5)
+
+**Nota técnica:** `@types/react` no está instalado en el proyecto (React 19 bundless types). Se usa `PointerEvent` DOM y `key?: string` explícito en la interfaz de props para compatibilidad con TypeScript 5.8.
+
+**Archivos modificados:**
+- `src/components/PdfTemplatesPage.tsx` — reescrito con editor visual + dnd-kit
+- `src/components/PdfTemplateBuilder.tsx` — tipos `TemplateConfig` + `DEFAULT_TEMPLATE` extendidos
+- `backend/app/services/pdf_reportlab.py` — `PdfTemplate` dataclass + wiring de los 6 campos nuevos
+- `package.json` — `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` añadidos
+
+**Pendiente (V2.5):**
+- UI para `column_widths` — handles de resize en cabecera de la tabla de conceptos
+- Preview en-vivo cargando XML desde la página de Templates (actualmente solo funciona si ya hay un XML en el Inspector)
+
+---
+
 ### 🟢 Frente D — Validación XSD / estructura XML
 **Por qué después:** Menor urgencia que catálogos. Detecta errores de estructura que los PACs ya deberían rechazar.
 
@@ -201,6 +233,9 @@ UI: botón partido **"PDF | ⚡ PDF Pro"** en `InspectorHeader`.
 | 2026-06-01 | Frente C: PDF con SSE progress, Playwright+chunking paralelo, lxml header-fix. ~20-25s para 6.6MB | `696d9af`→`a319e40` |
 | 2026-06-02 | Frente C optimización: benchmark por fase, pipeline html→render, endpoint /status. 18.6s→16.2s | `6cd2b8c` |
 | 2026-06-02 | Engine B ReportLab: dual-engine PDF, layout personalizable, QR SAT. 7.2s para 15k conceptos | `138c761` |
+| 2026-06-02 | Engine B V1.5: Templates PDF como sección permanente del sidebar, descarga directa ⚡ PDF Pro, localStorage | sesión |
+| 2026-06-02 | Engine B V1.5+: Tipografía (Helvetica/Times/Courier), colores primario+acento, densidad tabla, bordes, A4/Letter, cache CFDI preview 60× más rápido | sesión |
+| 2026-06-02 | Frente F: Canvas Template Editor — dnd-kit sortable, header resize, márgenes, column_widths backend | sesión |
 
 ---
 
@@ -213,6 +248,7 @@ Leer en este orden:
 4. `src/cfdi/engine/python-satcfdi-wrapper.py` — estado del wrapper Python
 
 Si se va a tocar PDF Engine B: leer `backend/app/services/pdf_reportlab.py` y `backend/app/routers/pdf.py`.
+Si se va a tocar el Canvas Editor (Frente F — ya completado): el editor está en `src/components/PdfTemplatesPage.tsx`. Los tipos en `PdfTemplateBuilder.tsx`. `@dnd-kit` ya instalado. Pendiente: UI para `column_widths` (Frente F V2.5).
 Si se va a tocar findings: leer también `src/cfdi/application/cfdiAnalysisAdapter.ts` y `src/app/hooks/useFindingContexts.ts`.
 
 ---
