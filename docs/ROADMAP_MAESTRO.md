@@ -108,28 +108,36 @@
 
 ---
 
-### ✅ Frente C — XML → PDF (completado 2026-06-01, optimización pendiente)
+### ✅ Frente C — XML → PDF (completado y optimizado 2026-06-01)
 
 **Qué se implementó:**
 - `py2html` descartado — es conversor genérico dict→HTML, no específico de CFDI
 - Motor: `satcfdi.render.html_str()` → Playwright/Chromium (swap de weasyprint que colgaba)
 - Arquitectura: SSE jobs — `POST /api/cfdi/pdf/start` → `GET /progress` → `GET /download`
-- Chunking paralelo: CHUNK_SIZE=1500, MAX_PARALLEL_PAGES=4, merge con pypdf
+- Chunking: CHUNK_SIZE=1500, MAX_PARALLEL_PAGES=4, merge con pypdf
 - Chunks 2..N: solo tabla de conceptos (sin header repetido) via lxml post-processing
 - Feedback SSE: "Generando parte 3 de 11…" en el header del inspector
+- Pipeline html_str + render: despacha cada chunk al browser apenas su HTML está listo
 
-**Tiempos medidos (XML MINISO 6.6MB, 15,404 conceptos):**
+**Tiempos medidos (XML MINISO 6.6MB, 15,404 conceptos — benchmark definitivo):**
 | Fase | Tiempo |
 |---|---|
-| Parse satcfdi | ~5s |
-| HTML generation | ~4s |
-| Playwright chunks paralelos | ~11-15s |
-| **Total** | **~20-25s** |
+| Parse satcfdi | ~4s |
+| html_str (11 chunks, secuencial) | ~2.5s |
+| browser launch (Playwright) | ~0.2s |
+| page.pdf por chunk (1500 conceptos) | ~2.7s promedio |
+| **Total con pipeline** | **~16s** |
 
-**Pendiente de optimización:** 20-25s sigue siendo alto. Próxima sesión debe perfilar si el cuello está en `page.set_content()` o `page.pdf()`, y explorar browser singleton precalentado + más workers paralelos. Ver prompt de reentrada al final.
+**Hallazgos de optimización (sesión 2026-06-01):**
+- `page.pdf()` domina: 73% del tiempo de Playwright. No es `set_content()` ni `new_page()`.
+- Aumentar MAX_PARALLEL_PAGES (6, 8) no ayuda: Chromium satura la CPU. page.pdf escala de 2.7s → 4s → 6s con 4/6/8 workers simultáneos. El beneficio de menos rondas se cancela con la contención.
+- Browser singleton: launch tarda 0.2s → no vale la complejidad.
+- html_str paralelo (asyncio.gather): falla — lxml no es thread-safe.
+- **Pipeline**: despachar render_one() apenas cada html esté listo (en vez de esperar todo el html) ahorró 2.4s reales (18.6s → 16.2s).
+- Límite real: ~16s para 15k conceptos con Playwright en este hardware. <10s requeriría un motor PDF diferente.
 
 **Archivos clave:**
-- `backend/app/routers/pdf.py` — lógica completa de jobs, chunking, SSE
+- `backend/app/routers/pdf.py` — jobs, pipeline, chunking, SSE, endpoint `/status`
 - `src/components/InspectorHeader.tsx` — panel de fases con progress_detail
 - `src/App.tsx` — cliente SSE con EventSource
 
@@ -177,6 +185,7 @@
 | 2026-06-01 | Frente B-ext: ampliar catálogos de cabecera (usoCFDI, metodoPago, formaPago, moneda) via sentinel pattern | `1148e08` |
 | 2026-06-01 | claveUnidad + sello offline: catálogo en conceptos, verificación criptográfica offline, handlers frontend, 29 tests nuevos | `b36576b` |
 | 2026-06-01 | Frente C: PDF con SSE progress, Playwright+chunking paralelo, lxml header-fix. ~20-25s para 6.6MB | `696d9af`→`a319e40` |
+| 2026-06-02 | Frente C optimización: benchmark por fase, pipeline html→render, endpoint /status. 18.6s→16.2s | pendiente commit |
 
 ---
 
@@ -187,25 +196,6 @@ Leer en este orden:
 2. `docs/roadmap/python-backend-platform/STATUS.md` — estado del backend
 3. `backend/app/contracts.py` — contrato HTTP v1
 4. `src/cfdi/engine/python-satcfdi-wrapper.py` — estado del wrapper Python
-
-## Prompt de reentrada — optimización PDF generation
-
-```
-Contexto: cfdi_inspector en /Users/gil/Documents/cfdi_inspector
-Leer ROADMAP_MAESTRO antes de continuar.
-
-El Frente C (XML→PDF) funciona pero ~20-25s para 6.6MB es aún lento.
-Motor actual: Playwright/Chromium con chunking paralelo (CHUNK_SIZE=1500,
-MAX_PARALLEL_PAGES=4). Código: backend/app/routers/pdf.py.
-
-Benchmark disponible: /Users/gil/Downloads/MIN420260228T0257/MIN420260228T0029.xml
-
-Investigar y planear con decision-expander antes de implementar:
-1. ¿El cuello está en set_content() o en page.pdf()? Medir con timestamps.
-2. ¿Browser singleton precalentado reduce overhead por job?
-3. ¿Más workers (6-8) mejoran sin degradar memoria?
-4. ¿Reducir CSS/HTML de chunks 2..N antes de renderear?
-```
 
 Si se va a tocar findings: leer también `src/cfdi/application/cfdiAnalysisAdapter.ts` y `src/app/hooks/useFindingContexts.ts`.
 

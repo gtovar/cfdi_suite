@@ -5,7 +5,7 @@ import copy
 import io
 import json
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Callable
+from typing import AsyncGenerator
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, UploadFile
@@ -18,7 +18,7 @@ router = APIRouter()
 
 CHUNK_SIZE = 1500
 MAX_PARALLEL_PAGES = 4
-_TIMEOUT_SECONDS = 60  # por chunk individual
+_TIMEOUT_SECONDS = 60
 
 
 @dataclass
@@ -33,16 +33,16 @@ class _Job:
 _jobs: dict[str, _Job] = {}
 
 
-def _split_cfdi(cfdi: CFDI, chunk_size: int) -> list[CFDI]:
+def _split_cfdi(cfdi: CFDI) -> list[CFDI]:
     conceptos = cfdi.get("Conceptos") or []
     if isinstance(conceptos, dict):
         conceptos = [conceptos]
-    if len(conceptos) <= chunk_size:
+    if len(conceptos) <= CHUNK_SIZE:
         return [cfdi]
     chunks = []
-    for i in range(0, len(conceptos), chunk_size):
+    for i in range(0, len(conceptos), CHUNK_SIZE):
         c = copy.copy(cfdi)
-        c["Conceptos"] = conceptos[i : i + chunk_size]
+        c["Conceptos"] = conceptos[i : i + CHUNK_SIZE]
         chunks.append(c)
     return chunks
 
@@ -77,79 +77,70 @@ def _uuid_prefix(cfdi: CFDI) -> str:
     return str(tfd.get("UUID", "")).replace("-", "")[:8]
 
 
-async def _render_chunks_parallel(
-    htmls: list[str],
-    on_chunk_done: Callable[[int, int], None] | None = None,
-) -> bytes:
+async def _process(job_id: str, xml: bytes) -> None:
     from playwright.async_api import async_playwright
     from pypdf import PdfReader, PdfWriter
 
-    sem = asyncio.Semaphore(MAX_PARALLEL_PAGES)
-    results: list[tuple[int, bytes]] = []
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-
-        async def render_one(idx: int, html: str) -> tuple[int, bytes]:
-            async with sem:
-                page = await browser.new_page()
-                await asyncio.wait_for(
-                    page.set_content(html, wait_until="domcontentloaded"),
-                    timeout=_TIMEOUT_SECONDS,
-                )
-                pdf = await asyncio.wait_for(
-                    page.pdf(format="Letter", print_background=True),
-                    timeout=_TIMEOUT_SECONDS,
-                )
-                await page.close()
-                return idx, pdf
-
-        tasks = [render_one(i, h) for i, h in enumerate(htmls)]
-        done_count = 0
-        for coro in asyncio.as_completed(tasks):
-            idx, pdf = await coro
-            results.append((idx, pdf))
-            done_count += 1
-            if on_chunk_done:
-                on_chunk_done(done_count, len(htmls))
-
-        await browser.close()
-
-    writer = PdfWriter()
-    for _, pdf_bytes in sorted(results):
-        writer.append(PdfReader(io.BytesIO(pdf_bytes)))
-    buf = io.BytesIO()
-    writer.write(buf)
-    return buf.getvalue()
-
-
-async def _process(job_id: str, xml: bytes) -> None:
     job = _jobs[job_id]
     try:
         job.status = "parsing"
         cfdi = await asyncio.to_thread(CFDI.from_string, xml)
 
-        job.status = "rendering_html"
-        chunks = _split_cfdi(cfdi, CHUNK_SIZE)
-        htmls: list[str] = []
-        head_style = ""
-        for i, c in enumerate(chunks):
-            raw = await asyncio.to_thread(html_str, c)
-            if i == 0:
-                head_style = _extract_head_styles(raw)
-                htmls.append(raw)
-            else:
-                thead, tbody = _extract_conceptos_table(raw)
-                htmls.append(_build_chunk_html(head_style, thead, tbody))
+        chunks = _split_cfdi(cfdi)
+        n = len(chunks)
 
         job.status = "generating_pdf"
-        total = len(htmls)
-        job.progress_detail = f"Generando parte 1 de {total}…" if total > 1 else ""
+        job.progress_detail = f"Generando parte 1 de {n}…" if n > 1 else ""
 
-        def on_chunk_done(done: int, t: int) -> None:
-            job.progress_detail = f"Generando parte {done} de {t}…" if t > 1 else ""
+        sem = asyncio.Semaphore(MAX_PARALLEL_PAGES)
+        results: list[tuple[int, bytes]] = []
+        done_count = 0
 
-        job.pdf = await _render_chunks_parallel(htmls, on_chunk_done=on_chunk_done)
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+
+            async def render_one(idx: int, html: str) -> tuple[int, bytes]:
+                async with sem:
+                    page = await browser.new_page()
+                    await asyncio.wait_for(
+                        page.set_content(html, wait_until="domcontentloaded"),
+                        timeout=_TIMEOUT_SECONDS,
+                    )
+                    pdf = await asyncio.wait_for(
+                        page.pdf(format="Letter", print_background=True),
+                        timeout=_TIMEOUT_SECONDS,
+                    )
+                    await page.close()
+                    return idx, pdf
+
+            # Pipeline: dispatch render tasks as each chunk's HTML becomes ready,
+            # instead of waiting for all HTML before starting any render.
+            render_tasks: list[asyncio.Task[tuple[int, bytes]]] = []
+            head_style = ""
+            for i, c in enumerate(chunks):
+                raw = await asyncio.to_thread(html_str, c)
+                if i == 0:
+                    head_style = _extract_head_styles(raw)
+                    chunk_html = raw
+                else:
+                    thead, tbody = _extract_conceptos_table(raw)
+                    chunk_html = _build_chunk_html(head_style, thead, tbody)
+                render_tasks.append(asyncio.create_task(render_one(i, chunk_html)))
+
+            for coro in asyncio.as_completed(render_tasks):
+                idx, pdf_bytes = await coro
+                results.append((idx, pdf_bytes))
+                done_count += 1
+                job.progress_detail = f"Generando parte {done_count} de {n}…" if n > 1 else ""
+
+            await browser.close()
+
+        writer = PdfWriter()
+        for _, pdf_bytes in sorted(results):
+            writer.append(PdfReader(io.BytesIO(pdf_bytes)))
+        buf = io.BytesIO()
+        writer.write(buf)
+        job.pdf = buf.getvalue()
 
         prefix = _uuid_prefix(cfdi)
         job.filename = f"cfdi-{prefix}.pdf" if prefix else "cfdi.pdf"
@@ -202,6 +193,14 @@ async def pdf_progress(job_id: str) -> EventSourceResponse:
             await asyncio.sleep(0.3)
 
     return EventSourceResponse(_stream())
+
+
+@router.get("/api/cfdi/pdf/{job_id}/status")
+async def pdf_status(job_id: str) -> dict:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    return {"status": job.status, "error": job.error, "progress_detail": job.progress_detail}
 
 
 @router.get("/api/cfdi/pdf/{job_id}/download")
