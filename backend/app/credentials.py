@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet
 
-_SUITE_DIR = Path.home() / ".cfdi-suite"
+_SUITE_DIR = Path(os.environ.get("CFDI_DATA_DIR", str(Path.home() / ".cfdi-suite")))
 _KEY_FILE = _SUITE_DIR / "secret.key"
 _DATA_FILE = _SUITE_DIR / "emisores.enc"
 
