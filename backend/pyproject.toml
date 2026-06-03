@@ -8,10 +8,10 @@ ignore = ["E501", "N815"]
 
 [tool.pytest.ini_options]
 addopts = "--tb=short"
-testpaths = ["backend/tests"]
+testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["backend/app"]
+source = ["app"]
 
 [tool.coverage.report]
 fail_under = 60

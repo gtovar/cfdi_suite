@@ -7,11 +7,16 @@ coverage/
 .env*
 !.env.example
 .venv-satcfdi/
+backend/.venv/
 
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
+
+# Caches de herramientas Python
+backend/.pytest_cache/
+backend/.ruff_cache/
 
 # AI Governance — infraestructura local, no se versiona
 .governance/
