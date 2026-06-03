@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { ArrowLeft, Download, FileText, Loader2, Search, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, Loader2, Search, ShieldCheck } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { EnquiryResult } from '../lib/sat-enquiry-api-client';
 import RfcValidationPanel from './RfcValidationPanel';
@@ -48,6 +48,12 @@ interface InspectorHeaderProps {
   pdfProgressDetail?: string;
   pdfError?: string;
   backLabel?: string;
+  batchPosition?: {
+    current: number;
+    total: number;
+    onPrev?: () => void;
+    onNext?: () => void;
+  } | null;
 }
 
 function SatResultBadge({ result }: { result: EnquiryResult }) {
@@ -102,6 +108,7 @@ export default function InspectorHeader({
   pdfProgressDetail,
   pdfError,
   backLabel,
+  batchPosition,
 }: InspectorHeaderProps) {
   const canEnquire = !!satEnquiryData?.rfcEmisor && !satLoading;
   const profileBadge = PROFILE_BADGE[profileLabel];
@@ -137,6 +144,30 @@ export default function InspectorHeader({
             <span className="text-tiny font-medium leading-none">{backLabel}</span>
           )}
         </button>
+
+        {batchPosition && (
+          <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-1 py-0.5">
+            <button
+              onClick={batchPosition.onPrev}
+              disabled={!batchPosition.onPrev}
+              className="rounded p-1 text-gray-400 transition-colors hover:bg-white hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-30"
+              title="CFDI anterior en el lote"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <span className="select-none px-1 text-tiny tabular-nums text-gray-400">
+              {batchPosition.current + 1} / {batchPosition.total}
+            </span>
+            <button
+              onClick={batchPosition.onNext}
+              disabled={!batchPosition.onNext}
+              className="rounded p-1 text-gray-400 transition-colors hover:bg-white hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-30"
+              title="CFDI siguiente en el lote"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 min-w-0">
           {profileBadge && (

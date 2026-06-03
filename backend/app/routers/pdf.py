@@ -213,7 +213,7 @@ async def start_pdf_job(request: Request) -> dict:
     form = await request.form(max_part_size=_MAX_UPLOAD)
     file = form["file"]
     xml = await file.read()
-    engine = form.get("engine", "playwright")
+    engine = form.get("engine", "reportlab")
     template_dict: dict | None = None
     raw_template = form.get("template")
     if raw_template:

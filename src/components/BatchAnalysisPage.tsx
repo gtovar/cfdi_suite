@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronRight,
   Download,
   Filter,
   FolderOpen,
@@ -42,6 +43,7 @@ type FilterStatus = 'all' | 'ok' | 'con_errores' | 'error';
 interface BatchAnalysisPageProps {
   onProgressUpdate?: (status: BatchProgressStatus | null) => void;
   onSelectFile?: (file: File) => void;
+  onBatchNav?: (orderedFiles: File[], currentIndex: number) => void;
   pendingFiles?: File[] | null;
 }
 
@@ -124,6 +126,16 @@ const COLUMNS = [
         </span>
       );
     },
+  }),
+  colHelper.display({
+    id: 'action',
+    cell: (info) =>
+      info.row.original.status === 'error' ? null : (
+        <ChevronRight
+          size={13}
+          className="text-gray-300 group-hover:text-primary-400 transition-colors duration-100"
+        />
+      ),
   }),
 ];
 
@@ -437,13 +449,14 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pendingFiles }: BatchAnalysisPageProps) {
+export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBatchNav, pendingFiles }: BatchAnalysisPageProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [preflight, setPreflight] = useState<PreflightSummary | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
+  const [doneView, setDoneView] = useState<'resultados' | 'diot'>('resultados');
   const [showModal, setShowModal] = useState(false);
   const [processStartTime, setProcessStartTime] = useState<number | null>(null);
   const [processEndTime, setProcessEndTime] = useState<number | null>(null);
@@ -602,6 +615,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pend
     setPreflight(null);
     setPreflightLoading(false);
     setFilterStatus('all');
+    setDoneView('resultados');
     setShowModal(false);
     setProcessStartTime(null);
     setProcessEndTime(null);
@@ -945,11 +959,33 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pend
               errors={stats.errors}
             />
 
-            {/* Triage header */}
-            <TriageHeader stats={stats} filterStatus={filterStatus} onFilter={setFilterStatus} />
+            {/* Tab selector: Resultados / Reporte DIOT */}
+            {(stats.ok + stats.conErrores) > 0 && (
+              <div className="flex items-center gap-1 self-start rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+                {(['resultados', 'diot'] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setDoneView(v)}
+                    className={clsx(
+                      'rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150',
+                      doneView === v
+                        ? 'bg-white text-gray-800 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700',
+                    )}
+                  >
+                    {v === 'resultados' ? 'Resultados' : 'Reporte DIOT'}
+                  </button>
+                ))}
+              </div>
+            )}
 
-            {/* Results table */}
-            {filteredResults.length > 0 ? (
+            {/* Triage header — solo en tab Resultados */}
+            {doneView === 'resultados' && (
+              <TriageHeader stats={stats} filterStatus={filterStatus} onFilter={setFilterStatus} />
+            )}
+
+            {/* Results table — solo en tab Resultados */}
+            {doneView === 'resultados' && (filteredResults.length > 0 ? (
               <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
                 <div ref={doneTableRef} className="max-h-[560px] overflow-auto">
                   {(() => {
@@ -980,7 +1016,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pend
                           ))}
                         </thead>
                         <tbody>
-                          {donePaddingTop > 0 && <tr><td colSpan={8} style={{ height: `${donePaddingTop}px`, padding: 0 }} /></tr>}
+                          {donePaddingTop > 0 && <tr><td colSpan={9} style={{ height: `${donePaddingTop}px`, padding: 0 }} /></tr>}
                           {doneVItems.map((vRow) => {
                             const row = doneRows[vRow.index]!;
                             const isClickable = !!onSelectFile && row.original.status !== 'error';
@@ -990,14 +1026,23 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pend
                                 onClick={isClickable
                                   ? () => {
                                       const file = fileByName.get(row.original.filename);
-                                      if (file) onSelectFile(file);
+                                      if (!file) return;
+                                      onSelectFile?.(file);
+                                      if (onBatchNav) {
+                                        const clickableRows = doneRows.filter((r) => r.original.status !== 'error');
+                                        const clickIndex = clickableRows.findIndex((r) => r.id === row.id);
+                                        const clickableFiles = clickableRows
+                                          .map((r) => fileByName.get(r.original.filename))
+                                          .filter(Boolean) as File[];
+                                        if (clickIndex >= 0) onBatchNav(clickableFiles, clickIndex);
+                                      }
                                     }
                                   : undefined}
                                 className={clsx(
                                   'border-b border-gray-100 transition-colors duration-100 last:border-0',
                                   vRow.index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
                                   isClickable
-                                    ? 'cursor-pointer hover:bg-primary-50/60'
+                                    ? 'cursor-pointer hover:bg-primary-50/60 group'
                                     : 'hover:bg-primary-50/30',
                                 )}
                                 style={{ height: 36 }}
@@ -1010,7 +1055,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pend
                               </tr>
                             );
                           })}
-                          {donePaddingBottom > 0 && <tr><td colSpan={8} style={{ height: `${donePaddingBottom}px`, padding: 0 }} /></tr>}
+                          {donePaddingBottom > 0 && <tr><td colSpan={9} style={{ height: `${donePaddingBottom}px`, padding: 0 }} /></tr>}
                         </tbody>
                       </table>
                     );
@@ -1043,10 +1088,10 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pend
                   Ver todas
                 </button>
               </div>
-            )}
+            ))}
 
-            {/* Reportes DIOT — only when at least one file was successfully analyzed */}
-            {(stats.ok + stats.conErrores) > 0 && <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            {/* Reporte DIOT — solo en tab DIOT */}
+            {doneView === 'diot' && <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
               <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Reportes</p>
               <div className="flex flex-wrap items-end gap-3">
                 <div className="flex flex-col gap-1">

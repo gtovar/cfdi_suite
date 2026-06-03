@@ -80,6 +80,8 @@ export default function App() {
   const [fromMasivo, setFromMasivo] = useState(false);
   const [pendingFileName, setPendingFileName] = useState<string | null>(null);
   const [batchMasivoStatus, setBatchMasivoStatus] = useState<BatchProgressStatus | null>(null);
+  const [batchNavFiles, setBatchNavFiles] = useState<File[]>([]);
+  const [batchNavIndex, setBatchNavIndex] = useState(0);
   const [widgetDismissed, setWidgetDismissed] = useState(false);
   const [taxAuditExpanded, setTaxAuditExpanded] = useState(false);
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
@@ -218,7 +220,19 @@ export default function App() {
     // batchFiles y fromMasivo se preservan — volvemos al origen
   }
 
-  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' = 'playwright', template?: TemplateConfig) {
+  function handleBatchNavigate(file: File, newIndex: number) {
+    setPendingFileName(file.name);
+    setBatchNavIndex(newIndex);
+    resetForBatch();
+    handleFileSelect(file, {
+      onBeforeApply: (nextProfile) => {
+        resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
+      },
+    });
+    // activeView permanece en 'inspector'
+  }
+
+  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' = 'reportlab', template?: TemplateConfig) {
     if (!sourceFile) return;
     setPdfPhase('parsing');
     setPdfError(undefined);
@@ -330,6 +344,10 @@ export default function App() {
             });
             setActiveView('inspector');
           }}
+          onBatchNav={(files, index) => {
+            setBatchNavFiles(files);
+            setBatchNavIndex(index);
+          }}
         />
       </div>
       {activeView === 'emisores' && <EmisoresPage />}
@@ -364,9 +382,19 @@ export default function App() {
                 tableExportError={tableExportError}
                 onExport={exportCurrentTable}
                 onReset={fromMasivo
-                  ? () => { setFromMasivo(false); resetForBatch(); setActiveView('masivo'); }
+                  ? () => { setFromMasivo(false); setBatchNavFiles([]); resetForBatch(); setActiveView('masivo'); }
                   : resetAll}
                 backLabel={fromMasivo ? 'Análisis masivo' : undefined}
+                batchPosition={fromMasivo && batchNavFiles.length > 1 ? {
+                  current: batchNavIndex,
+                  total: batchNavFiles.length,
+                  onPrev: batchNavIndex > 0
+                    ? () => handleBatchNavigate(batchNavFiles[batchNavIndex - 1]!, batchNavIndex - 1)
+                    : undefined,
+                  onNext: batchNavIndex < batchNavFiles.length - 1
+                    ? () => handleBatchNavigate(batchNavFiles[batchNavIndex + 1]!, batchNavIndex + 1)
+                    : undefined,
+                } : null}
                 satEnquiryData={satEnquiryData}
                 satLoading={satEnquiry.loading}
                 satResult={satEnquiry.result}
