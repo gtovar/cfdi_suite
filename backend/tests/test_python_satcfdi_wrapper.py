@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 # El wrapper usa guiones en el nombre — importar vía importlib
-_WRAPPER_PATH = Path(__file__).parents[2] / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
+_WRAPPER_PATH = Path(__file__).parents[2] / "frontend" / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
 
 
 def _load_wrapper() -> types.ModuleType:

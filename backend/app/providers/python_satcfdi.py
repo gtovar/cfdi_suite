@@ -20,7 +20,7 @@ from .base import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-WRAPPER_PATH = REPO_ROOT / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
+WRAPPER_PATH = REPO_ROOT / "frontend" / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
 REPO_VENV_PYTHON = REPO_ROOT / ".venv-satcfdi" / "bin" / "python"
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from backend.app.observability import LOGGER_NAME, reset_metrics, snapshot_metrics
 
 # Importar SENTINEL_INVALIDO desde el wrapper para no duplicar la cadena
-_WRAPPER_PATH = Path(__file__).parents[2] / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
+_WRAPPER_PATH = Path(__file__).parents[2] / "frontend" / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
 _spec = importlib.util.spec_from_file_location("python_satcfdi_wrapper", _WRAPPER_PATH)
 _wrapper_mod: types.ModuleType = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_wrapper_mod)

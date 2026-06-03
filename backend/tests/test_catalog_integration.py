@@ -12,7 +12,7 @@ import types
 import unittest
 from pathlib import Path
 
-_WRAPPER_PATH = Path(__file__).parents[2] / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
+_WRAPPER_PATH = Path(__file__).parents[2] / "frontend" / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
 _FIXTURE_PATH = Path(__file__).parent.parent / "test-fixtures" / "cfdi-catalogo-invalido-cabecera.xml"
 
 
