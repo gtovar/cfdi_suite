@@ -41,6 +41,8 @@ type FilterStatus = 'all' | 'ok' | 'con_errores' | 'error';
 
 interface BatchAnalysisPageProps {
   onProgressUpdate?: (status: BatchProgressStatus | null) => void;
+  onSelectFile?: (file: File) => void;
+  pendingFiles?: File[] | null;
 }
 
 // ── Table columns ──────────────────────────────────────────────────────────────
@@ -435,7 +437,7 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function BatchAnalysisPage({ onProgressUpdate }: BatchAnalysisPageProps) {
+export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, pendingFiles }: BatchAnalysisPageProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
@@ -481,6 +483,11 @@ export default function BatchAnalysisPage({ onProgressUpdate }: BatchAnalysisPag
         .filter((e) => e.result !== null && (filterStatus === 'all' || e.result.status === filterStatus))
         .map((e) => e.result!),
     [queue, filterStatus],
+  );
+
+  const fileByName = useMemo(
+    () => new Map(queue.map((e) => [e.file.name, e.file])),
+    [queue],
   );
 
   const diotMonthStr = useMemo(
@@ -531,6 +538,12 @@ export default function BatchAnalysisPage({ onProgressUpdate }: BatchAnalysisPag
   useEffect(() => {
     return () => { poolCancelRef.current?.(); };
   }, []);
+
+  // Consume files forwarded from the Inspector FileUpload (N-file redirect)
+  useEffect(() => {
+    if (!pendingFiles?.length) return;
+    setFiles((prev) => dedupeFiles([...prev, ...pendingFiles]));
+  }, [pendingFiles]);
 
   // Run preflight when files are selected
   useEffect(() => {
@@ -970,13 +983,22 @@ export default function BatchAnalysisPage({ onProgressUpdate }: BatchAnalysisPag
                           {donePaddingTop > 0 && <tr><td colSpan={8} style={{ height: `${donePaddingTop}px`, padding: 0 }} /></tr>}
                           {doneVItems.map((vRow) => {
                             const row = doneRows[vRow.index]!;
+                            const isClickable = !!onSelectFile && row.original.status !== 'error';
                             return (
                               <tr
                                 key={row.id}
+                                onClick={isClickable
+                                  ? () => {
+                                      const file = fileByName.get(row.original.filename);
+                                      if (file) onSelectFile(file);
+                                    }
+                                  : undefined}
                                 className={clsx(
                                   'border-b border-gray-100 transition-colors duration-100 last:border-0',
                                   vRow.index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
-                                  'hover:bg-primary-50/30',
+                                  isClickable
+                                    ? 'cursor-pointer hover:bg-primary-50/60'
+                                    : 'hover:bg-primary-50/30',
                                 )}
                                 style={{ height: 36 }}
                               >

@@ -19,6 +19,8 @@ import { getFindingOriginLabel } from './app/utils/findingUtils';
 import AppSidebar, { type AppView } from './components/AppNav';
 import AppHeader from './components/AppHeader';
 import CfdiSummaryHeader from './components/CfdiSummaryHeader';
+import BatchAnalysisPage from './components/BatchAnalysisPage';
+import FloatingBatchWidget, { type BatchProgressStatus } from './components/FloatingBatchWidget';
 import CleanStatePanel from './components/CleanStatePanel';
 import ConceptDetailModal from './components/ConceptDetailModal';
 import ConsultasSATPage from './components/ConsultasSATPage';
@@ -69,10 +71,15 @@ export default function App() {
     analysisStageProgress,
     analysisStageDetail,
     sourceFile,
+    errorMessage,
     handleFileSelect,
     resetAnalysis,
   } = useCfdiAnalysis();
 
+  const [batchFiles, setBatchFiles] = useState<File[] | null>(null);
+  const [fromMasivo, setFromMasivo] = useState(false);
+  const [batchMasivoStatus, setBatchMasivoStatus] = useState<BatchProgressStatus | null>(null);
+  const [widgetDismissed, setWidgetDismissed] = useState(false);
   const [taxAuditExpanded, setTaxAuditExpanded] = useState(false);
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'auditoria' | 'nodo-xml'>('auditoria');
@@ -194,6 +201,20 @@ export default function App() {
     setTaxAuditExpanded(false);
     setSelectedFindingId(null);
     setModifiedXml(null);
+    setBatchFiles(null);
+    setFromMasivo(false);
+  }
+
+  function resetForBatch() {
+    resetAnalysis();
+    resetExtractState();
+    diagnose.reset();
+    satEnquiry.reset();
+    rfcValidation.reset();
+    setTaxAuditExpanded(false);
+    setSelectedFindingId(null);
+    setModifiedXml(null);
+    // batchFiles y fromMasivo se preservan — volvemos al origen
   }
 
   async function handleDownloadPdf(engine: 'playwright' | 'reportlab' = 'playwright', template?: TemplateConfig) {
@@ -289,6 +310,26 @@ export default function App() {
 
       <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
       {activeView === 'consultas-sat' && <ConsultasSATPage />}
+      {/* BatchAnalysisPage stays mounted to preserve pool state when navigating away */}
+      <div className={activeView === 'masivo' ? 'flex h-full flex-col overflow-hidden' : 'hidden'}>
+        <BatchAnalysisPage
+          onProgressUpdate={(status) => {
+            if (status?.phase === 'processing' && status.completed === 0) setWidgetDismissed(false);
+            setBatchMasivoStatus(status);
+          }}
+          pendingFiles={batchFiles}
+          onSelectFile={(file) => {
+            setFromMasivo(true);
+            resetForBatch();
+            handleFileSelect(file, {
+              onBeforeApply: (nextProfile) => {
+                resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
+              },
+            });
+            setActiveView('inspector');
+          }}
+        />
+      </div>
       {activeView === 'emisores' && <EmisoresPage />}
       {activeView === 'pdf-templates' && (
         <PdfTemplatesPage
@@ -300,7 +341,8 @@ export default function App() {
 
       {activeView === 'inspector' && (
         <>
-          {!cfdi ? (
+          {/* FileUpload — solo cuando no hay cfdi cargado */}
+          {!cfdi && (
             <div className="flex-1 flex items-center justify-center p-8 bg-gray-50">
               <div className="max-w-2xl w-full">
                 <div className="mb-8 text-center">
@@ -309,6 +351,7 @@ export default function App() {
                   </p>
                 </div>
                 <FileUpload
+                  multiple
                   onFileSelect={(file) =>
                     handleFileSelect(file, {
                       onBeforeApply: (nextProfile) => {
@@ -316,6 +359,18 @@ export default function App() {
                       },
                     })
                   }
+                  onFilesSelect={(files) => {
+                    if (files.length === 1) {
+                      handleFileSelect(files[0], {
+                        onBeforeApply: (nextProfile) => {
+                          resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
+                        },
+                      });
+                    } else {
+                      setBatchFiles(files);
+                      setActiveView('masivo');
+                    }
+                  }}
                   analysisLabel={analysisStageLabel}
                   analysisProgress={analysisStageProgress}
                   analysisDetail={analysisStageDetail}
@@ -351,14 +406,20 @@ export default function App() {
                 </div>
               </div>
             </div>
-          ) : (
+          )}
+
+          {/* Inspector completo — cuando hay un cfdi cargado */}
+          {cfdi && (
             <>
               <InspectorHeader
                 profileLabel={getProfileLabel(profile)}
                 tableExported={tableExported}
                 tableExportError={tableExportError}
                 onExport={exportCurrentTable}
-                onReset={resetAll}
+                onReset={fromMasivo
+                  ? () => { setFromMasivo(false); resetForBatch(); setActiveView('masivo'); }
+                  : resetAll}
+                backLabel={fromMasivo ? 'Análisis masivo' : undefined}
                 satEnquiryData={satEnquiryData}
                 satLoading={satEnquiry.loading}
                 satResult={satEnquiry.result}
@@ -457,6 +518,14 @@ export default function App() {
       </div>
       </div>
 
+      {/* Floating progress widget — visible when batch is running and user is on another view */}
+      {batchMasivoStatus && batchMasivoStatus.phase === 'processing' && activeView !== 'masivo' && !widgetDismissed && (
+        <FloatingBatchWidget
+          status={batchMasivoStatus}
+          onNavigate={() => setActiveView('masivo')}
+          onDismiss={() => setWidgetDismissed(true)}
+        />
+      )}
     </div>
   );
 }
