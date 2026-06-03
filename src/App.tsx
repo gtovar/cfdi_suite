@@ -28,7 +28,7 @@ import EmisoresPage from './components/EmisoresPage';
 import ExtractWorkspace from './components/ExtractWorkspace';
 import type { ExtractMode } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
-import FileUpload from './components/FileUpload';
+import CfdiAnalysisLoader from './components/CfdiAnalysisLoader';
 import InspectorHeader from './components/InspectorHeader';
 import { type TemplateConfig, DEFAULT_TEMPLATE } from './components/PdfTemplateBuilder';
 import PdfTemplatesPage from './components/PdfTemplatesPage';
@@ -59,7 +59,7 @@ const PAGO_COLUMNS = [
 ] as const;
 
 export default function App() {
-  const [activeView, setActiveView] = useState<AppView>('inspector');
+  const [activeView, setActiveView] = useState<AppView>('masivo');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const {
@@ -343,84 +343,15 @@ export default function App() {
 
       {activeView === 'inspector' && (
         <>
-          {/* FileUpload — solo cuando no hay cfdi cargado */}
+          {/* Loader del análisis — drill-down desde Análisis masivo */}
           {!cfdi && (
             <div className="flex-1 flex items-center justify-center p-8 bg-gray-50">
-              {fromMasivo ? (
-                /* Loader contextual — drill-down desde Análisis masivo */
-                <div className="flex flex-col items-center gap-4 text-center max-w-sm">
-                  <div className="size-10 rounded-full border-4 border-primary-200 border-t-primary-600 animate-spin" />
-                  <div>
-                    <p className="text-sm font-medium text-gray-700 truncate max-w-xs">
-                      {pendingFileName ?? 'Analizando CFDI…'}
-                    </p>
-                    <p className="mt-1 text-xs text-gray-400">{analysisStageLabel}</p>
-                  </div>
-                </div>
-              ) : (
-                /* Pantalla de bienvenida — flujo normal de un solo archivo */
-                <div className="max-w-2xl w-full">
-                  <div className="mb-8 text-center">
-                    <p className="text-xs font-medium uppercase tracking-widest text-gray-400">
-                      Auditoría y Validación de Facturas XML
-                    </p>
-                  </div>
-                  <FileUpload
-                    multiple
-                    onFileSelect={(file) =>
-                      handleFileSelect(file, {
-                        onBeforeApply: (nextProfile) => {
-                          resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
-                        },
-                      })
-                    }
-                    onFilesSelect={(files) => {
-                      if (files.length === 1) {
-                        handleFileSelect(files[0], {
-                          onBeforeApply: (nextProfile) => {
-                            resetForFileSelect(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
-                          },
-                        });
-                      } else {
-                        setBatchFiles(files);
-                        setActiveView('masivo');
-                      }
-                    }}
-                    analysisLabel={analysisStageLabel}
-                    analysisProgress={analysisStageProgress}
-                    analysisDetail={analysisStageDetail}
-                  />
-
-                  {/* Capability map */}
-                  <div className="mt-5 rounded-xl border border-gray-200 bg-white px-5 py-4">
-                    <p className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Qué puedes hacer</p>
-                    <div className="space-y-2">
-                      {([
-                        { dot: 'bg-emerald-400', label: 'Sin configurar nada', desc: 'Leer el XML · Ver todos los campos y conceptos · Validar el formato del RFC · Exportar a Excel' },
-                        { dot: 'bg-blue-400',    label: 'Con credenciales Diverza (una por RFC emisor)', desc: 'Consultar si el CFDI está vigente, cancelado o puede cancelarse ante el SAT' },
-                        { dot: 'bg-violet-400',  label: 'Con e.Firma (una sola para toda la app)', desc: 'Verificar si un RFC existe en el SAT y validar que la Razón Social coincida' },
-                      ] as const).map(({ dot, label, desc }) => (
-                        <div key={label} className="flex items-start gap-3">
-                          <span className={`mt-1.5 size-2 shrink-0 rounded-full ${dot}`} />
-                          <div className="text-xs leading-snug">
-                            <span className="font-medium text-gray-700">{label}</span>
-                            <span className="text-gray-400"> — {desc}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="mt-3 text-[11px] text-gray-400">
-                      Credenciales y e.Firma se configuran en{' '}
-                      <button
-                        onClick={() => setActiveView('emisores')}
-                        className="font-medium text-primary-600 hover:underline"
-                      >
-                        Emisores →
-                      </button>
-                    </p>
-                  </div>
-                </div>
-              )}
+              <CfdiAnalysisLoader
+                fileName={pendingFileName}
+                analysisLabel={analysisStageLabel}
+                analysisProgress={analysisStageProgress}
+                analysisDetail={analysisStageDetail}
+              />
             </div>
           )}
 

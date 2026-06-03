@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { Building2, FileSearch2, FolderOpen, Palette, PanelLeftClose, PanelLeftOpen, Printer, Search, XCircle } from 'lucide-react';
+import { Building2, FolderOpen, Palette, PanelLeftClose, PanelLeftOpen, Printer, Search, XCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 export type AppView = 'inspector' | 'consultas-sat' | 'masivo' | 'reprint' | 'cancelaciones' | 'emisores' | 'pdf-templates';
@@ -19,9 +19,6 @@ interface NavSection {
 }
 
 const NAVIGATION: NavSection[] = [
-  {
-    items: [{ id: 'inspector', label: 'Inspector', hint: 'Carga un XML y analiza el contenido del CFDI', Icon: FileSearch2 }],
-  },
   {
     label: 'Operaciones',
     items: [
