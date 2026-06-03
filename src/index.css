@@ -46,3 +46,38 @@
   0%   { background-color: rgb(254 240 138); border-radius: 2px; }
   100% { background-color: transparent; }
 }
+
+@keyframes row-flash-ok     { from { background-color: #bbf7d0; } to { background-color: transparent; } }
+@keyframes row-flash-yellow { from { background-color: #fef9c3; } to { background-color: transparent; } }
+@keyframes row-flash-red    { from { background-color: #fee2e2; } to { background-color: transparent; } }
+
+.row-flash-ok     { animation: row-flash-ok     1.1s ease-out forwards; }
+.row-flash-yellow { animation: row-flash-yellow 1.1s ease-out forwards; }
+.row-flash-red    { animation: row-flash-red    1.1s ease-out forwards; }
+
+@keyframes modal-fade-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+.modal-fade-in { animation: modal-fade-in 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes insight-slide-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.insight-slide-in { animation: insight-slide-in 300ms ease-out forwards; }
+
+@keyframes float-widget-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.float-widget-in { animation: float-widget-in 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes metric-reveal {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.metric-reveal {
+  opacity: 0;
+  animation: metric-reveal 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
