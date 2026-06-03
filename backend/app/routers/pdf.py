@@ -105,7 +105,7 @@ async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) 
         cfdi = await asyncio.to_thread(CFDI.from_string, xml)
 
         if engine == "reportlab":
-            from app.services.pdf_reportlab import generate_pdf
+            from ..services.pdf_reportlab import generate_pdf
             job.status = "generating_pdf"
             job.pdf = await asyncio.to_thread(generate_pdf, cfdi, template)
             prefix = _uuid_prefix(cfdi)
@@ -188,7 +188,7 @@ async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) 
 @router.post("/api/cfdi/pdf/preview")
 async def preview_pdf(request: Request) -> Response:
     """Generate a fast preview PDF using cached CFDI parse. Used by the template builder."""
-    from app.services.pdf_reportlab import generate_preview
+    from ..services.pdf_reportlab import generate_preview
     form = await request.form(max_part_size=_MAX_UPLOAD)
     file = form["file"]
     xml = await file.read()

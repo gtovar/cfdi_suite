@@ -47,6 +47,7 @@ interface InspectorHeaderProps {
   pdfPhase?: 'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error';
   pdfProgressDetail?: string;
   pdfError?: string;
+  backLabel?: string;
 }
 
 function SatResultBadge({ result }: { result: EnquiryResult }) {
@@ -100,6 +101,7 @@ export default function InspectorHeader({
   pdfPhase = 'idle',
   pdfProgressDetail,
   pdfError,
+  backLabel,
 }: InspectorHeaderProps) {
   const canEnquire = !!satEnquiryData?.rfcEmisor && !satLoading;
   const profileBadge = PROFILE_BADGE[profileLabel];
@@ -125,9 +127,15 @@ export default function InspectorHeader({
       <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={onReset}
-          className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-700"
+          className={clsx(
+            'flex shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-700',
+            backLabel ? 'gap-1.5 px-2.5 h-8' : 'size-8',
+          )}
         >
           <ArrowLeft size={16} />
+          {backLabel && (
+            <span className="text-tiny font-medium leading-none">{backLabel}</span>
+          )}
         </button>
 
         <div className="flex items-center gap-2 min-w-0">

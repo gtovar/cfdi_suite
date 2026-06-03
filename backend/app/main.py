@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
 from .observability import record_analyze_cfdi_error
+from .routers.batch import router as batch_router
 from .routers.emisores import router as emisores_router
 from .routers.pdf import router as pdf_router
 from .routers.rfc_validation import fiel_router
@@ -32,6 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(batch_router)
 app.include_router(emisores_router)
 app.include_router(pdf_router)
 app.include_router(templates_router)

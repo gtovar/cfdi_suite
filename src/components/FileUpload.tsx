@@ -9,6 +9,8 @@ import { motion } from 'motion/react';
 
 interface FileUploadProps {
   onFileSelect: (file: File) => Promise<void> | void;
+  onFilesSelect?: (files: File[]) => void;
+  multiple?: boolean;
   analysisLabel?: string;
   analysisProgress?: number;
   analysisDetail?: string;
@@ -16,6 +18,8 @@ interface FileUploadProps {
 
 export default function FileUpload({
   onFileSelect,
+  onFilesSelect,
+  multiple,
   analysisLabel,
   analysisProgress,
   analysisDetail,
@@ -41,11 +45,17 @@ export default function FileUpload({
     }
   };
 
+  const handleFiles = (raw: FileList | File[]) => {
+    const xmlFiles = Array.from(raw).filter((f) => f.type === 'text/xml' || f.name.endsWith('.xml'));
+    if (xmlFiles.length === 0) { alert('Por favor sube archivos XML válidos.'); return; }
+    if (multiple && xmlFiles.length > 1 && onFilesSelect) { onFilesSelect(xmlFiles); return; }
+    handleFile(xmlFiles[0]);
+  };
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    handleFile(file);
+    handleFiles(e.dataTransfer.files);
   };
 
   return (
@@ -68,8 +78,9 @@ export default function FileUpload({
         ref={fileInputRef}
         className="hidden"
         accept=".xml"
+        multiple={multiple}
         disabled={isLoading}
-        onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+        onChange={(e) => e.target.files && handleFiles(e.target.files)}
       />
       
       {isLoading ? (
@@ -128,15 +139,19 @@ export default function FileUpload({
           <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4">
             <Upload className="text-blue-600 w-8 h-8" />
           </div>
-          
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Cargar XML de Factura</h3>
+
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            {multiple ? 'Cargar facturas XML' : 'Cargar XML de Factura'}
+          </h3>
           <p className="text-sm text-gray-500 text-center max-w-xs">
-            Arrastra tu archivo CFDI aquí o haz clic para buscar en tu equipo.
+            {multiple
+              ? 'Arrastra uno o varios CFDI aquí, o haz clic para seleccionar archivos.'
+              : 'Arrastra tu archivo CFDI aquí o haz clic para buscar en tu equipo.'}
           </p>
-          
+
           <div className="mt-6 flex items-center gap-2 text-xs font-mono text-gray-400">
             <FileText size={14} />
-            <span>Soporta CFDI 3.3 y 4.0</span>
+            <span>{multiple ? 'CFDI 3.3 y 4.0 · individual o en lote' : 'Soporta CFDI 3.3 y 4.0'}</span>
           </div>
         </>
       )}

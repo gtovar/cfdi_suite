@@ -193,8 +193,50 @@ UI: botón partido **"PDF | ⚡ PDF Pro"** en `InspectorHeader`.
 
 ---
 
+### 🟡 Frente G — Carga masiva de XMLs + Reportes batch
+**Deadline:** 23 junio 2026
+
+**Decisión resuelta:** Carga directa (multipart/form-data). No webservice SAT. Local primero.
+
+**Estado al 2026-06-02:**
+
+| Sub-fase | Estado | Archivos |
+|---|---|---|
+| Batch upload + auditoría | ✅ Completado y verificado | `batch.py → POST /api/cfdi/batch/analyze` |
+| DIOT | ✅ Completado y verificado | `batch_reports.py → generate_diot()`, `batch.py → POST /api/cfdi/batch/diot` |
+| IVA/ISR (.xlsx) | 🟡 Pendiente | `batch_reports.py → generate_iva_isr()` (por hacer) |
+| PDF masivo (.zip) | 🟢 Pendiente | Loop Engine B (por hacer) |
+
+**Arquitectura batch:**
+```
+POST /api/cfdi/batch/analyze
+  files: List[UploadFile] → asyncio.gather (semaphore 10) → run_analyze_cfdi() × N
+  → {results:[{filename, status, rfc_emisor, rfc_receptor, total, fecha, findings_count}], summary}
+
+POST /api/cfdi/batch/diot
+  files + year + month + rfc_presentante (opcional)
+  → ElementTree parse × N → agregar IVA por RFC emisor → satcfdi.diot.DIOT.export()
+  → pipe-delimited .txt (windows-1252, formato portal SAT)
+```
+
+**Frontend — página "Análisis masivo":**
+- `src/components/BatchAnalysisPage.tsx` — upload zone + tabla TanStack + chips resumen + sección Reportes
+- Sección Reportes: select Mes, input Año, input RFC presentante (auto-detectado), botón DIOT
+
+**Caveat conocido:** Si todos los XMLs tienen `XAXX010101000` como receptor, el RFC presentante no se auto-detecta y el campo queda vacío — el usuario debe escribirlo manualmente. No hay indicador que avise de este caso.
+
+**Archivos principales:**
+- `backend/app/routers/batch.py` — endpoints `/analyze` y `/diot`
+- `backend/app/services/batch_reports.py` — `_extract_iva_from_xml()`, `generate_diot()`
+- `src/lib/batch-api-client.ts` — `batchAnalyze()`, `batchDiot()`
+- `src/components/BatchAnalysisPage.tsx` — página completa
+
+**Siguiente:** IVA/ISR → openpyxl o satcfdi.accounting → descarga .xlsx desde la sección Reportes.
+
+---
+
 ### 🟢 Frente E — DIOT / Contabilidad electrónica
-**Por qué al final:** Flujo completamente nuevo, no extensión del inspector. Requiere procesar múltiples CFDIs en batch. Alta complejidad UX. Candidato a sección separada de la app.
+**Absorbido por Frente G.** El DIOT es uno de los reportes consolidados del flujo masivo.
 
 ---
 
@@ -236,6 +278,9 @@ UI: botón partido **"PDF | ⚡ PDF Pro"** en `InspectorHeader`.
 | 2026-06-02 | Engine B V1.5: Templates PDF como sección permanente del sidebar, descarga directa ⚡ PDF Pro, localStorage | sesión |
 | 2026-06-02 | Engine B V1.5+: Tipografía (Helvetica/Times/Courier), colores primario+acento, densidad tabla, bordes, A4/Letter, cache CFDI preview 60× más rápido | sesión |
 | 2026-06-02 | Frente F: Canvas Template Editor — dnd-kit sortable, header resize, márgenes, column_widths backend | sesión |
+| 2026-06-02 | Frente G registrado en roadmap: carga masiva + auditoría batch + DIOT/IVA-ISR/PDF masivo. Deadline 23 jun 2026 | este doc |
+| 2026-06-02 | Frente G Fase 1: batch analyze — multipart upload, asyncio semaphore(10), tabla TanStack, chips resumen | sesión |
+| 2026-06-02 | Frente G Fase 2: DIOT — ElementTree IVA extraction, satcfdi.diot.DIOT.export(), sección Reportes en frontend | sesión |
 
 ---
 
@@ -250,6 +295,7 @@ Leer en este orden:
 Si se va a tocar PDF Engine B: leer `backend/app/services/pdf_reportlab.py` y `backend/app/routers/pdf.py`.
 Si se va a tocar el Canvas Editor (Frente F — ya completado): el editor está en `src/components/PdfTemplatesPage.tsx`. Los tipos en `PdfTemplateBuilder.tsx`. `@dnd-kit` ya instalado. Pendiente: UI para `column_widths` (Frente F V2.5).
 Si se va a tocar findings: leer también `src/cfdi/application/cfdiAnalysisAdapter.ts` y `src/app/hooks/useFindingContexts.ts`.
+Si se va a tocar Frente G (carga masiva): leer `backend/app/routers/batch.py` (endpoints analyze+diot), `backend/app/services/batch_reports.py` (lógica DIOT), `src/components/BatchAnalysisPage.tsx` (UI). **Deadline: 23 junio 2026.** Pendiente: IVA/ISR (.xlsx) y PDF masivo (.zip).
 
 ---
 
