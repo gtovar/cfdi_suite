@@ -19,9 +19,7 @@ from .base import (
     ProviderResult,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WRAPPER_PATH = REPO_ROOT / "frontend" / "src" / "cfdi" / "engine" / "python-satcfdi-wrapper.py"
-REPO_VENV_PYTHON = REPO_ROOT / ".venv-satcfdi" / "bin" / "python"
+WRAPPER_PATH = Path(__file__).resolve().parent.parent.parent / "wrappers" / "python-satcfdi-wrapper.py"
 
 
 class PythonSatcfdiProviderError(RuntimeError):
@@ -34,7 +32,7 @@ class PythonSatcfdiProvider(CfdiAnalysisProvider):
     version = None
 
     def analyze(self, xml: str) -> ProviderResult:
-        python_binary = str(REPO_VENV_PYTHON if REPO_VENV_PYTHON.exists() else Path(sys.executable))
+        python_binary = str(Path(sys.executable))
 
         try:
             completed = subprocess.run(
