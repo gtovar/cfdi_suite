@@ -40,7 +40,7 @@ class PythonSatcfdiProvider(CfdiAnalysisProvider):
                 input=xml,
                 capture_output=True,
                 text=True,
-                cwd=REPO_ROOT,
+                cwd=str(WRAPPER_PATH.parent),
                 check=False,
                 timeout=ANALYZE_CFDI_PROVIDER_TIMEOUT_SECONDS,
             )
