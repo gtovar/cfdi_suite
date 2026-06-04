@@ -1,0 +1,27 @@
+name: Deploy Backend → Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-backend.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: cfdi-suite-api
+          region: us-central1
+          source: ./backend
+          env_vars: ALLOWED_ORIGINS=${{ secrets.VERCEL_URL }}
