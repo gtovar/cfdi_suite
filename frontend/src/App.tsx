@@ -61,6 +61,15 @@ const PAGO_COLUMNS = [
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('masivo');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  function handleToggleSidebar() {
+    if (window.innerWidth < 768) {
+      setMobileNavOpen(c => !c);
+    } else {
+      setSidebarCollapsed(c => !c);
+    }
+  }
 
   const {
     profile,
@@ -308,25 +317,33 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex flex-col md:h-screen">
       <AppHeader
         activeView={activeView}
         sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+        onToggleSidebar={handleToggleSidebar}
       />
 
-      <div className="flex flex-1 min-h-0">
+      <div className="relative flex flex-1 md:min-h-0">
+        {mobileNavOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-black/40 md:hidden"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        )}
         <AppSidebar
           activeView={activeView}
           onViewChange={setActiveView}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
         />
 
-      <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
+      <div className="flex flex-1 min-w-0 flex-col md:overflow-hidden">
       {activeView === 'consultas-sat' && <ConsultasSATPage />}
       {/* BatchAnalysisPage stays mounted to preserve pool state when navigating away */}
-      <div className={activeView === 'masivo' ? 'flex h-full flex-col overflow-hidden' : 'hidden'}>
+      <div className={activeView === 'masivo' ? 'flex flex-col md:h-full md:overflow-hidden' : 'hidden'}>
         <BatchAnalysisPage
           onProgressUpdate={(status) => {
             if (status?.phase === 'processing' && status.completed === 0) setWidgetDismissed(false);
@@ -415,7 +432,7 @@ export default function App() {
                 pdfError={pdfError}
               />
 
-              <main className="flex-1 min-h-0 flex flex-col overflow-hidden bg-gray-50 p-4 gap-4">
+              <main className="flex flex-col bg-gray-50 p-4 gap-4 md:flex-1 md:min-h-0 md:overflow-hidden">
                 {/* Fila 1 y 2: ocultas en modo Nodo XML para pantalla limpia */}
                 {inspectorTab !== 'nodo-xml' && (
                   <>
@@ -424,7 +441,7 @@ export default function App() {
                 )}
 
                 {/* Fila 3: [Hallazgos si los hay] + panel principal */}
-                <div className="relative flex flex-1 min-h-0 gap-4 overflow-hidden">
+                <div className="relative flex flex-col gap-4 md:flex-row md:flex-1 md:min-h-0 md:overflow-hidden">
                   {cfdi.findings.length > 0 && (
                     <FindingsSidebar
                       cfdi={cfdi}

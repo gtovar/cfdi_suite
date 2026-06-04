@@ -765,7 +765,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex flex-col md:h-full md:overflow-hidden">
 
       {/* Wrapped modal */}
       {showModal && (
