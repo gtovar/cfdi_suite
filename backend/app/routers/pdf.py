@@ -96,9 +96,6 @@ def _uuid_prefix(cfdi: CFDI) -> str:
 
 
 async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) -> None:
-    from playwright.async_api import async_playwright
-    from pypdf import PdfReader, PdfWriter
-
     job = _jobs[job_id]
     try:
         job.status = "parsing"
@@ -122,6 +119,9 @@ async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) 
         sem = asyncio.Semaphore(MAX_PARALLEL_PAGES)
         results: list[tuple[int, bytes]] = []
         done_count = 0
+
+        from playwright.async_api import async_playwright
+        from pypdf import PdfReader, PdfWriter
 
         async with async_playwright() as p:
             browser = await p.chromium.launch()
