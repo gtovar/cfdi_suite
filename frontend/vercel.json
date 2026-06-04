@@ -2,6 +2,6 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://REPLACE_WITH_CLOUD_RUN_URL/api/:path*" }
+    { "source": "/api/:path*", "destination": "https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app/api/:path*" }
   ]
 }
