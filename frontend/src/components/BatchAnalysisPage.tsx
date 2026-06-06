@@ -187,6 +187,38 @@ function formatDateRange(min: string, max: string): string {
   return min === max ? fmt(min) : `${fmt(min)} – ${fmt(max)}`;
 }
 
+export function computeMonthBreakdown(
+  queue: Array<{ result: { status: string; fecha?: string | null; total?: string | null } | null }>,
+  topN = 3,
+): Array<{ month: string; count: number; monto: number }> {
+  const map = new Map<string, { count: number; monto: number }>();
+  queue.forEach(({ result: r }) => {
+    if (!r || r.status === 'error' || !r.fecha) return;
+    const key = r.fecha.slice(0, 7);
+    const prev = map.get(key) ?? { count: 0, monto: 0 };
+    const n = parseFloat(r.total || '0');
+    map.set(key, { count: prev.count + 1, monto: prev.monto + (isNaN(n) ? 0 : n) });
+  });
+  return [...map.entries()]
+    .map(([month, v]) => ({ month, ...v }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, topN);
+}
+
+export function splitByQuincena(
+  files: File[],
+  getDay: (f: File) => number,
+): { first: File[]; second: File[] } {
+  return files.reduce<{ first: File[]; second: File[] }>(
+    (acc, f) => {
+      const day = getDay(f);
+      (Number.isFinite(day) && day <= 15 ? acc.first : acc.second).push(f);
+      return acc;
+    },
+    { first: [], second: [] },
+  );
+}
+
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function PreflightCard({
@@ -499,19 +531,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     [queue, filterStatus],
   );
 
-  const monthBreakdown = useMemo(() => {
-    const map = new Map<string, { count: number; monto: number }>();
-    queue.forEach(({ result: r }) => {
-      if (!r || r.status === 'error' || !r.fecha) return;
-      const key = r.fecha.slice(0, 7);
-      const prev = map.get(key) ?? { count: 0, monto: 0 };
-      map.set(key, { count: prev.count + 1, monto: prev.monto + parseFloat(r.total || '0') });
-    });
-    return [...map.entries()]
-      .map(([month, v]) => ({ month, ...v }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 3);
-  }, [queue]);
+  const monthBreakdown = useMemo(() => computeMonthBreakdown(queue), [queue]);
 
   const fileByName = useMemo(
     () => new Map(queue.map((e) => [e.file.name, e.file])),
@@ -705,12 +725,10 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
     if (filesToUse.length > 500) {
       const fileByResult = new Map(queue.map((e) => [e.file, e.result]));
-      const firstHalf = filesToUse.filter((f) => {
-        const day = parseInt(fileByResult.get(f)?.fecha?.slice(8, 10) ?? '1');
-        return day <= 15;
-      });
-      const secondHalf = filesToUse.filter((f) => !firstHalf.includes(f));
-      setDiotHalves({ first: firstHalf, second: secondHalf });
+      const halves = splitByQuincena(filesToUse, (f) =>
+        parseInt(fileByResult.get(f)?.fecha?.slice(8, 10) || '1', 10),
+      );
+      setDiotHalves(halves);
       setDiotError(`${filesToUse.length} facturas exceden el límite de 500. Descarga por quincenas:`);
       return;
     }

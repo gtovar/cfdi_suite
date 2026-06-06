@@ -50,6 +50,24 @@ function useCountUp(target: number, duration = 1200): number {
   return value;
 }
 
+export function resolveCompletionStatus(totalProblematic: number, totalFiles: number) {
+  const pct = totalFiles > 0 ? totalProblematic / totalFiles : 0;
+  const headline =
+    totalProblematic === 0 ? '¡Lote impecable!' :
+    pct < 0.05 ? 'Casi perfecto' :
+    pct < 0.25 ? '¡Lote completado!' :
+    'Revisión requerida';
+  const headlineColor =
+    totalProblematic === 0 ? 'text-green-700' :
+    pct < 0.05 ? 'text-green-700' :
+    pct < 0.25 ? 'text-gray-900' :
+    'text-yellow-700';
+  const isHealthy = totalProblematic === 0 || pct < 0.25;
+  const iconBg    = isHealthy ? 'bg-green-100' : 'bg-yellow-100';
+  const iconColor  = isHealthy ? 'text-green-600' : 'text-yellow-600';
+  return { headline, headlineColor, iconBg, iconColor };
+}
+
 export default function BatchCompletionModal({
   totalFiles,
   ok,
@@ -68,21 +86,7 @@ export default function BatchCompletionModal({
   const animatedMonto = useCountUp(totalMonto, 1400);
 
   const totalProblematic = conErrores + errors;
-  const problemPct = totalFiles > 0 ? totalProblematic / totalFiles : 0;
-  const headline =
-    totalProblematic === 0 ? '¡Lote impecable!' :
-    problemPct < 0.05 ? 'Casi perfecto' :
-    problemPct < 0.25 ? '¡Lote completado!' :
-    'Revisión requerida';
-  const headlineColor =
-    totalProblematic === 0 ? 'text-green-700' :
-    problemPct < 0.05 ? 'text-green-700' :
-    problemPct < 0.25 ? 'text-gray-900' :
-    'text-yellow-700';
-  const iconBg =
-    problemPct < 0.25 ? 'bg-green-100' : 'bg-yellow-100';
-  const iconColor =
-    problemPct < 0.25 ? 'text-green-600' : 'text-yellow-600';
+  const { headline, headlineColor, iconBg, iconColor } = resolveCompletionStatus(totalProblematic, totalFiles);
   const filesPerSec = elapsedSeconds > 0 ? (totalFiles / elapsedSeconds).toFixed(1) : null;
 
   useEffect(() => {
