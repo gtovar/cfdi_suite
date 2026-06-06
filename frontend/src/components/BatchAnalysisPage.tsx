@@ -477,6 +477,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const [diotLoading, setDiotLoading] = useState(false);
   const [diotError, setDiotError] = useState<string | null>(null);
   const [diotSuccess, setDiotSuccess] = useState(false);
+  const [diotHalves, setDiotHalves] = useState<{ first: File[]; second: File[] } | null>(null);
 
   // ── Derived ──────────────────────────────────────────────────────────────────
   const stats = useBatchStats(queue, files.length);
@@ -497,6 +498,20 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         .map((e) => e.result!),
     [queue, filterStatus],
   );
+
+  const monthBreakdown = useMemo(() => {
+    const map = new Map<string, { count: number; monto: number }>();
+    queue.forEach(({ result: r }) => {
+      if (!r || r.status === 'error' || !r.fecha) return;
+      const key = r.fecha.slice(0, 7);
+      const prev = map.get(key) ?? { count: 0, monto: 0 };
+      map.set(key, { count: prev.count + 1, monto: prev.monto + parseFloat(r.total || '0') });
+    });
+    return [...map.entries()]
+      .map(([month, v]) => ({ month, ...v }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+  }, [queue]);
 
   const fileByName = useMemo(
     () => new Map(queue.map((e) => [e.file.name, e.file])),
@@ -622,6 +637,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     setDiotRfc('');
     setDiotError(null);
     setDiotSuccess(false);
+    setDiotHalves(null);
     onProgressUpdate?.(null);
   }
 
@@ -688,9 +704,17 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     }
 
     if (filesToUse.length > 500) {
-      setDiotError(`Límite DIOT: ${filesToUse.length} facturas de ${MESES[diotMonth - 1]!} ${diotYear} — divide en períodos más cortos.`);
+      const fileByResult = new Map(queue.map((e) => [e.file, e.result]));
+      const firstHalf = filesToUse.filter((f) => {
+        const day = parseInt(fileByResult.get(f)?.fecha?.slice(8, 10) ?? '1');
+        return day <= 15;
+      });
+      const secondHalf = filesToUse.filter((f) => !firstHalf.includes(f));
+      setDiotHalves({ first: firstHalf, second: secondHalf });
+      setDiotError(`${filesToUse.length} facturas exceden el límite de 500. Descarga por quincenas:`);
       return;
     }
+    setDiotHalves(null);
 
     setDiotLoading(true);
     setDiotError(null);
@@ -701,6 +725,26 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       const a = document.createElement('a');
       a.href = url;
       a.download = `DIOT_${diotRfc || 'PRESENTANTE'}_${diotYear}${String(diotMonth).padStart(2, '0')}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setDiotSuccess(true);
+    } catch (err) {
+      setDiotError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiotLoading(false);
+    }
+  }
+
+  async function handleDiotHalfDownload(halfFiles: File[], suffix: string) {
+    setDiotLoading(true);
+    setDiotError(null);
+    setDiotSuccess(false);
+    try {
+      const blob = await batchDiot(halfFiles, { year: diotYear, month: diotMonth, rfc_presentante: diotRfc });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `DIOT_${diotRfc || 'PRESENTANTE'}_${diotYear}${String(diotMonth).padStart(2, '0')}_${suffix}.txt`;
       a.click();
       URL.revokeObjectURL(url);
       setDiotSuccess(true);
@@ -778,6 +822,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
           elapsedSeconds={elapsedSeconds}
           topEmisor={stats.topEmisores[0] ?? null}
           topMonth={stats.topMonth}
+          monthBreakdown={monthBreakdown}
           onViewTriage={() => setFilterStatus(stats.conErrores > 0 ? 'con_errores' : 'error')}
           onClose={() => setShowModal(false)}
         />
@@ -1098,7 +1143,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
                   <label className="text-tiny font-medium text-gray-500">Mes</label>
                   <select
                     value={diotMonth}
-                    onChange={(e) => setDiotMonth(Number(e.target.value))}
+                    onChange={(e) => { setDiotMonth(Number(e.target.value)); setDiotHalves(null); setDiotError(null); }}
                     className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
                   >
                     {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
@@ -1109,7 +1154,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
                   <input
                     type="number"
                     value={diotYear}
-                    onChange={(e) => setDiotYear(Number(e.target.value))}
+                    onChange={(e) => { setDiotYear(Number(e.target.value)); setDiotHalves(null); setDiotError(null); }}
                     min={2020}
                     max={2099}
                     className="w-20 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
@@ -1147,7 +1192,31 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
                     : `Sin facturas de ${MESES[diotMonth - 1]!} ${diotYear} en el lote analizado`}
                 </p>
               )}
-              {diotError && <p className="mt-2 text-xs text-red-600">{diotError}</p>}
+              {diotError && (
+                <div className="mt-2">
+                  <p className="text-xs text-red-600">{diotError}</p>
+                  {diotHalves && (
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={() => handleDiotHalfDownload(diotHalves.first, 'Q1')}
+                        disabled={diotLoading || diotHalves.first.length === 0}
+                        className="flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {diotLoading ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+                        1ra quincena ({diotHalves.first.length})
+                      </button>
+                      <button
+                        onClick={() => handleDiotHalfDownload(diotHalves.second, 'Q2')}
+                        disabled={diotLoading || diotHalves.second.length === 0}
+                        className="flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {diotLoading ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+                        2da quincena ({diotHalves.second.length})
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>}
 
             {/* Acciones post-análisis */}

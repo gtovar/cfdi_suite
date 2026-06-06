@@ -11,6 +11,7 @@ interface BatchCompletionModalProps {
   elapsedSeconds: number;
   topEmisor: { nombre: string; count: number } | null;
   topMonth: { month: string; count: number } | null;
+  monthBreakdown: Array<{ month: string; count: number; monto: number }>;
   onViewTriage: () => void;
   onClose: () => void;
 }
@@ -58,12 +59,31 @@ export default function BatchCompletionModal({
   elapsedSeconds,
   topEmisor,
   topMonth,
+  monthBreakdown,
   onViewTriage,
   onClose,
 }: BatchCompletionModalProps) {
   const [visible, setVisible] = useState(false);
   const animatedFiles = useCountUp(totalFiles, 900);
   const animatedMonto = useCountUp(totalMonto, 1400);
+
+  const totalProblematic = conErrores + errors;
+  const problemPct = totalFiles > 0 ? totalProblematic / totalFiles : 0;
+  const headline =
+    totalProblematic === 0 ? '¡Lote impecable!' :
+    problemPct < 0.05 ? 'Casi perfecto' :
+    problemPct < 0.25 ? '¡Lote completado!' :
+    'Revisión requerida';
+  const headlineColor =
+    totalProblematic === 0 ? 'text-green-700' :
+    problemPct < 0.05 ? 'text-green-700' :
+    problemPct < 0.25 ? 'text-gray-900' :
+    'text-yellow-700';
+  const iconBg =
+    problemPct < 0.25 ? 'bg-green-100' : 'bg-yellow-100';
+  const iconColor =
+    problemPct < 0.25 ? 'text-green-600' : 'text-yellow-600';
+  const filesPerSec = elapsedSeconds > 0 ? (totalFiles / elapsedSeconds).toFixed(1) : null;
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setVisible(true));
@@ -82,11 +102,11 @@ export default function BatchCompletionModal({
       >
         {/* Header */}
         <div className="mb-4 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100">
-            <CheckCircle2 size={20} className="text-green-600" />
+          <div className={`flex h-10 w-10 items-center justify-center rounded-full ${iconBg}`}>
+            <CheckCircle2 size={20} className={iconColor} />
           </div>
           <div>
-            <p className="text-sm font-bold text-gray-900">¡Lote completado!</p>
+            <p className={`text-sm font-bold ${headlineColor}`}>{headline}</p>
             <p className="text-xs text-gray-400">
               <span className="font-semibold tabular-nums text-gray-700">
                 {animatedFiles.toLocaleString('es-MX')}
@@ -96,10 +116,12 @@ export default function BatchCompletionModal({
           </div>
         </div>
 
-        <div className="mb-4 space-y-2 rounded-xl border border-gray-100 bg-gray-50 p-3">
+        <div className="mb-3 space-y-2 rounded-xl border border-gray-100 bg-gray-50 p-3">
           <div className="metric-reveal flex items-center gap-2 text-xs text-gray-600" style={{ animationDelay: '80ms' }}>
             <Clock size={13} className="shrink-0 text-gray-400" />
-            <span>Tiempo total: <span className="font-semibold text-gray-800">{formatElapsed(elapsedSeconds)}</span></span>
+            <span>Tiempo total: <span className="font-semibold text-gray-800">{formatElapsed(elapsedSeconds)}</span>
+              {filesPerSec && <span className="ml-1 text-gray-400">· {filesPerSec} facts/seg</span>}
+            </span>
           </div>
 
           {totalMonto > 0 && (
@@ -130,7 +152,7 @@ export default function BatchCompletionModal({
             </div>
           )}
 
-          {topMonth && (
+          {topMonth && !monthBreakdown.length && (
             <div className="metric-reveal text-xs text-gray-600" style={{ animationDelay: '400ms' }}>
               <span className="mr-1">📅</span>
               Mes más activo:{' '}
@@ -139,6 +161,24 @@ export default function BatchCompletionModal({
             </div>
           )}
         </div>
+
+        {/* Month breakdown — "Wrapped" style */}
+        {monthBreakdown.length > 0 && (
+          <div className="metric-reveal mb-3 rounded-xl border border-gray-100 bg-gray-50 p-3" style={{ animationDelay: '420ms' }}>
+            <p className="mb-2 text-tiny font-semibold uppercase tracking-wider text-gray-400">📅 Por mes</p>
+            <div className="space-y-1.5">
+              {monthBreakdown.map(({ month, count, monto }) => (
+                <div key={month} className="flex items-center justify-between text-xs">
+                  <span className="text-gray-700">{formatTopMonth(month)}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-gray-800">{count.toLocaleString('es-MX')} facts.</span>
+                    {monto > 0 && <span className="text-gray-400">{formatMonto(monto)}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Status summary */}
         <div className="metric-reveal mb-4 flex gap-2 text-xs" style={{ animationDelay: '480ms' }}>
