@@ -1,10 +1,11 @@
 import clsx from 'clsx';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
   ChevronRight,
   Download,
+  FileDown,
   Filter,
   FolderOpen,
   Loader2,
@@ -14,6 +15,8 @@ import {
   Zap,
 } from 'lucide-react';
 import {
+  type ColumnDef,
+  type Row,
   createColumnHelper,
   flexRender,
   getCoreRowModel,
@@ -23,6 +26,12 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { batchAnalyzePool, batchDiot, type BatchFileResult } from '../lib/batch-api-client';
+import {
+  type PdfConversionState,
+  convertFileToPdf,
+  triggerBlobDownload,
+  Semaphore,
+} from '../lib/pdf-download';
 import { runPreflight, type PreflightSummary } from '../lib/preflight';
 import {
   useBatchStats,
@@ -479,6 +488,69 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
   );
 }
 
+// ── PDF helpers ───────────────────────────────────────────────────────────────
+
+function IndeterminateCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = !!indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      onClick={(e) => e.stopPropagation()}
+      className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 text-primary-600 accent-primary-600"
+    />
+  );
+}
+
+function PdfDownloadButton({
+  state,
+  onClick,
+}: {
+  state: PdfConversionState;
+  onClick: () => void;
+}) {
+  if (state === 'converting') {
+    return <Loader2 size={12} className="animate-spin text-primary-400" />;
+  }
+  if (state === 'done') {
+    return <CheckCircle2 size={12} className="text-green-500" title="PDF descargado" />;
+  }
+  if (state === 'error') {
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); onClick(); }}
+        title="Error — clic para reintentar"
+        className="transition-colors text-red-400 hover:text-red-600"
+      >
+        <XCircle size={12} />
+      </button>
+    );
+  }
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      title="Descargar PDF"
+      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-gray-400 transition-colors hover:bg-primary-50 hover:text-primary-600"
+    >
+      <FileDown size={11} />
+      PDF
+    </button>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBatchNav, pendingFiles }: BatchAnalysisPageProps) {
@@ -510,6 +582,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const [diotError, setDiotError] = useState<string | null>(null);
   const [diotSuccess, setDiotSuccess] = useState(false);
   const [diotHalves, setDiotHalves] = useState<{ first: File[]; second: File[] } | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [pdfStates, setPdfStates] = useState<Map<string, PdfConversionState>>(new Map());
 
   // ── Derived ──────────────────────────────────────────────────────────────────
   const stats = useBatchStats(queue, files.length);
@@ -538,6 +612,79 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     [queue],
   );
 
+  const someAreConverting = useMemo(
+    () => Array.from(selectedRows).some((n) => pdfStates.get(n) === 'converting'),
+    [selectedRows, pdfStates],
+  );
+
+  const handleDownloadPdf = useCallback(async (filename: string) => {
+    const file = fileByName.get(filename);
+    if (!file || pdfStates.get(filename) === 'converting') return;
+    setPdfStates((prev) => new Map(prev).set(filename, 'converting'));
+    try {
+      const buf = await convertFileToPdf(file);
+      triggerBlobDownload(
+        new Blob([buf], { type: 'application/pdf' }),
+        filename.replace(/\.xml$/i, '.pdf'),
+      );
+      setPdfStates((prev) => new Map(prev).set(filename, 'done'));
+    } catch {
+      setPdfStates((prev) => new Map(prev).set(filename, 'error'));
+    }
+  }, [fileByName, pdfStates]);
+
+  const extendedColumns = useMemo((): ColumnDef<BatchFileResult>[] => {
+    const allFiltered = filteredResults.length > 0 && filteredResults.every((r) => selectedRows.has(r.filename));
+    const someFiltered = filteredResults.some((r) => selectedRows.has(r.filename));
+
+    const checkboxCol = colHelper.display({
+      id: '_select',
+      enableSorting: false,
+      header: () => (
+        <IndeterminateCheckbox
+          checked={allFiltered}
+          indeterminate={someFiltered && !allFiltered}
+          onChange={(checked) => {
+            setSelectedRows((prev) => {
+              const next = new Set(prev);
+              filteredResults.forEach((r) => (checked ? next.add(r.filename) : next.delete(r.filename)));
+              return next;
+            });
+          }}
+        />
+      ),
+      cell: (info) => (
+        <IndeterminateCheckbox
+          checked={selectedRows.has(info.row.original.filename)}
+          onChange={(checked) => {
+            setSelectedRows((prev) => {
+              const next = new Set(prev);
+              checked ? next.add(info.row.original.filename) : next.delete(info.row.original.filename);
+              return next;
+            });
+          }}
+        />
+      ),
+    });
+
+    const pdfCol = colHelper.display({
+      id: '_pdf',
+      enableSorting: false,
+      header: () => null,
+      cell: (info) => {
+        if (info.row.original.status === 'error') return null;
+        const filename = info.row.original.filename;
+        const state = pdfStates.get(filename) ?? 'idle';
+        return <PdfDownloadButton state={state} onClick={() => handleDownloadPdf(filename)} />;
+      },
+    });
+
+    // Splice: checkbox at start, pdf before the action chevron at end
+    const dataColumns = COLUMNS.slice(0, -1);
+    const actionColumn = COLUMNS[COLUMNS.length - 1]!;
+    return [checkboxCol, ...dataColumns, pdfCol, actionColumn];
+  }, [filteredResults, selectedRows, pdfStates, handleDownloadPdf]);
+
   const diotMonthStr = useMemo(
     () => `${diotYear}-${String(diotMonth).padStart(2, '0')}`,
     [diotYear, diotMonth],
@@ -550,16 +697,16 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     [queue, diotMonthStr],
   );
 
-  const table = useReactTable({
-    data: filteredResults,
-    columns: COLUMNS,
+  const table = useReactTable<BatchFileResult>({
+    data: filteredResults as BatchFileResult[],
+    columns: extendedColumns,
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
 
-  const doneRows = table.getRowModel().rows;
+  const doneRows: Row<BatchFileResult>[] = table.getRowModel().rows;
   const doneVirtualizer = useVirtualizer({
     count: doneRows.length,
     getScrollElement: () => doneTableRef.current,
@@ -658,6 +805,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     setDiotError(null);
     setDiotSuccess(false);
     setDiotHalves(null);
+    setSelectedRows(new Set());
+    setPdfStates(new Map());
     onProgressUpdate?.(null);
   }
 
@@ -724,7 +873,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     }
 
     if (filesToUse.length > 500) {
-      const fileByResult = new Map(queue.map((e) => [e.file, e.result]));
+      const fileByResult = new Map<File, BatchFileResult | null>(queue.map((e) => [e.file, e.result]));
       const halves = splitByQuincena(filesToUse, (f) =>
         parseInt(fileByResult.get(f)?.fecha?.slice(8, 10) || '1', 10),
       );
@@ -771,6 +920,61 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     } finally {
       setDiotLoading(false);
     }
+  }
+
+  async function handleDownloadSelected() {
+    const filenames = Array.from(selectedRows).filter((n) => pdfStates.get(n) !== 'converting');
+    if (!filenames.length) return;
+
+    if (filenames.length === 1) {
+      await handleDownloadPdf(filenames[0]!);
+      return;
+    }
+
+    const sem = new Semaphore(2);
+    const usedNames = new Set<string>();
+
+    const entries = await Promise.all(
+      filenames.map(async (filename: string) => {
+        await sem.acquire();
+        try {
+          const file = fileByName.get(filename);
+          if (!file) return null;
+          setPdfStates((prev) => new Map(prev).set(filename, 'converting'));
+          const buf = await convertFileToPdf(file);
+          setPdfStates((prev) => new Map(prev).set(filename, 'done'));
+          let pdfName = filename.replace(/\.xml$/i, '.pdf');
+          if (usedNames.has(pdfName)) {
+            const base = pdfName.replace(/\.pdf$/i, '');
+            let i = 1;
+            while (usedNames.has(`${base}_${i}.pdf`)) i++;
+            pdfName = `${base}_${i}.pdf`;
+          }
+          usedNames.add(pdfName);
+          return { name: pdfName, buf };
+        } catch {
+          setPdfStates((prev) => new Map(prev).set(filename, 'error'));
+          return null;
+        } finally {
+          sem.release();
+        }
+      }),
+    );
+
+    const valid = entries.filter(Boolean) as { name: string; buf: ArrayBuffer }[];
+    if (!valid.length) return;
+
+    const { default: JSZip } = await import('jszip');
+    const zip = new JSZip();
+    for (const { name, buf } of valid) {
+      zip.file(name, buf);
+    }
+    const blob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 3 },
+    });
+    triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
   }
 
   function handleRetryFailed() {
@@ -1047,6 +1251,35 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
               <TriageHeader stats={stats} filterStatus={filterStatus} onFilter={setFilterStatus} />
             )}
 
+            {/* Selection toolbar — solo en tab Resultados cuando hay selección */}
+            {doneView === 'resultados' && selectedRows.size > 0 && (
+              <div className="flex items-center gap-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2">
+                <span className="text-xs font-medium text-primary-700">
+                  {selectedRows.size} {selectedRows.size === 1 ? 'seleccionado' : 'seleccionados'}
+                </span>
+                <button
+                  onClick={handleDownloadSelected}
+                  disabled={someAreConverting}
+                  className="flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {someAreConverting
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : <Download size={11} />}
+                  {someAreConverting
+                    ? 'Convirtiendo…'
+                    : selectedRows.size === 1
+                      ? 'Descargar PDF'
+                      : `Descargar ZIP (${selectedRows.size})`}
+                </button>
+                <button
+                  onClick={() => setSelectedRows(new Set())}
+                  className="text-xs text-primary-500 hover:text-primary-700"
+                >
+                  Deseleccionar
+                </button>
+              </div>
+            )}
+
             {/* Results table — solo en tab Resultados */}
             {doneView === 'resultados' && (filteredResults.length > 0 ? (
               <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -1079,7 +1312,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
                           ))}
                         </thead>
                         <tbody>
-                          {donePaddingTop > 0 && <tr><td colSpan={9} style={{ height: `${donePaddingTop}px`, padding: 0 }} /></tr>}
+                          {donePaddingTop > 0 && <tr><td colSpan={table.getAllLeafColumns().length} style={{ height: `${donePaddingTop}px`, padding: 0 }} /></tr>}
                           {doneVItems.map((vRow) => {
                             const row = doneRows[vRow.index]!;
                             const isClickable = !!onSelectFile && row.original.status !== 'error';
@@ -1118,7 +1351,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
                               </tr>
                             );
                           })}
-                          {donePaddingBottom > 0 && <tr><td colSpan={9} style={{ height: `${donePaddingBottom}px`, padding: 0 }} /></tr>}
+                          {donePaddingBottom > 0 && <tr><td colSpan={table.getAllLeafColumns().length} style={{ height: `${donePaddingBottom}px`, padding: 0 }} /></tr>}
                         </tbody>
                       </table>
                     );

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import hashlib
 import io
@@ -9,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 from uuid import uuid4
+from pathlib import Path
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import Response
@@ -21,11 +23,10 @@ router = APIRouter()
 CHUNK_SIZE = 1500
 MAX_PARALLEL_PAGES = 4
 _TIMEOUT_SECONDS = 60
-_MAX_UPLOAD = 50 * 1024 * 1024  # 50 MB
+_ARQ_THRESHOLD = 50_000  # conceptos — por encima de este valor se despacha a ARQ
 
-# Cache de CFDIs parseados para el endpoint de preview (evita re-parsear en cada cambio de template)
 _cfdi_cache: dict[str, tuple[CFDI, float]] = {}
-_CACHE_TTL = 300  # 5 minutos
+_CACHE_TTL = 300
 
 
 async def _get_cfdi_cached(xml: bytes) -> CFDI:
@@ -46,6 +47,7 @@ class _Job:
     pdf: bytes = field(default=b"", repr=False)
     filename: str = "cfdi.pdf"
     error: str = ""
+    is_arq: bool = False  # True → resultado en Redis, no en .pdf
 
 
 _jobs: dict[str, _Job] = {}
@@ -84,10 +86,7 @@ def _extract_conceptos_table(html: str) -> tuple[str, str]:
 
 
 def _build_chunk_html(style: str, thead: str, tbody: str) -> str:
-    return (
-        f"<!DOCTYPE html><html><head>{style}</head>"
-        f"<body><table>{thead}{tbody}</table></body></html>"
-    )
+    return f"<!DOCTYPE html><html><head>{style}</head><body><table>{thead}{tbody}</table></body></html>"
 
 
 def _uuid_prefix(cfdi: CFDI) -> str:
@@ -98,6 +97,20 @@ def _uuid_prefix(cfdi: CFDI) -> str:
 async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) -> None:
     job = _jobs[job_id]
     try:
+        # canvas_pipeline tiene su propio parser (lxml SAX), no necesita satcfdi
+        if engine == "canvas_pipeline":
+            from ..services.pdf_pipeline import generate as pipeline_generate
+            job.status = "generating_pdf"
+            xml_str = xml.decode("utf-8", errors="replace")
+            concepto_count = xml_str.count("<cfdi:Concepto ")
+            job.progress_detail = f"Generando PDF ({concepto_count:,} conceptos)..."
+            template_id = (template or {}).get("_id", "default")
+            html_shell = (template or {}).get("_html_shell")
+            job.pdf = await asyncio.to_thread(pipeline_generate, xml_str, template_id, html_shell)
+            job.status = "done"
+            return
+
+        # reportlab y gopdfsuit necesitan el objeto CFDI de satcfdi
         job.status = "parsing"
         cfdi = await asyncio.to_thread(CFDI.from_string, xml)
 
@@ -110,107 +123,91 @@ async def _process(job_id: str, xml: bytes, engine: str, template: dict | None) 
             job.status = "done"
             return
 
-        chunks = _split_cfdi(cfdi)
-        n = len(chunks)
+        if engine == "gopdfsuit":
+            import httpx
+            job.status = "generating_pdf"
+            job.progress_detail = "Enviando datos al motor Go..."
 
-        job.status = "generating_pdf"
-        job.progress_detail = f"Generando parte 1 de {n}…" if n > 1 else ""
+            final_template = template
+            if not final_template or "elements" not in final_template or not final_template["elements"]:
+                try:
+                    template_path = Path(__file__).resolve().parents[2] / "templates" / "default.json"
+                    if template_path.exists():
+                        final_template = json.loads(template_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    print(f"Error forzando lectura de respaldo: {e}")
 
-        sem = asyncio.Semaphore(MAX_PARALLEL_PAGES)
-        results: list[tuple[int, bytes]] = []
-        done_count = 0
+            payload = {
+                "xml": xml.decode("utf-8", errors="replace"),
+                "template": final_template
+            }
 
-        from playwright.async_api import async_playwright
-        from pypdf import PdfReader, PdfWriter
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "http://localhost:8080/api/v1/generate",
+                    json=payload,
+                    timeout=60.0
+                )
+                if response.status_code != 200:
+                    raise RuntimeError(f"GoPdfSuit falló ({response.status_code}): {response.text}")
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
+                job.pdf = response.content
+                prefix = _uuid_prefix(cfdi)
+                job.filename = f"cfdi-{prefix}.pdf" if prefix else "cfdi.pdf"
+                job.status = "done"
+                return
 
-            async def render_one(idx: int, html: str) -> tuple[int, bytes]:
-                async with sem:
-                    page = await browser.new_page()
-                    await asyncio.wait_for(
-                        page.set_content(html, wait_until="domcontentloaded"),
-                        timeout=_TIMEOUT_SECONDS,
-                    )
-                    pdf = await asyncio.wait_for(
-                        page.pdf(format="Letter", print_background=True),
-                        timeout=_TIMEOUT_SECONDS,
-                    )
-                    await page.close()
-                    return idx, pdf
-
-            # Pipeline: dispatch render tasks as each chunk's HTML becomes ready,
-            # instead of waiting for all HTML before starting any render.
-            render_tasks: list[asyncio.Task[tuple[int, bytes]]] = []
-            head_style = ""
-            for i, c in enumerate(chunks):
-                raw = await asyncio.to_thread(html_str, c)
-                if i == 0:
-                    head_style = _extract_head_styles(raw)
-                    chunk_html = raw
-                else:
-                    thead, tbody = _extract_conceptos_table(raw)
-                    chunk_html = _build_chunk_html(head_style, thead, tbody)
-                render_tasks.append(asyncio.create_task(render_one(i, chunk_html)))
-
-            for coro in asyncio.as_completed(render_tasks):
-                idx, pdf_bytes = await coro
-                results.append((idx, pdf_bytes))
-                done_count += 1
-                job.progress_detail = f"Generando parte {done_count} de {n}…" if n > 1 else ""
-
-            await browser.close()
-
-        writer = PdfWriter()
-        for _, pdf_bytes in sorted(results):
-            writer.append(PdfReader(io.BytesIO(pdf_bytes)))
-        buf = io.BytesIO()
-        writer.write(buf)
-        job.pdf = buf.getvalue()
-
-        prefix = _uuid_prefix(cfdi)
-        job.filename = f"cfdi-{prefix}.pdf" if prefix else "cfdi.pdf"
-        job.progress_detail = ""
-        job.status = "done"
-
-    except asyncio.TimeoutError:
         job.status = "error"
-        job.error = (
-            "Este CFDI tiene demasiados conceptos para generar un PDF completo. "
-            "Prueba exportar a Excel primero."
-        )
+        job.error = "Motor no soportado"
     except Exception as exc:
         job.status = "error"
         job.error = str(exc)
 
 
+# ==============================================================================
+# ENDPOINTS
+# ==============================================================================
+
 @router.post("/api/cfdi/pdf/preview")
 async def preview_pdf(request: Request) -> Response:
-    """Generate a fast preview PDF using cached CFDI parse. Used by the template builder."""
-    from ..services.pdf_reportlab import generate_preview
-    form = await request.form(max_part_size=_MAX_UPLOAD)
+    import httpx
+    form = await request.form()
     file = form["file"]
-    xml = await file.read()
-    template_dict: dict | None = None
+    xml_bytes = await file.read()
+
+    template_dict = {}
     raw_template = form.get("template")
     if raw_template:
         try:
             template_dict = json.loads(raw_template)
         except Exception:
             pass
-    cfdi = await _get_cfdi_cached(xml)
-    pdf_bytes = await asyncio.to_thread(generate_preview, cfdi, template_dict)
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "inline; filename=preview.pdf"},
-    )
+
+    if not template_dict or "elements" not in template_dict or not template_dict["elements"]:
+        try:
+            template_path = Path(__file__).resolve().parents[2] / "templates" / "default.json"
+            if template_path.exists():
+                template_dict = json.loads(template_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    payload = {
+        "xml": xml_bytes.decode("utf-8", errors="replace"),
+        "template": template_dict
+    }
+
+    async with httpx.AsyncClient() as client:
+        go_response = await client.post(
+            "http://localhost:8080/api/v1/generate",
+            json=payload,
+            timeout=30.0
+        )
+        return Response(content=go_response.content, media_type="application/pdf")
 
 
 @router.post("/api/cfdi/pdf/start")
 async def start_pdf_job(request: Request) -> dict:
-    form = await request.form(max_part_size=_MAX_UPLOAD)
+    form = await request.form()
     file = form["file"]
     xml = await file.read()
     engine = form.get("engine", "reportlab")
@@ -221,53 +218,116 @@ async def start_pdf_job(request: Request) -> dict:
             template_dict = json.loads(raw_template)
         except Exception:
             pass
+
     job_id = str(uuid4())
+
+    # Dispatcher: jobs canvas_pipeline con >50k conceptos van a ARQ si Redis está disponible
+    if engine == "canvas_pipeline":
+        xml_str = xml.decode("utf-8", errors="replace")
+        concepto_count = xml_str.count("<cfdi:Concepto ")
+        arq_pool = getattr(request.app.state, "arq_pool", None)
+
+        if concepto_count > _ARQ_THRESHOLD and arq_pool is not None:
+            template_id = (template_dict or {}).get("_id", "default")
+            html_shell = (template_dict or {}).get("_html_shell")
+            xml_b64 = base64.b64encode(xml).decode()
+
+            _jobs[job_id] = _Job(
+                status="queued",
+                progress_detail=f"En cola ARQ ({concepto_count:,} conceptos)",
+                is_arq=True,
+            )
+            await arq_pool.enqueue_job(
+                "generate_heavy_pdf", job_id, xml_b64, template_id, html_shell
+            )
+            return {"jobId": job_id}
+
     _jobs[job_id] = _Job()
     asyncio.create_task(_process(job_id, xml, engine, template_dict))
     return {"jobId": job_id}
 
 
 @router.get("/api/cfdi/pdf/{job_id}/progress")
-async def pdf_progress(job_id: str) -> EventSourceResponse:
+async def pdf_progress(job_id: str, request: Request) -> EventSourceResponse:
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Job no encontrado")
 
     async def _stream() -> AsyncGenerator[dict, None]:
-        last_key = ""
         while True:
             job = _jobs.get(job_id)
             if job is None:
                 break
-            key = f"{job.status}:{job.progress_detail}"
-            if key != last_key:
-                last_key = key
-                yield {
-                    "data": json.dumps({
-                        "status": job.status,
+
+            if job.is_arq:
+                arq_pool = getattr(request.app.state, "arq_pool", None)
+                if arq_pool:
+                    raw = await arq_pool.get(f"pdf:status:{job_id}")
+                    arq_status = raw.decode() if raw else job.status
+                    if arq_status.startswith("error:"):
+                        job.status = "error"
+                        job.error = arq_status[6:]
+                        arq_status = "error"
+                    else:
+                        job.status = arq_status
+                    yield {"data": json.dumps({
+                        "status": arq_status,
                         "progress_detail": job.progress_detail,
                         "error": job.error,
-                    })
-                }
-            if job.status in ("done", "error"):
-                break
-            await asyncio.sleep(0.3)
+                    })}
+                    if arq_status in ("done", "error"):
+                        break
+            else:
+                yield {"data": json.dumps({
+                    "status": job.status,
+                    "progress_detail": job.progress_detail,
+                    "error": job.error,
+                })}
+                if job.status in ("done", "error"):
+                    break
+
+            await asyncio.sleep(0.5)
 
     return EventSourceResponse(_stream())
 
 
 @router.get("/api/cfdi/pdf/{job_id}/status")
-async def pdf_status(job_id: str) -> dict:
+async def pdf_status(job_id: str, request: Request) -> dict:
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job no encontrado")
+
+    if job.is_arq:
+        arq_pool = getattr(request.app.state, "arq_pool", None)
+        if arq_pool:
+            raw = await arq_pool.get(f"pdf:status:{job_id}")
+            status = raw.decode() if raw else job.status
+            if status.startswith("error:"):
+                return {"status": "error", "error": status[6:], "progress_detail": ""}
+            return {"status": status, "error": "", "progress_detail": job.progress_detail}
+
     return {"status": job.status, "error": job.error, "progress_detail": job.progress_detail}
 
 
 @router.get("/api/cfdi/pdf/{job_id}/download")
-async def download_pdf(job_id: str) -> Response:
+async def download_pdf(job_id: str, request: Request) -> Response:
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job no encontrado")
+
+    if job.is_arq:
+        arq_pool = getattr(request.app.state, "arq_pool", None)
+        if arq_pool:
+            pdf_bytes = await arq_pool.get(f"pdf:result:{job_id}")
+            if pdf_bytes is None:
+                raise HTTPException(status_code=409, detail="PDF aún no disponible en Redis")
+            await arq_pool.delete(f"pdf:result:{job_id}", f"pdf:status:{job_id}")
+            _jobs.pop(job_id, None)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f"attachment; filename={job.filename}"},
+            )
+
     if job.status != "done":
         raise HTTPException(status_code=409, detail=f"Job status: {job.status}")
     _jobs.pop(job_id, None)
@@ -276,3 +336,19 @@ async def download_pdf(job_id: str) -> Response:
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={job.filename}"},
     )
+
+
+@router.post("/api/cfdi/pdf/preview-template")
+@router.post("/cfdi/pdf/preview-template")
+async def preview_template(template: dict):
+    try:
+        import httpx
+        fixture_path = Path(__file__).resolve().parents[2] / "test-fixtures" / "pago_h_e951128469_ingreso_ieps_exento.xml"
+        xml_content = fixture_path.read_text(encoding="utf-8")
+        payload = {"xml": xml_content, "template": template}
+
+        async with httpx.AsyncClient() as client:
+            go_response = await client.post("http://localhost:8080/api/v1/generate", json=payload, timeout=30.0)
+            return Response(content=go_response.content, media_type="application/pdf")
+    except Exception as e:
+        return Response(content=f"Error: {str(e)}", status_code=500)

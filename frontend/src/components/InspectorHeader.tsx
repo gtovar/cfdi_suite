@@ -44,6 +44,8 @@ interface InspectorHeaderProps {
   onDownloadModified?: () => void;
   onDownloadPdf?: () => void;
   onDownloadPdfReportlab?: () => void;
+  onDownloadPdfGopdf?: () => void;
+  onDownloadPdfCanvas?: () => void;
   pdfPhase?: 'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error';
   pdfProgressDetail?: string;
   pdfError?: string;
@@ -104,6 +106,8 @@ export default function InspectorHeader({
   onDownloadModified,
   onDownloadPdf,
   onDownloadPdfReportlab,
+  onDownloadPdfGopdf,
+  onDownloadPdfCanvas,
   pdfPhase = 'idle',
   pdfProgressDetail,
   pdfError,
@@ -305,9 +309,27 @@ export default function InspectorHeader({
               <button
                 onClick={onDownloadPdfReportlab}
                 title="PDF personalizado — diseño propio, generación rápida"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors duration-200 hover:bg-blue-50"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors duration-200 hover:bg-blue-50 border-r border-gray-200"
               >
                 ⚡ PDF Pro
+              </button>
+            )}
+            {onDownloadPdfGopdf && (
+              <button
+                onClick={onDownloadPdfGopdf}
+                title="Experimento masivo — Motor GoPdfSuit"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-purple-600 transition-colors duration-200 hover:bg-purple-50 border-r border-gray-200"
+              >
+                🚀 Go PDF
+              </button>
+            )}
+            {onDownloadPdfCanvas && (
+              <button
+                onClick={onDownloadPdfCanvas}
+                title="Canvas Pipeline — header + conceptos streaming + footer, escala a 100k+"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-emerald-600 transition-colors duration-200 hover:bg-emerald-50"
+              >
+                ⚡ Canvas
               </button>
             )}
           </div>

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -8,6 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+# Importamos el parser nativo de Starlette para alterar su configuración global
+from starlette.formparsers import MultiPartParser
 
 from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
 from .observability import record_analyze_cfdi_error
@@ -20,7 +24,43 @@ from .routers.rfc_validation import router as rfc_router
 from .routers.sat_enquiry import router as sat_router
 from .services.analyze_cfdi import run_analyze_cfdi
 
-app = FastAPI(title="cfdi-suite-api", version="0.1.0")
+# === PARCHE GLOBAL DE SEGURIDAD PARA MULTIPART ===
+# Incrementamos el límite por sección a 100 MB para soportar tus XMLs masivos de 50 MB
+MultiPartParser.max_part_size = 100 * 1024 * 1024
+
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    (_BACKEND_ROOT / "shells").mkdir(exist_ok=True)
+    (_BACKEND_ROOT / "templates" / "html").mkdir(parents=True, exist_ok=True)
+
+    # ARQ pool — opcional: si Redis no está disponible, el sistema sigue funcionando
+    # en modo sync. Jobs >50k solo se despachan a ARQ cuando el pool existe.
+    try:
+        from arq import create_pool
+        from arq.connections import RedisSettings
+        app.state.arq_pool = await create_pool(
+            RedisSettings(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", "6379")),
+                conn_timeout=2,
+                max_connections=20,
+            )
+        )
+        print("ARQ: conectado a Redis")
+    except Exception:
+        app.state.arq_pool = None
+        print("ARQ: Redis no disponible — canvas_pipeline corre en modo sync")
+
+    yield
+
+    if getattr(app.state, "arq_pool", None):
+        await app.state.arq_pool.close()
+
+
+app = FastAPI(title="cfdi-suite-api", version="0.1.0", lifespan=_lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 _allowed_origins = os.getenv(

@@ -1,8 +1,8 @@
 import clsx from 'clsx';
-import { Building2, FolderOpen, Palette, PanelLeftClose, PanelLeftOpen, Printer, Search, XCircle } from 'lucide-react';
+import { Building2, FileDown, FolderOpen, Palette, PanelLeftClose, PanelLeftOpen, Search, XCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-export type AppView = 'inspector' | 'consultas-sat' | 'masivo' | 'reprint' | 'cancelaciones' | 'emisores' | 'pdf-templates';
+export type AppView = 'inspector' | 'consultas-sat' | 'masivo' | 'conversion-masiva' | 'cancelaciones' | 'emisores' | 'pdf-templates';
 
 interface NavItem {
   id: AppView;
@@ -24,7 +24,7 @@ const NAVIGATION: NavSection[] = [
     items: [
       { id: 'consultas-sat', label: 'Consultas SAT', hint: 'Verifica si tus CFDIs están vigentes o cancelados — procesa varios a la vez', Icon: Search },
       { id: 'masivo', label: 'Análisis masivo', hint: 'Carga cientos de XMLs, audítalos en batch y descarga reportes (DIOT, IVA/ISR)', Icon: FolderOpen },
-      { id: 'reprint', label: 'Reprint', hint: 'Genera PDF de un CFDI (próximamente)', Icon: Printer, disabled: true, phase: 'F3' },
+      { id: 'conversion-masiva', label: 'Conversión masiva', hint: 'Convierte miles de XMLs a PDF de una sola solicitud', Icon: FileDown },
       { id: 'cancelaciones', label: 'Cancelaciones', hint: 'Envía solicitudes de cancelación al SAT (próximamente)', Icon: XCircle, disabled: true, phase: 'F4' },
     ],
   },

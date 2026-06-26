@@ -1,18 +1,306 @@
 {
-  "id": "default",
-  "name": "Estándar",
-  "description": "Layout limpio con todas las zonas visibles",
-  "primary_color": "#1a56db",
-  "logo_url": null,
-  "footer_note": "",
-  "zones": [
-    { "id": "header",    "visible": true,  "order": 1, "columns": [] },
-    { "id": "emisor",    "visible": true,  "order": 2, "columns": [] },
-    { "id": "receptor",  "visible": true,  "order": 3, "columns": [] },
-    { "id": "conceptos", "visible": true,  "order": 4,
-      "columns": ["#", "ClaveProdServ", "Descripcion", "ClaveUnidad", "Cantidad", "ValorUnitario", "Importe"] },
-    { "id": "impuestos", "visible": true,  "order": 5, "columns": [] },
-    { "id": "timbre",    "visible": true,  "order": 6, "columns": [] },
-    { "id": "footer",    "visible": true,  "order": 7, "columns": [] }
-  ]
+  "config": {
+    "pageBorder": "0:0:0:0",
+    "pageMargin": "36:36:36:36",
+    "page": "A4",
+    "pageAlignment": 1,
+    "watermark": "",
+    "pdfTitle": "Factura Global Masiva - Alta Fidelidad",
+    "pdfaCompliant": true,
+    "signature": {
+      "enabled": false
+    },
+    "embedStandardFonts": true
+  },
+  "title": {
+    "props": "Helvetica:14:100:center",
+    "text": "COMPROBANTE FISCAL DIGITAL POR INTERNET (CFDI)",
+    "bgcolor": "#2D3748",
+    "textcolor": "#FFFFFF",
+    "table": {
+      "maxcolumns": 3,
+      "columnwidths": [
+        1,
+        3,
+        1
+      ],
+      "rows": [
+        {
+          "row": [
+            {
+              "props": "Helvetica:12:000:left",
+              "text": "",
+              "image": null
+            },
+            {
+              "props": "Helvetica:14:100:center",
+              "text": "COMPROBANTE FISCAL DIGITAL POR INTERNET (CFDI)"
+            },
+            {
+              "props": "Helvetica:12:000:right",
+              "text": ""
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "elements": [
+    {
+      "type": "table",
+      "maxcolumns": 2,
+      "columnwidths": [
+        1,
+        1
+      ],
+      "bgcolor": "#FFFFFF",
+      "textcolor": "#2D3748",
+      "rows": [
+        {
+          "row": [
+            {
+              "props": "Helvetica:10:000:left",
+              "text": "EMISOR:\nRFC: {{cfdi.Emisor.Rfc}}\nNombre: {{cfdi.Emisor.Nombre}}\nRégimen Fiscal: {{cfdi.Emisor.RegimenFiscal}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            },
+            {
+              "props": "Helvetica:10:000:left",
+              "text": "RECEPTOR:\nRFC: {{cfdi.Receptor.Rfc}}\nNombre: {{cfdi.Receptor.Nombre}}\nUso CFDI: {{cfdi.Receptor.UsoCFDI}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "spacer",
+      "height": 15
+    },
+    {
+      "type": "table",
+      "maxcolumns": 4,
+      "columnwidths": [
+        1.8,
+        1.2,
+        1.2,
+        1.2
+      ],
+      "rows": [
+        {
+          "row": [
+            {
+              "props": "Helvetica:9:100:center",
+              "text": "Folio Fiscal (UUID)",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            },
+            {
+              "props": "Helvetica:9:100:center",
+              "text": "No. Certificado SAT",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            },
+            {
+              "props": "Helvetica:9:100:center",
+              "text": "Fecha Emisión",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            },
+            {
+              "props": "Helvetica:9:100:center",
+              "text": "Tipo Comprobante",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            }
+          ]
+        },
+        {
+          "row": [
+            {
+              "props": "Helvetica:9:000:center",
+              "text": "{{cfdi.TimbreFiscalDigital.UUID}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            },
+            {
+              "props": "Helvetica:9:000:center",
+              "text": "{{cfdi.NoCertificado}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            },
+            {
+              "props": "Helvetica:9:000:center",
+              "text": "{{cfdi.Fecha}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            },
+            {
+              "props": "Helvetica:9:000:center",
+              "text": "{{cfdi.TipoDeComprobante}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "spacer",
+      "height": 15
+    },
+    {
+      "type": "table",
+      "maxcolumns": 5,
+      "columnwidths": [
+        1,
+        0.7,
+        3.2,
+        1.2,
+        1.4
+      ],
+      "rows": [
+        {
+          "row": [
+            {
+              "props": "Helvetica:9:100:center",
+              "text": "Clave",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            },
+            {
+              "props": "Helvetica:9:100:center",
+              "text": "Cant.",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            },
+            {
+              "props": "Helvetica:9:100:left",
+              "text": "Descripción",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            },
+            {
+              "props": "Helvetica:9:100:right",
+              "text": "Precio Unit.",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            },
+            {
+              "props": "Helvetica:9:100:right",
+              "text": "Importe",
+              "bgcolor": "#2D3748",
+              "textcolor": "#FFFFFF"
+            }
+          ]
+        },
+        {
+          "row": [
+            {
+              "props": "Helvetica:9:000:center",
+              "text": "{{conceptos.ClaveProdServ}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            },
+            {
+              "props": "Helvetica:9:100:center",
+              "text": "{{conceptos.Cantidad}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            },
+            {
+              "props": "Helvetica:9:000:left",
+              "text": "{{conceptos.Descripcion}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748",
+              "wrap": true
+            },
+            {
+              "props": "Helvetica:9:000:right",
+              "text": "{{conceptos.ValorUnitario}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            },
+            {
+              "props": "Helvetica:9:100:right",
+              "text": "{{conceptos.Importe}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "spacer",
+      "height": 15
+    },
+    {
+      "type": "table",
+      "maxcolumns": 2,
+      "columnwidths": [
+        2.3,
+        1.7
+      ],
+      "rows": [
+        {
+          "row": [
+            {
+              "props": "Helvetica:8:000:left",
+              "text": "Moneda: {{cfdi.Moneda}}   |   Forma Pago: {{cfdi.FormaPago}}   |   Método Pago: {{cfdi.MetodoPago}}",
+              "bgcolor": "#FFFFFF",
+              "textcolor": "#4A5568"
+            },
+            {
+              "props": "Helvetica:10:100:right",
+              "text": "Subtotal:   {{cfdi.SubTotal}}\nIVA (16%):   {{cfdi.Impuestos.TotalImpuestosTrasladados}}\nTotal:   {{cfdi.Total}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#2D3748"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "spacer",
+      "height": 15
+    },
+    {
+      "type": "table",
+      "maxcolumns": 2,
+      "columnwidths": [
+        0.6,
+        3.4
+      ],
+      "rows": [
+        {
+          "row": [
+            {
+              "props": "Helvetica:9:000:center",
+              "text": "{{cfdi.QR}}",
+              "bgcolor": "#FFFFFF",
+              "width": 74.5
+            },
+            {
+              "props": "Helvetica:7:000:left",
+              "text": "Folio Fiscal (UUID): {{cfdi.TimbreFiscalDigital.UUID}}\nNo. Certificado SAT: {{cfdi.NoCertificado}}\nFecha Certificación: {{cfdi.Fecha}}\n\nCadena Original del SAT:\n{{cfdi.CadenaOriginal}}\n\nSello Digital del Emisor:\n{{cfdi.Sello}}",
+              "bgcolor": "#FAFAFA",
+              "textcolor": "#4A5568",
+              "width": 448.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "spacer",
+      "height": 20
+    }
+  ],
+  "footer": {
+    "font": "Helvetica:7:000:center",
+    "text": "ESTE DOCUMENTO ES UNA REPRESENTACIÓN IMPRESA DE UN CFDI V4.0 — GENERADO EN ALTA VELOCIDAD"
+  },
+  "bookmarks": null
 }

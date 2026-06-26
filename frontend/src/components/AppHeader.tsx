@@ -6,7 +6,7 @@ const BREADCRUMBS: Record<AppView, { section: string; label: string }> = {
   inspector: { section: 'CFDI Suite', label: 'Inspector' },
   'consultas-sat': { section: 'Operaciones', label: 'Consultas SAT' },
   masivo: { section: 'Operaciones', label: 'Análisis masivo' },
-  reprint: { section: 'Operaciones', label: 'Reprint' },
+  'conversion-masiva': { section: 'Operaciones', label: 'Conversión masiva' },
   cancelaciones: { section: 'Operaciones', label: 'Cancelaciones' },
   emisores: { section: 'Configuración', label: 'Emisores' },
   'pdf-templates': { section: 'Configuración', label: 'Templates PDF' },

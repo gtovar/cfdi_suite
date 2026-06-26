@@ -35,3 +35,7 @@ Users/
 amigo/
 tailux/
 .vercel/
+
+# Canvas pipeline — generados en runtime, no versionar
+backend/shells/
+backend/templates/html/

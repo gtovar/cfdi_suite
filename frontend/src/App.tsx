@@ -32,9 +32,11 @@ import CfdiAnalysisLoader from './components/CfdiAnalysisLoader';
 import InspectorHeader from './components/InspectorHeader';
 import { type TemplateConfig, DEFAULT_TEMPLATE } from './components/PdfTemplateBuilder';
 import PdfTemplatesPage from './components/PdfTemplatesPage';
+import ConversionMasivaPage from './components/ConversionMasivaPage';
 import ResolutionPanel from './components/ResolutionPanel';
 import TaxAuditPanel from './components/TaxAuditPanel';
 import XmlNodeViewer from './components/XmlNodeViewer';
+import Editor from './pages/Editor';
 
 const INGRESO_COLUMNS = [
   { key: 'uuid', label: 'UUID' },
@@ -241,7 +243,7 @@ export default function App() {
     // activeView permanece en 'inspector'
   }
 
-  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' = 'reportlab', template?: TemplateConfig) {
+  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' | 'gopdfsuit' | 'canvas_pipeline' = 'reportlab', template?: TemplateConfig) {
     if (!sourceFile) return;
     setPdfPhase('parsing');
     setPdfError(undefined);
@@ -367,15 +369,17 @@ export default function App() {
           }}
         />
       </div>
+      {activeView === 'conversion-masiva' && <ConversionMasivaPage />}
       {activeView === 'emisores' && <EmisoresPage />}
       {activeView === 'pdf-templates' && (
-        <PdfTemplatesPage
-          sourceFile={sourceFile ?? null}
-          savedTemplate={templateConfig}
-          onSave={handleSaveTemplate}
-        />
+          <div className="flex-1 flex flex-col md:h-full md:overflow-hidden">
+          {/* Cargamos el editor financiero premium directo en tu pantalla */}
+          <Editor 
+          initialTemplate={templateConfig} 
+          onSave={handleSaveTemplate} 
+          />
+          </div>
       )}
-
       {activeView === 'inspector' && (
         <>
           {/* Loader del análisis — drill-down desde Análisis masivo */}
@@ -427,6 +431,8 @@ export default function App() {
                 onDownloadModified={handleDownloadModified}
                 onDownloadPdf={sourceFile && pdfPhase === 'idle' ? handleDownloadPdf : undefined}
                 onDownloadPdfReportlab={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('reportlab', templateConfig) : undefined}
+                onDownloadPdfGopdf={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('gopdfsuit', templateConfig) : undefined}
+                onDownloadPdfCanvas={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('canvas_pipeline') : undefined}
                 pdfPhase={pdfPhase}
                 pdfProgressDetail={pdfProgressDetail}
                 pdfError={pdfError}
