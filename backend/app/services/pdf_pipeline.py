@@ -3,10 +3,10 @@ pdf_pipeline.py — Orquestador de las tres capas XML→PDF.
 
 Flujo:
   1. Parse XML (SAX, O(1) memoria)
-  2. Shell HTML → WeasyPrint (header, 1 página, datos del CFDI)
-  3. Conceptos → rl_canvas page-streaming (N páginas, rápido)
-  4. Footer → rl_canvas (totales, impuestos, sello, 1-2 páginas)
-  5. Merge: [shell] + [conceptos] + [footer] con pypdf
+  2. Header HTML → WeasyPrint (página 1 — diseñable por el usuario)
+  3. Conceptos → rl_canvas page-streaming (páginas 2..N, O(N), rápido)
+  4. Footer inline en el último chunk de canvas
+  5. Merge: [header_pdf] + [body_pdf] con pypdf
 """
 from __future__ import annotations
 
@@ -41,9 +41,9 @@ def generate(
     Genera un PDF completo a partir de un XML CFDI.
 
     Estructura:
-      - Página 1: card de encabezado (emisor/receptor/datos/total) + tabla de conceptos
-      - Páginas 2..N: continuación de la tabla
-      - Última página: footer con totales consolidados, UUID
+      - Página 1: header HTML/CSS (WeasyPrint) — editable desde Templates PDF
+      - Páginas 2..N: tabla de conceptos en canvas streaming
+      - Última página: footer con totales, UUID
     """
     if isinstance(xml_str, bytes):
         xml_str = xml_str.decode("utf-8", errors="replace")
@@ -51,6 +51,14 @@ def generate(
     # 1. Parse XML (SAX, O(1) memoria)
     cfdi_data, rows = parse_xml_to_rows(xml_str)
 
-    # 2. Todo en un solo PDF: header card + conceptos + footer inline
+    # 2. Header: WeasyPrint renderiza el template HTML guardado por el usuario
+    from .shell_service import get_html_template, render_shell
+    html_template = html_shell or get_html_template(template_id)
+    header_pdf = render_shell(html_template, cfdi_data)
+
+    # 3. Cuerpo: canvas streaming, sin el card de encabezado (ya viene de WeasyPrint)
     n_workers = workers or min(8, cpu_count())
-    return render_conceptos(rows, cfdi_data=cfdi_data, workers=n_workers)
+    body_pdf = render_conceptos(rows, cfdi_data=cfdi_data, workers=n_workers, skip_header_card=True)
+
+    # 4. Merge: [header page] + [tabla + footer]
+    return _merge([header_pdf, body_pdf])

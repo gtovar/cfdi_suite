@@ -36,7 +36,7 @@ import ConversionMasivaPage from './components/ConversionMasivaPage';
 import ResolutionPanel from './components/ResolutionPanel';
 import TaxAuditPanel from './components/TaxAuditPanel';
 import XmlNodeViewer from './components/XmlNodeViewer';
-import Editor from './pages/Editor';
+import HtmlTemplateEditor from './components/HtmlTemplateEditor';
 
 const INGRESO_COLUMNS = [
   { key: 'uuid', label: 'UUID' },
@@ -372,12 +372,8 @@ export default function App() {
       {activeView === 'conversion-masiva' && <ConversionMasivaPage />}
       {activeView === 'emisores' && <EmisoresPage />}
       {activeView === 'pdf-templates' && (
-          <div className="flex-1 flex flex-col md:h-full md:overflow-hidden">
-          {/* Cargamos el editor financiero premium directo en tu pantalla */}
-          <Editor 
-          initialTemplate={templateConfig} 
-          onSave={handleSaveTemplate} 
-          />
+          <div className="flex flex-1 flex-col min-h-0 overflow-hidden p-4">
+            <HtmlTemplateEditor templateId="default" />
           </div>
       )}
       {activeView === 'inspector' && (

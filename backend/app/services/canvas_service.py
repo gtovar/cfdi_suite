@@ -345,12 +345,13 @@ def _render_last_chunk(rows: list[dict], start_idx: int, cfdi_data: dict) -> byt
     return buf.getvalue()
 
 
-def _render_first_chunk(rows: list[dict], cfdi_data: dict) -> bytes:
-    """Primera página: card de encabezado + tabla. Spawn-safe."""
+def _render_first_chunk(rows: list[dict], cfdi_data: dict, skip_header_card: bool = False) -> bytes:
+    """Primera página: card de encabezado (opcional) + tabla. Spawn-safe."""
     buf = io.BytesIO()
     cv = rl_canvas.Canvas(buf, pagesize=A4)
     y = H - MARGIN
-    y = _draw_card_header(cv, y, cfdi_data)
+    if not skip_header_card:
+        y = _draw_card_header(cv, y, cfdi_data)
     y = _draw_table_header(cv, y)
 
     for idx, row in enumerate(rows):
@@ -364,12 +365,13 @@ def _render_first_chunk(rows: list[dict], cfdi_data: dict) -> bytes:
     return buf.getvalue()
 
 
-def _render_single(rows: list[dict], cfdi_data: dict) -> bytes:
-    """Caso N <= 2000: header + conceptos + footer en un solo canvas. Spawn-safe."""
+def _render_single(rows: list[dict], cfdi_data: dict, skip_header_card: bool = False) -> bytes:
+    """Caso N <= 2000: header (opcional) + conceptos + footer en un solo canvas. Spawn-safe."""
     buf = io.BytesIO()
     cv = rl_canvas.Canvas(buf, pagesize=A4)
     y = H - MARGIN
-    y = _draw_card_header(cv, y, cfdi_data)
+    if not skip_header_card:
+        y = _draw_card_header(cv, y, cfdi_data)
     y = _draw_table_header(cv, y)
 
     for idx, row in enumerate(rows):
@@ -401,22 +403,28 @@ def _merge_pdfs(pdf_list: list[bytes]) -> bytes:
 
 # ── API pública ───────────────────────────────────────────────────────────────
 
-def render_conceptos(rows: list[dict], cfdi_data: dict, workers: int | None = None) -> bytes:
+def render_conceptos(
+    rows: list[dict],
+    cfdi_data: dict,
+    workers: int | None = None,
+    skip_header_card: bool = False,
+) -> bytes:
     """
-    Genera el PDF completo: header card + conceptos + footer inline.
+    Genera el PDF de conceptos + footer inline.
 
-    N <= 2000: single-process, todo en un canvas.
-    N > 2000: first chunk (header), chunks intermedios, last chunk (footer inline).
+    skip_header_card=True: omite el card de encabezado (cuando el header viene de WeasyPrint).
+    N <= 2000: single-process.
+    N > 2000: chunks en paralelo con ProcessPoolExecutor.
     """
     if len(rows) <= 2000:
-        return _render_single(rows, cfdi_data)
+        return _render_single(rows, cfdi_data, skip_header_card=skip_header_card)
 
     n_workers = min(workers or _WORKERS, _WORKERS)
     chunks = [rows[i:i + _CHUNK_SIZE] for i in range(0, len(rows), _CHUNK_SIZE)]
     starts = [i * _CHUNK_SIZE for i in range(len(chunks))]
 
     with ProcessPoolExecutor(max_workers=n_workers) as ex:
-        futures = [ex.submit(_render_first_chunk, chunks[0], cfdi_data)]
+        futures = [ex.submit(_render_first_chunk, chunks[0], cfdi_data, skip_header_card)]
         for chunk, start in zip(chunks[1:-1], starts[1:-1]):
             futures.append(ex.submit(_render_chunk, chunk, start))
         if len(chunks) > 1:

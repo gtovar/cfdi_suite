@@ -26,88 +26,130 @@ DEFAULT_HEADER_HTML = """\
 <head>
 <meta charset="UTF-8">
 <style>
-  @page { size: A4; margin: 24px; }
+  @page { size: A4; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Helvetica, Arial, sans-serif; font-size: 11px;
-         color: #2D3748; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 10px;
+    color: #2D3748;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .top-bar { background: #1A365D; height: 8px; }
+
+  .content { padding: 28px 32px 24px; }
+
+  .doc-header {
+    border-bottom: 1px solid #E2E8F0;
+    padding-bottom: 14px;
+    margin-bottom: 20px;
+  }
+  .doc-title {
+    font-size: 15px; font-weight: 700; color: #1A365D;
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .doc-subtitle {
+    font-size: 8px; color: #A0AEC0; text-transform: uppercase;
+    letter-spacing: 1px; margin-top: 3px;
+  }
 
   .card {
-    background: #fff;
     border: 1px solid #E2E8F0;
-    border-radius: 12px;
-    padding: 24px;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-  }
-  .card::before {
-    content: "";
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 4px;
-    background: linear-gradient(90deg, #1A365D 0%, #2B6CB0 100%);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
   }
 
-  .title { font-size: 20px; font-weight: 700; color: #1A365D;
-           text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
-  .subtitle { font-size: 9px; color: #A0AEC0; text-transform: uppercase;
-              letter-spacing: 1px; margin-bottom: 18px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
 
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-  .block h3 { font-size: 10px; color: #2B6CB0; font-weight: 700;
-              text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
-  .block p  { color: #4A5568; line-height: 1.6; margin-bottom: 2px; }
-  .block strong { color: #1A365D; }
-
-  .badge {
-    display: inline-block;
-    background: #EBF8FF; color: #2B6CB0;
-    border: 1px solid #BEE3F8;
-    border-radius: 6px;
-    padding: 2px 8px;
-    font-size: 9px; font-weight: 600; font-family: monospace;
-    margin-top: 4px;
+  .section-label {
+    font-size: 8px; font-weight: 700; color: #2B6CB0;
+    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px;
   }
-  .total-badge {
-    display: inline-block;
-    background: #F0FFF4; color: #276749;
+  .entity-name { font-size: 11px; font-weight: 700; color: #1A365D; margin-bottom: 4px; }
+  .field { color: #4A5568; line-height: 1.7; }
+  .field strong { color: #2D3748; }
+
+  .divider { border: none; border-top: 1px solid #E2E8F0; margin: 14px 0; }
+
+  .total-box {
+    background: #F0FFF4;
     border: 1px solid #9AE6B4;
     border-radius: 6px;
-    padding: 3px 10px;
-    font-weight: 700; font-size: 13px;
+    padding: 10px 14px;
+    text-align: center;
+  }
+  .total-label { font-size: 8px; color: #276749; text-transform: uppercase; font-weight: 700; }
+  .total-amount { font-size: 17px; font-weight: 700; color: #276749; margin-top: 3px; }
+
+  .uuid-bar {
+    background: #F7FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 8px 14px;
+  }
+  .uuid-label { font-size: 7px; font-weight: 700; color: #2B6CB0; text-transform: uppercase; }
+  .uuid-value {
+    font-size: 8px; font-family: Courier, monospace;
+    color: #4A5568; margin-top: 3px; word-break: break-all;
   }
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="title">Comprobante Fiscal Digital por Internet</div>
-  <div class="subtitle">CFDI 4.0 — Representación Impresa</div>
+<div class="top-bar"></div>
+<div class="content">
 
-  <div class="grid">
-    <div class="block">
-      <h3>Emisor</h3>
-      <p><strong>{{emisor_nombre}}</strong></p>
-      <p>RFC: {{emisor_rfc}}</p>
-      <p>Régimen: {{emisor_regimen}}</p>
+  <div class="doc-header">
+    <div class="doc-title">Comprobante Fiscal Digital por Internet</div>
+    <div class="doc-subtitle">CFDI 4.0 — Representación Impresa</div>
+  </div>
+
+  <div class="card">
+    <div class="grid-2">
+      <div>
+        <div class="section-label">Emisor</div>
+        <div class="entity-name">{{emisor_nombre}}</div>
+        <div class="field"><strong>RFC:</strong> {{emisor_rfc}}</div>
+        <div class="field"><strong>Régimen:</strong> {{emisor_regimen}}</div>
+      </div>
+      <div>
+        <div class="section-label">Receptor</div>
+        <div class="entity-name">{{receptor_nombre}}</div>
+        <div class="field"><strong>RFC:</strong> {{receptor_rfc}}</div>
+        <div class="field"><strong>Uso CFDI:</strong> {{receptor_uso}}</div>
+      </div>
     </div>
-    <div class="block">
-      <h3>Receptor</h3>
-      <p><strong>{{receptor_nombre}}</strong></p>
-      <p>RFC: {{receptor_rfc}}</p>
-      <p>Uso CFDI: {{receptor_uso}}</p>
-    </div>
-    <div class="block">
-      <h3>Datos del Comprobante</h3>
-      <p>Fecha: {{fecha}}</p>
-      <p>Serie / Folio: {{serie}} / {{folio}}</p>
-      <p>Moneda: {{moneda}}</p>
-    </div>
-    <div class="block">
-      <h3>Total</h3>
-      <p class="total-badge">{{moneda}} ${{total}}</p>
-      <p style="margin-top:6px">Subtotal: ${{subtotal}}</p>
+
+    <hr class="divider">
+
+    <div class="grid-3">
+      <div>
+        <div class="section-label">Datos del Comprobante</div>
+        <div class="field"><strong>Fecha:</strong> {{fecha}}</div>
+        <div class="field"><strong>Serie/Folio:</strong> {{serie}}/{{folio}}</div>
+        <div class="field"><strong>Moneda:</strong> {{moneda}}</div>
+      </div>
+      <div>
+        <div class="section-label">Importes</div>
+        <div class="field"><strong>Subtotal:</strong> ${{subtotal}}</div>
+      </div>
+      <div>
+        <div class="total-box">
+          <div class="total-label">Total</div>
+          <div class="total-amount">{{moneda}} ${{total}}</div>
+        </div>
+      </div>
     </div>
   </div>
+
+  <div class="uuid-bar">
+    <div class="uuid-label">Folio Fiscal (UUID)</div>
+    <div class="uuid-value">{{uuid}}</div>
+  </div>
+
 </div>
 </body>
 </html>
@@ -139,6 +181,7 @@ def _fill_placeholders(html: str, cfdi_data: dict) -> str:
     emisor   = cfdi_data.get("emisor", {})
     receptor = cfdi_data.get("receptor", {})
     totales  = cfdi_data.get("totales", {})
+    timbre   = cfdi_data.get("timbre", {})
     replacements = {
         "{{emisor_nombre}}":   emisor.get("nombre", ""),
         "{{emisor_rfc}}":      emisor.get("rfc", ""),
@@ -152,10 +195,17 @@ def _fill_placeholders(html: str, cfdi_data: dict) -> str:
         "{{moneda}}":          cfdi_data.get("moneda", "MXN"),
         "{{total}}":           totales.get("total", ""),
         "{{subtotal}}":        totales.get("subtotal", ""),
+        "{{uuid}}":            timbre.get("uuid", ""),
     }
     for placeholder, value in replacements.items():
         html = html.replace(placeholder, str(value))
     return html
+
+
+def render_shell(html_template: str, cfdi_data: dict) -> bytes:
+    """Renderiza el header HTML con datos reales del CFDI. Sin caché (cada factura tiene datos únicos)."""
+    filled = _fill_placeholders(html_template, cfdi_data)
+    return HTML(string=filled, base_url=None).write_pdf()
 
 
 def render_shell_preview(html: str) -> bytes:
