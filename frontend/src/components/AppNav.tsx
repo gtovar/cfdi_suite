@@ -58,10 +58,10 @@ export default function AppSidebar({
     <div
       className={clsx(
         'flex h-full flex-col overflow-hidden border-r border-gray-200 bg-white transition-[width,transform] duration-200 ease-in-out',
-        'fixed inset-y-0 left-0 z-40 w-72 shrink-0',
+        'fixed inset-y-0 left-0 z-40 w-64 shrink-0',
         mobileOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full',
         'md:relative md:inset-y-auto md:left-auto md:z-auto md:translate-x-0 md:shadow-none',
-        collapsed ? 'md:w-[72px]' : 'md:w-72',
+        collapsed ? 'md:w-[60px]' : 'md:w-52',
       )}
     >
       {/* Brand — same height as AppHeader */}

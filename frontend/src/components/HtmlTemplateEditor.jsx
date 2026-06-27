@@ -137,12 +137,12 @@ export default function HtmlTemplateEditor({ templateId = TEMPLATE_ID }) {
           </span>
         )}
         <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'hsl(var(--muted-foreground))' }}>
-          Placeholders: {'{{'} emisor_nombre {'}}'},  {'{{'} receptor_nombre {'}}'},  {'{{'} total {'}}'},  {'{{'} fecha {'}}'}
+          Placeholders: {'{{'} emisor_nombre {'}}'} {'{{'} receptor_nombre {'}}'} {'{{'} total {'}}'} {'{{'} fecha {'}}'} {'{{'} uuid {'}}'}
         </span>
       </div>
 
       {/* Split panes */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', flex: 1, minHeight: 0 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '5fr 8fr', gap: '0.75rem', flex: 1, minHeight: 0 }}>
         {/* Editor */}
         <div style={{
           display: 'flex',

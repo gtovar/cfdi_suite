@@ -345,13 +345,21 @@ def _render_last_chunk(rows: list[dict], start_idx: int, cfdi_data: dict) -> byt
     return buf.getvalue()
 
 
-def _render_first_chunk(rows: list[dict], cfdi_data: dict, skip_header_card: bool = False) -> bytes:
+def _render_first_chunk(
+    rows: list[dict],
+    cfdi_data: dict,
+    skip_header_card: bool = False,
+    header_reserve: float = 0.0,
+) -> bytes:
     """Primera página: card de encabezado (opcional) + tabla. Spawn-safe."""
     buf = io.BytesIO()
     cv = rl_canvas.Canvas(buf, pagesize=A4)
-    y = H - MARGIN
     if not skip_header_card:
+        y = H - MARGIN
         y = _draw_card_header(cv, y, cfdi_data)
+    else:
+        # Reserva espacio para el header HTML estampado encima
+        y = H - header_reserve if header_reserve > 0 else H - MARGIN
     y = _draw_table_header(cv, y)
 
     for idx, row in enumerate(rows):
@@ -365,13 +373,20 @@ def _render_first_chunk(rows: list[dict], cfdi_data: dict, skip_header_card: boo
     return buf.getvalue()
 
 
-def _render_single(rows: list[dict], cfdi_data: dict, skip_header_card: bool = False) -> bytes:
+def _render_single(
+    rows: list[dict],
+    cfdi_data: dict,
+    skip_header_card: bool = False,
+    header_reserve: float = 0.0,
+) -> bytes:
     """Caso N <= 2000: header (opcional) + conceptos + footer en un solo canvas. Spawn-safe."""
     buf = io.BytesIO()
     cv = rl_canvas.Canvas(buf, pagesize=A4)
-    y = H - MARGIN
     if not skip_header_card:
+        y = H - MARGIN
         y = _draw_card_header(cv, y, cfdi_data)
+    else:
+        y = H - header_reserve if header_reserve > 0 else H - MARGIN
     y = _draw_table_header(cv, y)
 
     for idx, row in enumerate(rows):
@@ -408,23 +423,24 @@ def render_conceptos(
     cfdi_data: dict,
     workers: int | None = None,
     skip_header_card: bool = False,
+    header_reserve: float = 0.0,
 ) -> bytes:
     """
     Genera el PDF de conceptos + footer inline.
 
-    skip_header_card=True: omite el card de encabezado (cuando el header viene de WeasyPrint).
-    N <= 2000: single-process.
-    N > 2000: chunks en paralelo con ProcessPoolExecutor.
+    skip_header_card=True + header_reserve=Xpt: reserva X puntos en el tope de página 1
+    para que el header HTML se estampe encima sin solaparse con la tabla.
+    N <= 2000: single-process.  N > 2000: chunks en paralelo.
     """
     if len(rows) <= 2000:
-        return _render_single(rows, cfdi_data, skip_header_card=skip_header_card)
+        return _render_single(rows, cfdi_data, skip_header_card=skip_header_card, header_reserve=header_reserve)
 
     n_workers = min(workers or _WORKERS, _WORKERS)
     chunks = [rows[i:i + _CHUNK_SIZE] for i in range(0, len(rows), _CHUNK_SIZE)]
     starts = [i * _CHUNK_SIZE for i in range(len(chunks))]
 
     with ProcessPoolExecutor(max_workers=n_workers) as ex:
-        futures = [ex.submit(_render_first_chunk, chunks[0], cfdi_data, skip_header_card)]
+        futures = [ex.submit(_render_first_chunk, chunks[0], cfdi_data, skip_header_card, header_reserve)]
         for chunk, start in zip(chunks[1:-1], starts[1:-1]):
             futures.append(ex.submit(_render_chunk, chunk, start))
         if len(chunks) > 1:

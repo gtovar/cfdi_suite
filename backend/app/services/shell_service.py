@@ -26,7 +26,8 @@ DEFAULT_HEADER_HTML = """\
 <head>
 <meta charset="UTF-8">
 <style>
-  @page { size: A4; margin: 0; }
+  /* 595.27pt = A4 width. Cambia la altura aquí para ajustar el espacio del header. */
+  @page { size: 595.27pt 190pt; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: Helvetica, Arial, sans-serif;
