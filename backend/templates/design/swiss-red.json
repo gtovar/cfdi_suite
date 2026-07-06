@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "nombre": "Swiss Red",
+  "es_referencia": true,
+  "brand": { "color": "#E3001B", "accent": "#0A0A0A", "logo_url": null },
+  "tabla": {
+    "header_bg": "#0A0A0A",
+    "even_bg": "#FCF3F3",
+    "border": "#E5E5E5",
+    "density": "normal",
+    "columns": [
+      { "id": "desc",    "label": "DESCRIPCIÓN",   "field": "descripcion",    "width": 160.0, "visible": true, "order": 0, "format": "text",  "color": "#0A0A0A", "emphasis": false },
+      { "id": "clave",   "label": "CLAVE SAT",     "field": "num_id",         "width": 68.0,  "visible": true, "order": 1, "format": "text",  "color": "#6B6B6B", "emphasis": false },
+      { "id": "unidad",  "label": "UNIDAD",        "field": "clave_unidad",   "width": 52.0,  "visible": true, "order": 2, "format": "text",  "color": "#6B6B6B", "emphasis": false },
+      { "id": "cant",    "label": "CANT.",         "field": "cantidad",       "width": 46.0,  "visible": true, "order": 3, "format": "text",  "color": "#0A0A0A", "emphasis": false },
+      { "id": "punit",   "label": "VAL. UNITARIO", "field": "valor_unitario", "width": 68.0,  "visible": true, "order": 4, "format": "money", "color": "#0A0A0A", "emphasis": false },
+      { "id": "descto",  "label": "DESCUENTO",     "field": "descuento",      "width": 60.0,  "visible": true, "order": 5, "format": "money", "color": "#BBBBBB", "emphasis": false },
+      { "id": "importe", "label": "IMPORTE",       "field": "importe",        "width": 60.0,  "visible": true, "order": 6, "format": "money", "color": "#0A0A0A", "emphasis": true }
+    ],
+    "reglas": [
+      { "columna": "descuento", "operador": "gt", "valor": "0", "scope": "cell", "estilo": { "color": "#E3001B" } }
+    ]
+  },
+  "cierre": { "show_uuid": true, "show_fecha_timbrado": true, "show_disclaimer": true }
+}

@@ -1,0 +1,18 @@
+{
+  "brand": {
+    "color": "#5b1a1a",
+    "accent": "#8f2323",
+    "logo_url": null
+  },
+  "tabla": {
+    "header_bg": "#5b1a1a",
+    "even_bg": "#f8f7f7",
+    "border": "#e3dddd",
+    "density": "compact"
+  },
+  "cierre": {
+    "show_uuid": true,
+    "show_fecha_timbrado": true,
+    "show_disclaimer": true
+  }
+}

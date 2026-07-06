@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: 595.27pt 178pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9px; font-weight: 300;
+    color: #111111;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .mono { font-family: "JetBrains Mono", Menlo, monospace; }
+
+  .wrap { padding: 22px 40px 12px; }
+
+  .head { display: flex; justify-content: space-between; align-items: flex-end; }
+  .eyebrow {
+    font-size: 6.5px; font-weight: 600; letter-spacing: 2.5px;
+    color: #888888; text-transform: uppercase; margin-bottom: 5px;
+  }
+  .emisor-name { font-size: 13px; font-weight: 600; color: #111111; line-height: 1.1; max-width: 340px; }
+  .emisor-meta { font-size: 7.5px; font-weight: 400; color: #555555; margin-top: 4px; }
+
+  .folio { text-align: right; }
+  .folio-num { font-size: 9.5px; font-weight: 700; letter-spacing: 1px; color: #111111; }
+  .folio-date { font-size: 7.5px; font-weight: 400; color: #555555; margin-top: 2px; }
+
+  .rule-thick { border-top: 2px solid #111111; margin: 14px 0 16px; }
+  .rule-thin  { border-top: 0.5px solid #DDDDDD; margin: 14px 0; }
+
+  .section-tag { font-size: 6px; font-weight: 600; letter-spacing: 2px; color: #888888; text-transform: uppercase; margin-bottom: 8px; }
+
+  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .party-label { font-size: 6px; font-weight: 600; letter-spacing: 1.5px; color: #888888; text-transform: uppercase; margin-bottom: 4px; }
+  .party-name { font-size: 8.5px; font-weight: 600; color: #111111; margin-bottom: 2px; }
+  .party-rfc { font-size: 7.5px; font-weight: 400; color: #111111; }
+  .party-sub { font-size: 7.5px; font-weight: 400; color: #555555; margin-top: 1px; }
+
+  .meta { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; }
+  .meta-label { font-size: 6px; font-weight: 600; letter-spacing: 1.5px; color: #888888; text-transform: uppercase; margin-bottom: 3px; }
+  .meta-value { font-size: 8px; font-weight: 400; color: #111111; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <div class="eyebrow">Factura Electrónica · CFDI Ingreso</div>
+      <div class="emisor-name">{{emisor_nombre}}</div>
+      <div class="emisor-meta">RFC {{emisor_rfc}} &nbsp;·&nbsp; Régimen {{emisor_regimen_desc}} &nbsp;·&nbsp; CP {{lugar_expedicion}}</div>
+    </div>
+    <div class="folio">
+      <div class="folio-num mono">{{serie}} — {{folio}}</div>
+      <div class="folio-date mono">{{fecha}}</div>
+    </div>
+  </div>
+
+  <div class="rule-thick"></div>
+
+  <div class="parties">
+    <div>
+      <div class="party-label">Emisor</div>
+      <div class="party-name">{{emisor_nombre}}</div>
+      <div class="party-sub">{{emisor_regimen_desc}}</div>
+      <div class="party-rfc mono">{{emisor_rfc}}</div>
+    </div>
+    <div>
+      <div class="party-label">Receptor</div>
+      <div class="party-name">{{receptor_nombre}}</div>
+      <div class="party-sub">Uso CFDI: {{receptor_uso_desc}} &nbsp;·&nbsp; Dom. {{domicilio_fiscal_receptor}}</div>
+      <div class="party-rfc mono">{{receptor_rfc}}</div>
+    </div>
+  </div>
+
+  <div class="rule-thin"></div>
+
+  <div class="meta">
+    <div>
+      <div class="meta-label">Forma Pago</div>
+      <div class="meta-value">{{forma_pago_desc}}</div>
+    </div>
+    <div>
+      <div class="meta-label">Método</div>
+      <div class="meta-value">{{metodo_pago_desc}}</div>
+    </div>
+    <div>
+      <div class="meta-label">Moneda</div>
+      <div class="meta-value">{{moneda_desc}}</div>
+    </div>
+    <div>
+      <div class="meta-label">Uso CFDI</div>
+      <div class="meta-value">{{receptor_uso_desc}}</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

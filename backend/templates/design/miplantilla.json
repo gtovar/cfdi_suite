@@ -1,0 +1,100 @@
+{
+  "schema_version": 2,
+  "nombre": "miPlantilla",
+  "es_referencia": false,
+  "brand": {
+    "color": "#0fffc3",
+    "accent": "#4cffd2",
+    "logo_url": null
+  },
+  "tabla": {
+    "header_bg": "#0fffc3",
+    "even_bg": "#f6f8f8",
+    "border": "#dbe6e3",
+    "density": "compact",
+    "columns": [
+      {
+        "id": "no_id",
+        "label": "No.Id",
+        "field": "num_id",
+        "width": 60,
+        "visible": true,
+        "order": 0,
+        "format": "text",
+        "color": "#4A5568",
+        "emphasis": false
+      },
+      {
+        "id": "cant",
+        "label": "Cant",
+        "field": "cantidad",
+        "width": 28,
+        "visible": true,
+        "order": 1,
+        "format": "text",
+        "color": "#4A5568",
+        "emphasis": false
+      },
+      {
+        "id": "unidad",
+        "label": "Unidad",
+        "field": "clave_unidad",
+        "width": 36,
+        "visible": true,
+        "order": 2,
+        "format": "text",
+        "color": "#4A5568",
+        "emphasis": false
+      },
+      {
+        "id": "desc",
+        "label": "Descripcion",
+        "field": "descripcion",
+        "width": 175,
+        "visible": true,
+        "order": 3,
+        "format": "text",
+        "color": "#4A5568",
+        "emphasis": false
+      },
+      {
+        "id": "punit",
+        "label": "P.Unit",
+        "field": "valor_unitario",
+        "width": 52,
+        "visible": true,
+        "order": 4,
+        "format": "money",
+        "color": "#4A5568",
+        "emphasis": false
+      },
+      {
+        "id": "descto",
+        "label": "Desc",
+        "field": "descuento",
+        "width": 42,
+        "visible": true,
+        "order": 5,
+        "format": "money",
+        "color": "#C53030",
+        "emphasis": false
+      },
+      {
+        "id": "importe",
+        "label": "Importe",
+        "field": "importe",
+        "width": 54,
+        "visible": true,
+        "order": 6,
+        "format": "money",
+        "color": "#2D3748",
+        "emphasis": true
+      }
+    ]
+  },
+  "cierre": {
+    "show_uuid": true,
+    "show_fecha_timbrado": true,
+    "show_disclaimer": true
+  }
+}

@@ -36,7 +36,7 @@ import ConversionMasivaPage from './components/ConversionMasivaPage';
 import ResolutionPanel from './components/ResolutionPanel';
 import TaxAuditPanel from './components/TaxAuditPanel';
 import XmlNodeViewer from './components/XmlNodeViewer';
-import HtmlTemplateEditor from './components/HtmlTemplateEditor';
+import InvoiceDesigner from './components/InvoiceDesigner';
 
 const INGRESO_COLUMNS = [
   { key: 'uuid', label: 'UUID' },
@@ -62,6 +62,7 @@ const PAGO_COLUMNS = [
 
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('masivo');
+  const [activeTemplateId, setActiveTemplateId] = useState('default');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -243,7 +244,7 @@ export default function App() {
     // activeView permanece en 'inspector'
   }
 
-  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' | 'gopdfsuit' | 'canvas_pipeline' = 'reportlab', template?: TemplateConfig) {
+  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' | 'gopdfsuit' | 'canvas_pipeline' = 'reportlab', template?: TemplateConfig | { _id: string }) {
     if (!sourceFile) return;
     setPdfPhase('parsing');
     setPdfError(undefined);
@@ -347,6 +348,7 @@ export default function App() {
       {/* BatchAnalysisPage stays mounted to preserve pool state when navigating away */}
       <div className={activeView === 'masivo' ? 'flex flex-col md:h-full md:overflow-hidden' : 'hidden'}>
         <BatchAnalysisPage
+          templateId={activeTemplateId}
           onProgressUpdate={(status) => {
             if (status?.phase === 'processing' && status.completed === 0) setWidgetDismissed(false);
             setBatchMasivoStatus(status);
@@ -369,11 +371,11 @@ export default function App() {
           }}
         />
       </div>
-      {activeView === 'conversion-masiva' && <ConversionMasivaPage />}
+      {activeView === 'conversion-masiva' && <ConversionMasivaPage templateId={activeTemplateId} />}
       {activeView === 'emisores' && <EmisoresPage />}
       {activeView === 'pdf-templates' && (
-          <div className="flex flex-1 flex-col min-h-0 overflow-hidden p-4">
-            <HtmlTemplateEditor templateId="default" />
+          <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+            <InvoiceDesigner templateId={activeTemplateId} onTemplateIdChange={setActiveTemplateId} />
           </div>
       )}
       {activeView === 'inspector' && (
@@ -428,7 +430,7 @@ export default function App() {
                 onDownloadPdf={sourceFile && pdfPhase === 'idle' ? handleDownloadPdf : undefined}
                 onDownloadPdfReportlab={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('reportlab', templateConfig) : undefined}
                 onDownloadPdfGopdf={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('gopdfsuit', templateConfig) : undefined}
-                onDownloadPdfCanvas={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('canvas_pipeline') : undefined}
+                onDownloadPdfCanvas={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('canvas_pipeline', { _id: activeTemplateId }) : undefined}
                 pdfPhase={pdfPhase}
                 pdfProgressDetail={pdfProgressDetail}
                 pdfError={pdfError}

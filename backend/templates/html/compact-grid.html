@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: 595.27pt 188pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 8px;
+    color: #0A0A12;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .mono { font-family: "JetBrains Mono", Menlo, monospace; }
+
+  .wrap { padding: 14px 24px 10px; }
+
+  .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .head-left { display: flex; align-items: center; gap: 10px; }
+  .vtag {
+    background: {{brand_color}}; width: 15px; height: 46px; border-radius: 2px;
+    position: relative;
+  }
+  .vtag span {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    font-size: 6px; font-weight: 700; letter-spacing: 3px; color: #FFFFFF; white-space: nowrap;
+  }
+  .emisor-name { font-size: 11px; font-weight: 700; color: {{brand_color}}; line-height: 1.1; max-width: 360px; }
+  .emisor-rfc { font-size: 7px; font-weight: 600; color: {{brand_accent}}; margin-top: 2px; }
+  .emisor-rfc .sep { color: #5A6070; font-weight: 400; }
+
+  .folio { text-align: right; }
+  .folio-num { font-size: 13px; font-weight: 800; color: {{brand_color}}; }
+  .folio-sub { font-size: 6.5px; color: #5A6070; margin-top: 2px; }
+
+  .metabar {
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    background: {{brand_color}}; padding: 6px 10px; margin: 6px 0 8px;
+  }
+  .metabar > div { border-right: 0.5px solid #263566; padding-right: 8px; }
+  .metabar > div:last-child { border-right: none; }
+  .m-label { font-size: 5px; font-weight: 700; letter-spacing: 1.5px; color: #8899CC; text-transform: uppercase; margin-bottom: 2px; }
+  .m-value { font-size: 7px; font-weight: 500; color: #FFFFFF; }
+
+  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .party-label { font-size: 5.5px; font-weight: 700; letter-spacing: 2px; color: {{brand_accent}}; text-transform: uppercase; margin-bottom: 2px; }
+  .party-name { font-size: 8.5px; font-weight: 700; color: #0A0A12; }
+  .party-rfc { font-size: 7px; font-weight: 600; color: {{brand_accent}}; margin-top: 1px; }
+  .party-sub { font-size: 7px; color: #5A6070; margin-top: 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div class="head-left">
+      <div class="vtag"><span>INGRESO</span></div>
+      <div>
+        <div class="emisor-name">{{emisor_nombre}}</div>
+        <div class="emisor-rfc mono">{{emisor_rfc}} <span class="sep">· {{emisor_regimen_desc}} · CP {{lugar_expedicion}}</span></div>
+      </div>
+    </div>
+    <div class="folio">
+      <div class="folio-num">{{serie}} · {{folio}}</div>
+      <div class="folio-sub mono">{{fecha}}</div>
+    </div>
+  </div>
+
+  <div class="metabar">
+    <div>
+      <div class="m-label">CFDI</div>
+      <div class="m-value">v4.0 · Ingreso</div>
+    </div>
+    <div>
+      <div class="m-label">Forma Pago</div>
+      <div class="m-value">{{forma_pago_desc}}</div>
+    </div>
+    <div>
+      <div class="m-label">Método</div>
+      <div class="m-value">{{metodo_pago_desc}}</div>
+    </div>
+    <div>
+      <div class="m-label">Moneda</div>
+      <div class="m-value">{{moneda_desc}}</div>
+    </div>
+    <div>
+      <div class="m-label">Uso CFDI</div>
+      <div class="m-value">{{receptor_uso_desc}}</div>
+    </div>
+    <div>
+      <div class="m-label">Exportación</div>
+      <div class="m-value">01 · No aplica</div>
+    </div>
+  </div>
+
+  <div class="parties">
+    <div>
+      <div class="party-label">Emisor</div>
+      <div class="party-name">{{emisor_nombre}}</div>
+      <div class="party-rfc mono">{{emisor_rfc}}</div>
+      <div class="party-sub">{{emisor_regimen_desc}} · CP {{lugar_expedicion}}</div>
+    </div>
+    <div>
+      <div class="party-label">Receptor</div>
+      <div class="party-name">{{receptor_nombre}}</div>
+      <div class="party-rfc mono">{{receptor_rfc}}</div>
+      <div class="party-sub">{{receptor_regimen_desc}} · Uso {{receptor_uso_desc}} · Dom. {{domicilio_fiscal_receptor}}</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

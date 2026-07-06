@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: 595.27pt 170pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9px; color: #1A1A1A;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .serif { font-family: "Libertinus Serif", Georgia, "Times New Roman", serif; }
+  .mono  { font-family: "JetBrains Mono", Menlo, monospace; }
+
+  .band { background: {{brand_color}}; padding: 18px 34px 14px; }
+  .band-head { display: flex; align-items: flex-start; gap: 16px; }
+  .mono-mark {
+    width: 30px; height: 30px; flex-shrink: 0; margin-top: 2px;
+    border: 1.5px solid {{brand_accent}}; transform: rotate(45deg);
+    position: relative;
+  }
+  .mono-mark::after {
+    content: ""; position: absolute; top: 50%; left: 50%;
+    width: 12px; height: 12px; background: {{brand_accent}};
+    transform: translate(-50%, -50%);
+  }
+  .title-col { flex: 1; }
+  .emisor-name { font-size: 13px; font-weight: 700; color: #FFFFFF; line-height: 1.1; max-width: 280px; }
+  .emisor-meta { font-size: 7px; color: #5A5040; margin-top: 4px; }
+
+  .folio-side { text-align: right; }
+  .folio-eyebrow { font-size: 5.5px; font-weight: 600; letter-spacing: 2.5px; color: #5A5040; text-transform: uppercase; margin-bottom: 5px; }
+  .folio-num { font-size: 19px; font-weight: 700; color: {{brand_accent}}; line-height: 1; }
+  .folio-date { font-size: 7px; color: #5A5040; margin-top: 4px; }
+
+  .gold-divider { border-top: 1px solid {{brand_accent}}; margin: 14px 0 12px; }
+
+  .band-meta { display: grid; grid-template-columns: 1fr 1fr 1fr; }
+  .bm-label { font-size: 5.5px; letter-spacing: 2px; color: #5A5040; text-transform: uppercase; margin-bottom: 2px; }
+  .bm-value { font-size: 7.5px; color: #D4C5A5; }
+
+  .body { background: #FAFAF8; padding: 14px 34px 10px; }
+  .parties { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
+  .party-label { font-size: 6px; font-weight: 700; letter-spacing: 2.5px; color: {{brand_accent}}; text-transform: uppercase; margin-bottom: 4px; }
+  .party-name { font-size: 9px; font-weight: 600; color: #1A1A1A; }
+  .party-rfc { font-size: 7.5px; font-weight: 600; color: {{brand_accent}}; margin-top: 2px; }
+  .party-sub { font-size: 7.5px; color: #7A7060; margin-top: 1px; }
+</style>
+</head>
+<body>
+  <div class="band">
+    <div class="band-head">
+      <div class="mono-mark"></div>
+      <div class="title-col">
+        <div class="emisor-name serif">{{emisor_nombre}}</div>
+        <div class="emisor-meta mono">{{emisor_rfc}} · CP {{lugar_expedicion}}</div>
+      </div>
+      <div class="folio-side">
+        <div class="folio-eyebrow">Factura · Ingreso</div>
+        <div class="folio-num serif">{{serie}} · {{folio}}</div>
+        <div class="folio-date">{{fecha}}</div>
+      </div>
+    </div>
+    <div class="gold-divider"></div>
+    <div class="band-meta">
+      <div><div class="bm-label">Fecha de Expedición</div><div class="bm-value">{{fecha}}</div></div>
+      <div><div class="bm-label">Forma de Pago</div><div class="bm-value">{{forma_pago_desc}}</div></div>
+      <div><div class="bm-label">Régimen Fiscal</div><div class="bm-value">{{emisor_regimen_desc}}</div></div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="parties">
+      <div>
+        <div class="party-label">Emisor</div>
+        <div class="party-name serif">{{emisor_nombre}}</div>
+        <div class="party-rfc mono">{{emisor_rfc}}</div>
+        <div class="party-sub">{{emisor_regimen_desc}} · CP {{lugar_expedicion}}</div>
+      </div>
+      <div>
+        <div class="party-label">Receptor</div>
+        <div class="party-name serif">{{receptor_nombre}}</div>
+        <div class="party-rfc mono">{{receptor_rfc}}</div>
+        <div class="party-sub">Uso CFDI: {{receptor_uso_desc}} · Dom. {{domicilio_fiscal_receptor}}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

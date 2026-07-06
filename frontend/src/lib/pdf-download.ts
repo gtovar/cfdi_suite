@@ -25,10 +25,11 @@ export function waitForPdfJob(jobId: string): Promise<void> {
   });
 }
 
-export async function convertFileToPdf(file: File): Promise<ArrayBuffer> {
+export async function convertFileToPdf(file: File, templateId?: string): Promise<ArrayBuffer> {
   const fd = new FormData();
   fd.append('file', file);
   fd.append('engine', 'canvas_pipeline');
+  if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
   const res = await fetch('/api/cfdi/pdf/start', { method: 'POST', body: fd });
   if (!res.ok) throw new Error(`Error ${res.status} al iniciar conversión`);
   const { jobId } = await res.json() as { jobId: string };

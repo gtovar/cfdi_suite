@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: 595.27pt 168pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9px;
+    color: #1A1A1A;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .mono { font-family: "JetBrains Mono", Menlo, monospace; }
+
+  .wrap { padding: 16px 32px 12px; }
+
+  .topbar { border-top: 4px solid {{brand_color}}; margin-bottom: 16px; }
+
+  .head { display: flex; justify-content: space-between; align-items: flex-start; }
+  .eyebrow {
+    font-size: 6.5px; font-weight: 700; letter-spacing: 3px;
+    color: {{brand_color}}; text-transform: uppercase; margin-bottom: 5px;
+  }
+  .emisor-name {
+    font-size: 15px; font-weight: 300; letter-spacing: -0.2px;
+    color: #2D3748; line-height: 1.08; max-width: 330px;
+  }
+  .emisor-meta { font-size: 7.5px; color: #718096; margin-top: 5px; }
+
+  .folio { text-align: right; }
+  .badge {
+    display: inline-block; background: #EEF2EE; color: {{brand_color}};
+    font-size: 6.5px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 2px; margin-bottom: 6px;
+  }
+  .folio-num { font-size: 24px; font-weight: 700; color: #2D3748; line-height: 1; }
+  .folio-sub { font-size: 7px; color: #718096; margin-top: 3px; }
+
+  .rule { border-top: 0.5px solid #CBD5E0; margin: 15px 0; }
+
+  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .party-label { font-size: 6px; font-weight: 700; letter-spacing: 2px; color: {{brand_color}}; text-transform: uppercase; margin-bottom: 4px; }
+  .party-name { font-size: 8.5px; font-weight: 600; color: #2D3748; margin-bottom: 3px; }
+  .party-sub { font-size: 7.5px; color: #718096; line-height: 1.5; }
+  .rfc-pill {
+    display: inline-block; background: #EEF2EE; color: {{brand_color}};
+    font-size: 7px; font-weight: 600; padding: 2px 7px; border-radius: 2px; margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar"></div>
+
+  <div class="head">
+    <div>
+      <div class="eyebrow">Comprobante Fiscal Digital · CFDI 4.0</div>
+      <div class="emisor-name">{{emisor_nombre}}</div>
+      <div class="emisor-meta">{{emisor_rfc}} &nbsp;·&nbsp; {{emisor_regimen_desc}} &nbsp;·&nbsp; CP {{lugar_expedicion}}</div>
+    </div>
+    <div class="folio">
+      <div class="badge">Serie {{serie}}</div>
+      <div class="folio-num mono">{{folio}}</div>
+      <div class="folio-sub">{{fecha}}</div>
+    </div>
+  </div>
+
+  <div class="rule"></div>
+
+  <div class="parties">
+    <div>
+      <div class="party-label">Emisor</div>
+      <div class="party-name">{{emisor_nombre}}</div>
+      <div class="party-sub">{{emisor_regimen_desc}}<br>Lugar de Expedición: CP {{lugar_expedicion}}</div>
+      <div class="rfc-pill mono">{{emisor_rfc}}</div>
+    </div>
+    <div>
+      <div class="party-label">Receptor</div>
+      <div class="party-name">{{receptor_nombre}}</div>
+      <div class="party-sub">{{receptor_regimen_desc}}<br>Uso CFDI: {{receptor_uso_desc}} &nbsp;·&nbsp; Dom. {{domicilio_fiscal_receptor}}</div>
+      <div class="rfc-pill mono">{{receptor_rfc}}</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

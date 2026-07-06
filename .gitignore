@@ -36,6 +36,8 @@ amigo/
 tailux/
 .vercel/
 
-# Canvas pipeline — generados en runtime, no versionar
+# Canvas pipeline — cache de PDFs renderizados en runtime, no versionar
 backend/shells/
-backend/templates/html/
+
+# Dumps de repomix (contexto para IA), no versionar
+repomix-output-*.md

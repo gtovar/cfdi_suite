@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: 595.27pt 228pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9px; color: #0B1437;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .mono { font-family: "JetBrains Mono", Menlo, monospace; }
+
+  .band { position: relative; height: 210px; overflow: hidden; }
+  .band-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+  .band-content { position: relative; height: 100%; padding: 18px 28px 14px; display: flex; flex-direction: column; justify-content: space-between; }
+
+  .row { display: flex; justify-content: space-between; align-items: flex-start; }
+  /* Left over teal — dark ink */
+  .eyebrow-dark { font-size: 6px; font-weight: 800; letter-spacing: 4.5px; color: #0B1437; text-transform: uppercase; margin-bottom: 6px; }
+  .emisor-name { font-size: 14px; font-weight: 800; color: #0B1437; line-height: 1.1; max-width: 240px; }
+  .emisor-rfc { font-size: 7.5px; color: #0B1437; margin-top: 4px; }
+  /* Right over navy — light ink */
+  .folio-side { text-align: right; }
+  .eyebrow-teal { font-size: 6px; font-weight: 700; letter-spacing: 3.5px; color: {{brand_accent}}; text-transform: uppercase; margin-bottom: 5px; }
+  .folio-num { font-size: 20px; font-weight: 800; color: #FFFFFF; line-height: 1; }
+  .folio-date { font-size: 7.5px; color: #8899BB; margin-top: 4px; }
+
+  .amount-label { font-size: 6px; letter-spacing: 3px; color: #0B1437; text-transform: uppercase; margin-bottom: 2px; font-weight: 600; }
+  .amount { font-size: 25px; font-weight: 800; color: #0B1437; line-height: 1; }
+  .pay-side { text-align: right; }
+  .pay-label { font-size: 5.5px; letter-spacing: 2px; color: #8899BB; text-transform: uppercase; margin-bottom: 2px; }
+  .pay-value { font-size: 7.5px; color: #FFFFFF; margin-bottom: 5px; }
+
+  .body { padding: 12px 28px 10px; }
+  .metabar { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; background: {{brand_accent}}; padding: 7px 14px; margin-bottom: 12px; }
+  .mb-label { font-size: 5.5px; letter-spacing: 2px; color: #005A57; text-transform: uppercase; margin-bottom: 2px; }
+  .mb-value { font-size: 8px; font-weight: 700; color: #0B1437; }
+
+  .parties { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
+  .party-label { font-size: 6px; font-weight: 700; letter-spacing: 2.5px; color: #009B95; text-transform: uppercase; margin-bottom: 3px; }
+  .party-name { font-size: 9px; font-weight: 700; color: #0B1437; }
+  .party-rfc { font-size: 7.5px; font-weight: 600; color: #009B95; margin-top: 1px; }
+  .party-sub { font-size: 7.5px; color: #64748B; margin-top: 1px; }
+</style>
+</head>
+<body>
+  <div class="band">
+    <svg class="band-svg" viewBox="0 0 794 210" preserveAspectRatio="none">
+      <rect x="0" y="0" width="794" height="210" fill="{{brand_color}}"/>
+      <polygon points="0,0 397,0 297,210 0,210" fill="{{brand_accent}}"/>
+      <polygon points="378,0 401,0 301,210 279,210" fill="#00A09A"/>
+    </svg>
+    <div class="band-content">
+      <div class="row">
+        <div>
+          <div class="eyebrow-dark">Comprobante Fiscal Digital</div>
+          <div class="emisor-name">{{emisor_nombre}}</div>
+          <div class="emisor-rfc mono">{{emisor_rfc}}</div>
+        </div>
+        <div class="folio-side">
+          <div class="eyebrow-teal">Folio · Serie</div>
+          <div class="folio-num mono">{{serie}} · {{folio}}</div>
+          <div class="folio-date">{{fecha}}</div>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <div class="amount-label">Total · MXN</div>
+          <div class="amount mono">${{total}}</div>
+        </div>
+        <div class="pay-side">
+          <div class="pay-label">Forma de Pago</div>
+          <div class="pay-value">{{forma_pago_desc}}</div>
+          <div class="pay-label">Método</div>
+          <div class="pay-value">{{metodo_pago_desc}}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="metabar">
+      <div><div class="mb-label">Fecha</div><div class="mb-value">{{fecha}}</div></div>
+      <div><div class="mb-label">Moneda</div><div class="mb-value">{{moneda_desc}}</div></div>
+      <div><div class="mb-label">Serie / Folio</div><div class="mb-value mono">{{serie}} · {{folio}}</div></div>
+      <div><div class="mb-label">Lugar Exp.</div><div class="mb-value">CP {{lugar_expedicion}}</div></div>
+    </div>
+    <div class="parties">
+      <div>
+        <div class="party-label">Emisor</div>
+        <div class="party-name">{{emisor_nombre}}</div>
+        <div class="party-rfc mono">{{emisor_rfc}}</div>
+        <div class="party-sub">{{emisor_regimen_desc}}</div>
+      </div>
+      <div>
+        <div class="party-label">Receptor</div>
+        <div class="party-name">{{receptor_nombre}}</div>
+        <div class="party-rfc mono">{{receptor_rfc}}</div>
+        <div class="party-sub">Uso CFDI: {{receptor_uso_desc}} · Dom. {{domicilio_fiscal_receptor}}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

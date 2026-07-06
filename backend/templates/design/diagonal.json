@@ -1,0 +1,100 @@
+{
+  "schema_version": 2,
+  "nombre": "Diagonal",
+  "es_referencia": true,
+  "brand": {
+    "color": "#475fbd",
+    "accent": "#6f83d2",
+    "logo_url": null
+  },
+  "tabla": {
+    "header_bg": "#475fbd",
+    "even_bg": "#f7f7f8",
+    "border": "#dedfe3",
+    "density": "normal",
+    "columns": [
+      {
+        "id": "desc",
+        "label": "DESCRIPCIÓN",
+        "field": "descripcion",
+        "width": 176,
+        "visible": true,
+        "order": 0,
+        "format": "text",
+        "color": "#0B1437",
+        "emphasis": false
+      },
+      {
+        "id": "noid",
+        "label": "NO. IDENTIFICACIÓN",
+        "field": "num_id",
+        "width": 92,
+        "visible": true,
+        "order": 1,
+        "format": "text",
+        "color": "#64748B",
+        "emphasis": false
+      },
+      {
+        "id": "cant",
+        "label": "CANT.",
+        "field": "cantidad",
+        "width": 48,
+        "visible": true,
+        "order": 2,
+        "format": "text",
+        "color": "#0B1437",
+        "emphasis": false
+      },
+      {
+        "id": "unidad",
+        "label": "U.M.",
+        "field": "clave_unidad",
+        "width": 50,
+        "visible": true,
+        "order": 3,
+        "format": "text",
+        "color": "#64748B",
+        "emphasis": false
+      },
+      {
+        "id": "punit",
+        "label": "P. UNITARIO",
+        "field": "valor_unitario",
+        "width": 76,
+        "visible": true,
+        "order": 4,
+        "format": "money",
+        "color": "#0B1437",
+        "emphasis": false
+      },
+      {
+        "id": "descto",
+        "label": "Desc",
+        "field": "descuento",
+        "width": 40,
+        "visible": false,
+        "order": 5,
+        "format": "money",
+        "color": "#009B95",
+        "emphasis": false
+      },
+      {
+        "id": "importe",
+        "label": "IMPORTE",
+        "field": "importe",
+        "width": 76,
+        "visible": true,
+        "order": 6,
+        "format": "money",
+        "color": "#0B1437",
+        "emphasis": true
+      }
+    ]
+  },
+  "cierre": {
+    "show_uuid": true,
+    "show_fecha_timbrado": true,
+    "show_disclaimer": true
+  }
+}

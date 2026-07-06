@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: 595.27pt 198pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9px; color: #0F172A;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .mono { font-family: "JetBrains Mono", Menlo, monospace; }
+
+  .band { background: {{brand_color}}; padding: 18px 32px 12px; }
+  .band-head { display: flex; justify-content: space-between; align-items: flex-start; }
+  .eyebrow { font-size: 6px; font-weight: 700; letter-spacing: 4px; color: {{brand_accent}}; text-transform: uppercase; margin-bottom: 6px; }
+  .emisor-name { font-size: 15px; font-weight: 700; color: #FFFFFF; line-height: 1.1; max-width: 300px; }
+  .emisor-meta { font-size: 7px; color: #94A3B8; margin-top: 5px; }
+
+  .amount-side { text-align: right; }
+  .amount-label { font-size: 6px; letter-spacing: 3px; color: #64748B; text-transform: uppercase; margin-bottom: 3px; }
+  .amount { font-size: 26px; font-weight: 700; color: {{brand_accent}}; line-height: 1; }
+  .amount .cur { font-size: 10px; font-weight: 300; color: #94A3B8; margin-left: 3px; }
+  .amount-sub { font-size: 7px; color: #94A3B8; margin-top: 4px; }
+
+  .band-meta { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; margin-top: 18px; }
+  .band-meta > div { border-right: 0.5px solid #1E293B; padding-right: 12px; }
+  .band-meta > div:last-child { border-right: none; padding-left: 12px; }
+  .bm-label { font-size: 5.5px; font-weight: 700; letter-spacing: 2.5px; color: #475569; text-transform: uppercase; margin-bottom: 3px; }
+  .bm-value { font-size: 8.5px; color: #FFFFFF; }
+
+  .body { padding: 14px 32px 10px; }
+  .yellow-rule { border-top: 2px solid {{brand_accent}}; margin-bottom: 14px; }
+  .parties { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
+  .party-label { font-size: 6px; font-weight: 700; letter-spacing: 2.5px; color: #64748B; text-transform: uppercase; margin-bottom: 3px; }
+  .party-name { font-size: 9px; font-weight: 700; color: #0F172A; }
+  .party-rfc { font-size: 7.5px; font-weight: 600; color: #B8860B; margin-top: 1px; }
+  .party-sub { font-size: 7.5px; color: #64748B; margin-top: 1px; }
+</style>
+</head>
+<body>
+  <div class="band">
+    <div class="band-head">
+      <div>
+        <div class="eyebrow">Comprobante Fiscal Digital · CFDI 4.0</div>
+        <div class="emisor-name">{{emisor_nombre}}</div>
+        <div class="emisor-meta mono">{{emisor_rfc}} · {{emisor_regimen_desc}}</div>
+      </div>
+      <div class="amount-side">
+        <div class="amount-label">Monto Total</div>
+        <div class="amount mono">${{total}}<span class="cur">MXN</span></div>
+        <div class="amount-sub">{{metodo_pago_desc}}</div>
+      </div>
+    </div>
+    <div class="band-meta">
+      <div><div class="bm-label">Serie / Folio</div><div class="bm-value mono">{{serie}} · {{folio}}</div></div>
+      <div><div class="bm-label">Fecha</div><div class="bm-value">{{fecha}}</div></div>
+      <div><div class="bm-label">Moneda</div><div class="bm-value">{{moneda_desc}}</div></div>
+      <div><div class="bm-label">Forma de Pago</div><div class="bm-value">{{forma_pago_desc}}</div></div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="yellow-rule"></div>
+    <div class="parties">
+      <div>
+        <div class="party-label">Emisor</div>
+        <div class="party-name">{{emisor_nombre}}</div>
+        <div class="party-rfc mono">{{emisor_rfc}}</div>
+        <div class="party-sub">{{emisor_regimen_desc}} · CP {{lugar_expedicion}}</div>
+      </div>
+      <div>
+        <div class="party-label">Receptor</div>
+        <div class="party-name">{{receptor_nombre}}</div>
+        <div class="party-rfc mono">{{receptor_rfc}}</div>
+        <div class="party-sub">Uso CFDI: {{receptor_uso_desc}} · Dom. {{domicilio_fiscal_receptor}}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

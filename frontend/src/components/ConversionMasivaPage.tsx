@@ -65,7 +65,11 @@ function StateChip({ state }: { state: PdfConversionState }) {
 
 // ── Main component ──────────────────────────────────────────────────────────────
 
-export default function ConversionMasivaPage() {
+interface ConversionMasivaPageProps {
+  templateId?: string;
+}
+
+export default function ConversionMasivaPage({ templateId }: ConversionMasivaPageProps) {
   const [entries, setEntries] = useState<ConversionEntry[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
@@ -144,7 +148,7 @@ export default function ConversionMasivaPage() {
           setEntries((prev) =>
             prev.map((e) => e.file === entry.file ? { ...e, state: 'converting' } : e),
           );
-          await convertFileToPdf(entry.file);
+          await convertFileToPdf(entry.file, templateId);
           setEntries((prev) =>
             prev.map((e) => e.file === entry.file ? { ...e, state: 'done' } : e),
           );
@@ -163,7 +167,7 @@ export default function ConversionMasivaPage() {
     );
 
     if (!cancelledRef.current) setPhase('done');
-  }, [entries]);
+  }, [entries, templateId]);
 
   async function handleDownloadOne(entry: ConversionEntry) {
     if (entry.state === 'converting') return;
@@ -171,7 +175,7 @@ export default function ConversionMasivaPage() {
       prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e),
     );
     try {
-      const buf = await convertFileToPdf(entry.file);
+      const buf = await convertFileToPdf(entry.file, templateId);
       triggerBlobDownload(
         new Blob([buf], { type: 'application/pdf' }),
         entry.file.name.replace(/\.xml$/i, '.pdf'),
@@ -211,7 +215,7 @@ export default function ConversionMasivaPage() {
           setEntries((prev) =>
             prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e),
           );
-          const buf = await convertFileToPdf(entry.file);
+          const buf = await convertFileToPdf(entry.file, templateId);
           setEntries((prev) =>
             prev.map((e) => e.file === entry.file ? { ...e, state: 'done' } : e),
           );
@@ -264,7 +268,7 @@ export default function ConversionMasivaPage() {
       doneEntries.map(async (entry) => {
         await sem.acquire();
         try {
-          const buf = await convertFileToPdf(entry.file);
+          const buf = await convertFileToPdf(entry.file, templateId);
           return { name: entry.file.name.replace(/\.xml$/i, '.pdf'), buf };
         } catch {
           return null;

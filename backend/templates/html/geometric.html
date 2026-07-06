@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: 595.27pt 205pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9px; color: #0A0E1A;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .mono { font-family: "JetBrains Mono", Menlo, monospace; }
+
+  .band { position: relative; height: 200px; overflow: hidden; }
+  .band-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+  .band-content { position: relative; padding: 18px 30px 0; }
+
+  .eyebrow { font-size: 6px; font-weight: 700; letter-spacing: 4.5px; color: #FFC31A; text-transform: uppercase; margin-bottom: 8px; }
+  .emisor-name { font-size: 18px; font-weight: 800; color: #FFFFFF; line-height: 1.05; letter-spacing: -0.3px; max-width: 340px; }
+  .emisor-role { font-size: 8.5px; color: #93AEED; margin-top: 4px; }
+  .pills { margin-top: 10px; }
+  .pill {
+    display: inline-block; background: #1D3A8A; border: 0.5px solid #2D5AC0;
+    color: #FFFFFF; font-size: 7px; padding: 3px 9px; border-radius: 2px; margin-right: 6px;
+  }
+
+  .band-bottom { position: relative; padding: 0 30px; margin-top: 22px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .period-label { font-size: 5.5px; letter-spacing: 3px; color: #93AEED; text-transform: uppercase; margin-bottom: 3px; }
+  .period-value { font-size: 8.5px; font-weight: 600; color: #FFFFFF; }
+  .total-side { text-align: right; }
+  .total-label { font-size: 6px; letter-spacing: 3.5px; color: #FFC31A; text-transform: uppercase; margin-bottom: 2px; }
+  .total-amount { font-size: 22px; font-weight: 700; color: #FFFFFF; line-height: 1; }
+
+  .strip {
+    background: #F0F4FF; border-left: 3px solid {{brand_color}};
+    padding: 8px 14px; margin: 12px 30px 0;
+    display: grid; grid-template-columns: 1.3fr 1fr 1fr; column-gap: 14px;
+  }
+  .s-label { font-size: 6px; font-weight: 600; letter-spacing: 1.5px; color: #5C6580; text-transform: uppercase; margin-bottom: 2px; }
+  .s-name { font-size: 8px; font-weight: 700; color: {{brand_color}}; }
+  .s-value { font-size: 7.5px; color: #0A0E1A; }
+  .s-rfc { font-size: 7px; color: #5C6580; margin-top: 1px; }
+</style>
+</head>
+<body>
+  <div class="band">
+    <svg class="band-svg" viewBox="0 0 794 200" preserveAspectRatio="none">
+      <rect x="0" y="0" width="794" height="200" fill="{{brand_color}}"/>
+      <polygon points="664,0 794,0 794,130" fill="{{brand_accent}}"/>
+      <rect x="0" y="194" width="794" height="6" fill="#FFC31A"/>
+    </svg>
+    <div class="band-content">
+      <div class="eyebrow">Comprobante Fiscal Digital · CFDI Ingreso</div>
+      <div class="emisor-name">{{emisor_nombre}}</div>
+      <div class="emisor-role">{{emisor_regimen_desc}}</div>
+      <div class="pills">
+        <span class="pill">Serie {{serie}} · Folio {{folio}}</span>
+        <span class="pill">{{forma_pago_desc}}</span>
+      </div>
+    </div>
+    <div class="band-bottom">
+      <div>
+        <div class="period-label">Fecha de Expedición</div>
+        <div class="period-value">{{fecha}}</div>
+      </div>
+      <div class="total-side">
+        <div class="total-label">Total MXN</div>
+        <div class="total-amount mono">${{total}}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="strip">
+    <div>
+      <div class="s-label">Emisor</div>
+      <div class="s-name">{{emisor_nombre}}</div>
+      <div class="s-rfc mono">{{emisor_rfc}}</div>
+    </div>
+    <div>
+      <div class="s-label">Receptor</div>
+      <div class="s-name">{{receptor_nombre}}</div>
+      <div class="s-rfc mono">{{receptor_rfc}}</div>
+    </div>
+    <div>
+      <div class="s-label">Uso CFDI · Domicilio</div>
+      <div class="s-value">{{receptor_uso_desc}}</div>
+      <div class="s-rfc">Dom. {{domicilio_fiscal_receptor}} · CP {{lugar_expedicion}}</div>
+    </div>
+  </div>
+</body>
+</html>

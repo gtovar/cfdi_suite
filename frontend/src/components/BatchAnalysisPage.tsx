@@ -54,6 +54,7 @@ interface BatchAnalysisPageProps {
   onSelectFile?: (file: File) => void;
   onBatchNav?: (orderedFiles: File[], currentIndex: number) => void;
   pendingFiles?: File[] | null;
+  templateId?: string;
 }
 
 // ── Table columns ──────────────────────────────────────────────────────────────
@@ -553,7 +554,7 @@ function PdfDownloadButton({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBatchNav, pendingFiles }: BatchAnalysisPageProps) {
+export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBatchNav, pendingFiles, templateId }: BatchAnalysisPageProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
@@ -622,7 +623,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     if (!file || pdfStates.get(filename) === 'converting') return;
     setPdfStates((prev) => new Map(prev).set(filename, 'converting'));
     try {
-      const buf = await convertFileToPdf(file);
+      const buf = await convertFileToPdf(file, templateId);
       triggerBlobDownload(
         new Blob([buf], { type: 'application/pdf' }),
         filename.replace(/\.xml$/i, '.pdf'),
@@ -631,7 +632,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     } catch {
       setPdfStates((prev) => new Map(prev).set(filename, 'error'));
     }
-  }, [fileByName, pdfStates]);
+  }, [fileByName, pdfStates, templateId]);
 
   const extendedColumns = useMemo((): ColumnDef<BatchFileResult>[] => {
     const allFiltered = filteredResults.length > 0 && filteredResults.every((r) => selectedRows.has(r.filename));

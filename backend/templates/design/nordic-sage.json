@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "nombre": "Nordic Sage",
+  "es_referencia": true,
+  "brand": { "color": "#5C7A5E", "accent": "#2D3748", "logo_url": null },
+  "tabla": {
+    "header_bg": "#5C7A5E",
+    "even_bg": "#F2F5F2",
+    "border": "#CBD5E0",
+    "density": "normal",
+    "columns": [
+      { "id": "desc",    "label": "DESCRIPCIÓN / CLAVE", "field": "descripcion",    "width": 210.0, "visible": true,  "order": 0, "format": "text",  "color": "#2D3748", "emphasis": false },
+      { "id": "clave",   "label": "CLAVE SAT",           "field": "num_id",         "width": 88.0,  "visible": true,  "order": 1, "format": "text",  "color": "#718096", "emphasis": false },
+      { "id": "unidad",  "label": "Unidad",              "field": "clave_unidad",   "width": 40.0,  "visible": false, "order": 2, "format": "text",  "color": "#718096", "emphasis": false },
+      { "id": "cant",    "label": "CANTIDAD",            "field": "cantidad",       "width": 56.0,  "visible": true,  "order": 3, "format": "text",  "color": "#2D3748", "emphasis": false },
+      { "id": "punit",   "label": "VAL. UNITARIO",       "field": "valor_unitario", "width": 78.0,  "visible": true,  "order": 4, "format": "money", "color": "#2D3748", "emphasis": false },
+      { "id": "descto",  "label": "Desc",                "field": "descuento",      "width": 40.0,  "visible": false, "order": 5, "format": "money", "color": "#718096", "emphasis": false },
+      { "id": "importe", "label": "IMPORTE",             "field": "importe",        "width": 80.0,  "visible": true,  "order": 6, "format": "money", "color": "#2D3748", "emphasis": true }
+    ]
+  },
+  "cierre": { "show_uuid": true, "show_fecha_timbrado": true, "show_disclaimer": true }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "nombre": "Two Column",
+  "es_referencia": true,
+  "brand": { "color": "#D95F3B", "accent": "#1C1C1E", "logo_url": null },
+  "tabla": {
+    "header_bg": "#1C1C1E",
+    "even_bg": "#FEF6F3",
+    "border": "#E5E5EA",
+    "density": "normal",
+    "columns": [
+      { "id": "desc",    "label": "DESCRIPCIÓN",        "field": "descripcion",    "width": 165.0, "visible": true,  "order": 0, "format": "text",  "color": "#1C1C1E", "emphasis": false },
+      { "id": "noid",    "label": "NO. IDENTIFICACIÓN", "field": "num_id",         "width": 90.0,  "visible": true,  "order": 1, "format": "text",  "color": "#8E8E93", "emphasis": false },
+      { "id": "cant",    "label": "CANT.",              "field": "cantidad",       "width": 50.0,  "visible": true,  "order": 2, "format": "text",  "color": "#1C1C1E", "emphasis": false },
+      { "id": "unidad",  "label": "U.M.",               "field": "clave_unidad",   "width": 52.0,  "visible": true,  "order": 3, "format": "text",  "color": "#6C6C70", "emphasis": false },
+      { "id": "punit",   "label": "P. UNIT.",           "field": "valor_unitario", "width": 78.0,  "visible": true,  "order": 4, "format": "money", "color": "#1C1C1E", "emphasis": false },
+      { "id": "descto",  "label": "Desc",               "field": "descuento",      "width": 40.0,  "visible": false, "order": 5, "format": "money", "color": "#D95F3B", "emphasis": false },
+      { "id": "importe", "label": "IMPORTE",            "field": "importe",        "width": 78.0,  "visible": true,  "order": 6, "format": "money", "color": "#1C1C1E", "emphasis": true }
+    ]
+  },
+  "cierre": { "show_uuid": true, "show_fecha_timbrado": true, "show_disclaimer": true }
+}

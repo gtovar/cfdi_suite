@@ -62,10 +62,9 @@ def generate(
     """
     Genera un PDF completo a partir de un XML CFDI.
 
-    Estructura:
-      - Página 1: header HTML/CSS estampado en el tope + tabla canvas debajo
-      - Páginas 2..N: continuación de la tabla en canvas streaming
-      - Última página: footer con totales, UUID
+    Wrapper delgado: decodifica + parsea el XML (único paso exclusivo de
+    producción) y delega el núcleo compartido a generate_from_data().
+    Firma pública intacta — pdf.py y el worker ARQ la llaman posicionalmente.
     """
     if isinstance(xml_str, bytes):
         xml_str = xml_str.decode("utf-8", errors="replace")
@@ -73,17 +72,55 @@ def generate(
     # 1. Parse XML (SAX, O(1) memoria)
     cfdi_data, rows = parse_xml_to_rows(xml_str)
 
-    # 2. Header: WeasyPrint renderiza el template HTML del usuario
+    return generate_from_data(cfdi_data, rows, template_id, html_shell, workers)
+
+
+def generate_from_data(
+    cfdi_data: dict,
+    rows: list[dict],
+    template_id: str = "default",
+    html_shell: str | None = None,
+    workers: int | None = None,
+    design_config: dict | None = None,
+) -> bytes:
+    """
+    Núcleo compartido (pasos 2-6): dados los datos ya parseados, produce el PDF.
+
+    Dos caminos convergen aquí y ejecutan EXACTAMENTE el mismo código:
+      - producción:      parse_xml_to_rows(xml) → generate_from_data(...)
+      - preview de diseño: generar_datos_ejemplo(...) → generate_from_data(...)
+
+    `design_config`: si se pasa (preview con config en memoria, aún no guardada),
+    se usa TAL CUAL como configuración de render en vez de cargar
+    templates/design/{template_id}.json de disco. Cambio aditivo — los llamadores
+    de producción no lo pasan y siguen leyendo de disco.
+
+    Estructura:
+      - Página 1: header HTML/CSS estampado en el tope + tabla canvas debajo
+      - Páginas 2..N: continuación de la tabla en canvas streaming
+      - Última página: footer con totales, UUID
+    """
+    # 2. Configuración de diseño: la inyectada en memoria tiene prioridad; si no,
+    #    se carga de disco por template_id (camino de producción).
+    if design_config is not None:
+        render_config = design_config
+    else:
+        import json as _json
+        from pathlib import Path as _Path
+        _design_path = _Path(__file__).resolve().parents[2] / "templates" / "design" / f"{template_id}.json"
+        render_config = _json.loads(_design_path.read_text()) if _design_path.exists() else None
+
+    # 3. Header: WeasyPrint renderiza el template HTML del usuario
     from .shell_service import get_html_template, render_shell
     html_template = html_shell or get_html_template(template_id)
-    header_pdf = render_shell(html_template, cfdi_data)
+    header_pdf = render_shell(html_template, cfdi_data, render_config)
 
-    # 3. Leer altura real del header para que canvas reserve exactamente ese espacio
+    # 4. Leer altura real del header para que canvas reserve exactamente ese espacio
     header_h = float(PdfReader(io.BytesIO(header_pdf)).pages[0].mediabox.height)
     HEADER_GAP = 8.0
     header_reserve = header_h + HEADER_GAP
 
-    # 4. Canvas: tabla + footer, reservando header_reserve pts en el tope de pág 1
+    # 5. Canvas: tabla + footer, reservando header_reserve pts en el tope de pág 1
     n_workers = workers or min(8, cpu_count())
     body_pdf = render_conceptos(
         rows,
@@ -91,7 +128,8 @@ def generate(
         workers=n_workers,
         skip_header_card=True,
         header_reserve=header_reserve,
+        render_config=render_config,
     )
 
-    # 5. Estampar header sobre página 1, pegar páginas 2+ sin cambio
+    # 6. Estampar header sobre página 1, pegar páginas 2+ sin cambio
     return _stamp_and_merge(header_pdf, body_pdf, header_reserve)

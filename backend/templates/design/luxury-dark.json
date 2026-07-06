@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "nombre": "Luxury Dark",
+  "es_referencia": true,
+  "brand": { "color": "#080808", "accent": "#C9A84C", "logo_url": null },
+  "tabla": {
+    "header_bg": "#080808",
+    "even_bg": "#F5F1E6",
+    "border": "#DDD5C0",
+    "density": "normal",
+    "columns": [
+      { "id": "desc",    "label": "CONCEPTO",           "field": "descripcion",    "width": 172.0, "visible": true,  "order": 0, "format": "text",  "color": "#1A1A1A", "emphasis": false },
+      { "id": "noid",    "label": "NO. IDENTIFICACIÓN", "field": "num_id",         "width": 92.0,  "visible": true,  "order": 1, "format": "text",  "color": "#7A7060", "emphasis": false },
+      { "id": "cant",    "label": "CANTIDAD",           "field": "cantidad",       "width": 52.0,  "visible": true,  "order": 2, "format": "text",  "color": "#1A1A1A", "emphasis": false },
+      { "id": "unidad",  "label": "U. MEDIDA",          "field": "clave_unidad",   "width": 50.0,  "visible": true,  "order": 3, "format": "text",  "color": "#7A7060", "emphasis": false },
+      { "id": "punit",   "label": "PRECIO UNITARIO",    "field": "valor_unitario", "width": 76.0,  "visible": true,  "order": 4, "format": "money", "color": "#1A1A1A", "emphasis": false },
+      { "id": "descto",  "label": "Desc",               "field": "descuento",      "width": 40.0,  "visible": false, "order": 5, "format": "money", "color": "#C9A84C", "emphasis": false },
+      { "id": "importe", "label": "IMPORTE",            "field": "importe",        "width": 76.0,  "visible": true,  "order": 6, "format": "money", "color": "#080808", "emphasis": true }
+    ]
+  },
+  "cierre": { "show_uuid": true, "show_fecha_timbrado": true, "show_disclaimer": true }
+}

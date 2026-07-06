@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "nombre": "Compact Grid",
+  "es_referencia": true,
+  "brand": { "color": "#1A2744", "accent": "#0E7C7B", "logo_url": null },
+  "tabla": {
+    "header_bg": "#1A2744",
+    "even_bg": "#F6F7F9",
+    "border": "#D8DCE8",
+    "density": "compact",
+    "columns": [
+      { "id": "desc",    "label": "DESCRIPCIÓN", "field": "descripcion",    "width": 158.0, "visible": true, "order": 0, "format": "text",  "color": "#0A0A12", "emphasis": false },
+      { "id": "clave",   "label": "CLAVE SAT",   "field": "num_id",         "width": 64.0,  "visible": true, "order": 1, "format": "text",  "color": "#5A6070", "emphasis": false },
+      { "id": "cant",    "label": "CANT.",       "field": "cantidad",       "width": 44.0,  "visible": true, "order": 2, "format": "text",  "color": "#0A0A12", "emphasis": false },
+      { "id": "unidad",  "label": "U.M.",        "field": "clave_unidad",   "width": 50.0,  "visible": true, "order": 3, "format": "text",  "color": "#5A6070", "emphasis": false },
+      { "id": "punit",   "label": "VAL. UNIT.",  "field": "valor_unitario", "width": 68.0,  "visible": true, "order": 4, "format": "money", "color": "#0A0A12", "emphasis": false },
+      { "id": "descto",  "label": "DSCTO.",      "field": "descuento",      "width": 54.0,  "visible": true, "order": 5, "format": "money", "color": "#B8BDC9", "emphasis": false },
+      { "id": "importe", "label": "IMPORTE",     "field": "importe",        "width": 64.0,  "visible": true, "order": 6, "format": "money", "color": "#0A0A12", "emphasis": true }
+    ],
+    "reglas": [
+      { "columna": "descuento", "operador": "gt", "valor": "0", "scope": "cell", "estilo": { "color": "#0E7C7B" } }
+    ]
+  },
+  "cierre": { "show_uuid": true, "show_fecha_timbrado": true, "show_disclaimer": true }
+}
