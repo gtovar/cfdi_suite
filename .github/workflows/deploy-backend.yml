@@ -31,6 +31,7 @@ jobs:
             REDIS_HOST=dashing-aphid-43185.upstash.io
             REDIS_PORT=6379
             REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
+            MODE=api
           flags: |
             --allow-unauthenticated
             --cpu=1
@@ -49,10 +50,9 @@ jobs:
             REDIS_PORT=6379
             REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
             PYTHONPATH=.
+            MODE=worker
           flags: |
             --cpu=2
             --memory=2Gi
             --max-instances=5
             --concurrency=1
-            --command=python3
-            --args=-m,arq,app.workers.pdf_worker.WorkerSettings
