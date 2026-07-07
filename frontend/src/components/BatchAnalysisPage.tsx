@@ -558,6 +558,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const [files, setFiles] = useState<File[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightSummary | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
@@ -719,7 +720,98 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     ? ((processEndTime ?? Date.now()) - processStartTime) / 1000
     : 0;
 
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   // ── Effects ───────────────────────────────────────────────────────────────────
+
+  // EFECTO DE RESILIENCIA EXTRA: Al montar la vista, revisa si había un lote corriendo antes
+  useEffect(() => {
+    const savedBatchId = localStorage.getItem('cfdi_active_batch_id');
+    if (savedBatchId) {
+      setActiveBatchId(savedBatchId);
+      setPhase('processing');
+      setProcessStartTime(Date.now());
+      startPollingStatus(savedBatchId);
+    }
+    return () => {
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+    };
+  }, []);
+
+  // Función encargada del Polling asíncrono hacia el backend (Redis)
+    function startPollingStatus(batchId: string) {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+
+        pollingIntervalRef.current = setInterval(async () => {
+            try {
+                const response = await fetch(`/api/cfdi/batch/status/${batchId}`);
+                if (!response.ok) {
+                    throw new Error('El lote expiró o no fue encontrado');
+                }
+                const data = await response.json();
+
+                // Mapeamos los resultados del servidor respetando la estructura de tu UI original
+                setQueue((prevQueue) => {
+                    // Si la cola interna de archivos locales está vacía (por una recarga de página), 
+                    // la reconstruimos usando la información asíncrona del backend
+                    const baselineQueue = prevQueue.length > 0 ? prevQueue : data.results.map((res: any) => ({
+                        file: new File([], res.filename),
+                        result: null
+                    }));
+
+                    return baselineQueue.map((entry) => {
+                        const serverResult = data.results.find((r: any) => r.filename === entry.file.name);
+                        return serverResult ? { ...entry, result: serverResult } : entry;
+                    });
+                });
+
+                if (data.status === 'done') {
+                    if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+                    localStorage.removeItem('cfdi_active_batch_id');
+                    setPhase('done');
+                    setProcessEndTime(Date.now());
+                    setShowModal(true);
+                }
+            } catch (err) {
+                console.error("Error obteniendo estatus del lote:", err);
+                if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            }
+        }, 2000); // Polling optimizado cada 2 segundos
+    }
+  // Tu función modificada de procesamiento masivo limpio
+  async function handleProcess() {
+    if (!files.length) return;
+    setPhase('processing');
+    setProcessStartTime(Date.now());
+    setProcessEndTime(null);
+
+    // Inicializamos la estructura visual vacía en lo que responde el servidor
+    const initialQueue: QueueEntry[] = files.map((file) => ({ file, result: null }));
+    setQueue(initialQueue);
+
+    const formData = new FormData();
+    files.forEach(f => formData.append('files', f));
+
+    try {
+    const response = await fetch('/api/cfdi/batch/analyze', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) throw new Error('Fallo al iniciar lote en servidor');
+
+    const data = await response.json();
+
+    // Guardamos el ID del lote en el navegador para garantizar resiliencia ante cierres o fallos
+    localStorage.setItem('cfdi_active_batch_id', data.batch_id);
+
+    // Comenzamos a escuchar el State Store de Redis
+    startPollingStatus(data.batch_id);
+    } catch (err) {
+      console.error("[batch] Error iniciando flujo asíncrono:", err);
+      setPhase('idle');
+      localStorage.removeItem('cfdi_active_batch_id');
+    }
+  }
 
   // Set webkitdirectory attribute on folder input (TypeScript doesn't allow it as JSX prop)
   // Must re-run when phase changes because the input unmounts/remounts with the idle block
@@ -788,6 +880,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   }
 
   function clearAll() {
+    if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+    localStorage.removeItem('cfdi_active_batch_id'); 
     cancelledRef.current = true;
     poolCancelRef.current?.();
     poolCancelRef.current = null;
@@ -809,51 +903,6 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     setSelectedRows(new Set());
     setPdfStates(new Map());
     onProgressUpdate?.(null);
-  }
-
-  function handleProcess() {
-    if (!files.length) return;
-    cancelledRef.current = false;
-    const runId = ++runIdRef.current;
-    const startTime = Date.now();
-    setProcessStartTime(startTime);
-    setProcessEndTime(null);
-    setPhase('processing');
-    setShowModal(false);
-    setFilterStatus('all');
-
-    const initialQueue: QueueEntry[] = files.map((file) => ({ file, result: null }));
-    setQueue(initialQueue);
-
-    completionTimestampsRef.current.clear();
-    const { promise, cancel } = batchAnalyzePool(
-      files,
-      (result, index) => {
-        completionTimestampsRef.current.set(index, Date.now());
-        setQueue((prev) => {
-          const next = [...prev];
-          if (next[index]) next[index] = { ...next[index]!, result };
-          return next;
-        });
-      },
-      8,
-    );
-
-    poolCancelRef.current = cancel;
-
-    promise
-      .then(() => {
-        if (cancelledRef.current || runIdRef.current !== runId) return;
-        setPhase('done');
-        setProcessEndTime(Date.now());
-        setShowModal(true);
-      })
-      .catch((err) => {
-        if (cancelledRef.current || runIdRef.current !== runId) return;
-        console.error('[batch] pool error:', err);
-        setPhase('done');
-        setProcessEndTime(Date.now());
-      });
   }
 
   async function handleDiotDownload() {
@@ -978,57 +1027,63 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
   }
 
+
   function handleRetryFailed() {
-    const failedEntries = queue
-      .map((entry, idx) => ({ entry, idx }))
-      .filter(({ entry }) => entry.result?.status === 'error');
-
-    if (!failedEntries.length) return;
-
-    const failedFiles = failedEntries.map(({ entry }) => entry.file);
-    const failedIndices = failedEntries.map(({ idx }) => idx);
-
-    setQueue((prev) => {
-      const next = [...prev];
-      failedIndices.forEach((i) => { next[i] = { ...next[i]!, result: null }; });
-      return next;
-    });
-
-    cancelledRef.current = false;
-    const runId = ++runIdRef.current;
-    setPhase('processing');
-    setShowModal(false);
-
-    const { promise, cancel } = batchAnalyzePool(
-      failedFiles,
-      (result, localIndex) => {
-        const globalIndex = failedIndices[localIndex]!;
-        completionTimestampsRef.current.set(globalIndex, Date.now());
-        setQueue((prev) => {
-          const next = [...prev];
-          if (next[globalIndex]) next[globalIndex] = { ...next[globalIndex]!, result };
-          return next;
-        });
-      },
-      8,
+    // 1. Identificamos los nombres de los archivos que marcaron error
+    const failedNames = new Set(
+      queue
+        .filter((entry) => entry.result?.status === 'error')
+        .map((entry) => entry.file.name)
     );
 
-    poolCancelRef.current = cancel;
+    if (failedNames.size === 0) return;
 
-    promise
-      .then(() => {
-        if (cancelledRef.current || runIdRef.current !== runId) return;
-        setPhase('done');
-        setProcessEndTime(Date.now());
+    // 2. Filtramos los archivos binarios reales desde nuestro estado de React
+    const failedFilesToRetry = files.filter((f) => failedNames.has(f.name));
+
+    // Alerta de resiliencia: Si recargó la página, el binario de 'files' se pierde.
+    // Le pedimos amablemente al usuario que vuelva a arrastrar esos archivos específicos.
+    if (failedFilesToRetry.length === 0) {
+      alert(
+        `Debido a una recarga de página, los archivos binarios ya no están en la memoria del navegador. Por favor, vuelve a arrastrar o seleccionar los archivos fallidos para reintentar.`
+      );
+      return;
+    }
+
+    // 3. Si los archivos existen en memoria, reiniciamos el flujo asíncrono limpio
+    setPhase('processing');
+    setProcessStartTime(Date.now());
+    setProcessEndTime(null);
+
+    // Inicializamos visualmente los fallidos de vuelta a estado de carga (null)
+    setQueue((prev) =>
+      prev.map((entry) =>
+        failedNames.has(entry.file.name) ? { ...entry, result: null } : entry
+      )
+    );
+
+    const formData = new FormData();
+    failedFilesToRetry.forEach((f) => formData.append('files', f));
+
+    // Despachamos un nuevo lote exclusivo para los errores
+    fetch('/api/cfdi/batch/analyze', {
+      method: 'POST',
+      body: formData,
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Fallo al reintentar lote');
+        return res.json();
+      })
+      .then((data) => {
+        // Guardamos el ID del nuevo lote de reintento y empezamos el polling
+        localStorage.setItem('cfdi_active_batch_id', data.batch_id);
+        startPollingStatus(data.batch_id);
       })
       .catch((err) => {
-        if (cancelledRef.current || runIdRef.current !== runId) return;
-        console.error('[batch] retry error:', err);
-        setPhase('done');
-        setProcessEndTime(Date.now());
+        console.error("[batch] Error en reintento asíncrono:", err);
+        setPhase('idle');
       });
   }
-
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
