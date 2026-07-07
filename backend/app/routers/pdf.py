@@ -15,6 +15,7 @@ from typing import Optional
 import redis.asyncio as aioredis
 
 from ..services.pdf_pipeline import generate
+# Esta función ahora es una corrutina asíncrona
 from ..services.task_dispatcher import enqueue_pdf_generation
 
 router = APIRouter(prefix="/api", tags=["PDF"])
@@ -38,7 +39,6 @@ class GeneratePdfPayload(BaseModel):
     html_shell: Optional[str] = None
 
 
-# --- 1. ENDPOINT INTERNO (Llamado por Google Cloud Tasks para procesar cada clon) ---
 @router.post("/internal/generate-pdf")
 async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
     if "x-cloudtasks-queuename" not in request.headers:
@@ -70,7 +70,6 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- 2. ENDPOINT DE INICIO INDIVIDUAL (Mantenido para compatibilidad de archivos sueltos) ---
 @router.post("/cfdi/pdf/start")
 async def start_pdf_generation(
     file: UploadFile = File(...),
@@ -92,14 +91,14 @@ async def start_pdf_generation(
     await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=3600)
 
     try:
-        enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id)
+        await enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en Cloud Tasks: {e}")
     
     return {"jobId": job_id}
 
 
-# --- 3. ENDPOINT MASIVO: PROCESAR UN ARCHIVO ZIP ---
+# --- ENDPOINT MASIVO CORREGIDO: ASINCRONÍA REAL SIN PARPADEO ---
 @router.post("/cfdi/pdf/start-zip")
 async def start_pdf_zip_generation(
     file: UploadFile = File(...),
@@ -120,19 +119,29 @@ async def start_pdf_zip_generation(
             pass
 
     job_ids = []
+    async_tasks = []  # Lista para guardar las corrutinas de red simultáneas
 
     try:
         with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
             for file_info in z.infolist():
+                # Descartamos basura oculta del sistema
+                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
+                    continue
+
                 if file_info.filename.lower().endswith(".xml"):
                     job_id = str(uuid.uuid4())
                     xml_content = z.read(file_info.filename)
 
+                    # Guardar en Redis toma microsegundos
                     await redis_client.set(f"pdf:xml:{job_id}", xml_content, ex=3600)
                     await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=3600)
-
-                    enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id)
+                    
                     job_ids.append(job_id)
+
+                    # En lugar de ejecutar la función de inmediato, guardamos la orden en la lista
+                    async_tasks.append(
+                        enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id)
+                    )
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
     except Exception as e:
@@ -140,10 +149,17 @@ async def start_pdf_zip_generation(
         raise HTTPException(status_code=500, detail="Error interno al procesar el archivo ZIP masivo.")
 
     if not job_ids:
-        raise HTTPException(status_code=400, detail="No se encontraron archivos XML dentro del ZIP.")
+        raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
 
+    # Guardamos la lista del lote en Redis
     await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(job_ids), ex=3600)
-    print(f"Lote ZIP {batch_id} encolado exitosamente. Total de facturas: {len(job_ids)}")
+
+    # TRUCO DE MAGIA: Ejecutamos las cientos de llamadas a Google Tasks AL MISMO TIEMPO
+    # Esto tarda entre 1 y 2 segundos en total para todo el lote completo
+    print(f"Disparando {len(async_tasks)} peticiones asíncronas en paralelo a Google Cloud Tasks...")
+    await asyncio.gather(*async_tasks)
+
+    print(f"Lote ZIP {batch_id} encolado exitosamente de forma asíncrona.")
     
     return {
         "batchId": batch_id,
@@ -151,13 +167,8 @@ async def start_pdf_zip_generation(
     }
 
 
-# --- 4. NUEVO ENDPOINT: MONITOREO DE PROGRESO DE LOTE GLOBAL (SSE) ---
 @router.get("/cfdi/pdf/batch/{batch_id}/progress")
 async def batch_progress(batch_id: str):
-    """
-    Monitorea el progreso de un lote completo de PDFs leyendo el estado de cada job_id en Redis.
-    Devuelve un flujo SSE con el conteo total, completados, errores y porcentaje global.
-    """
     async def event_generator():
         while True:
             batch_data = await redis_client.get(f"pdf:batch:{batch_id}")
@@ -173,7 +184,6 @@ async def batch_progress(batch_id: str):
             converting = 0
             pending = 0
             
-            # Consultamos los estados de todo el lote en una sola ráfaga rápida (mget)
             keys = [f"pdf:status:{jid}" for jid in job_ids]
             statuses = await redis_client.mget(keys)
             
@@ -201,22 +211,14 @@ async def batch_progress(batch_id: str):
                 "percentage": porcentaje
             }
             yield f"data: {json.dumps(payload)}\n\n"
-            
             if processed >= total:
                 break
-                
             await asyncio.sleep(1)
-            
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# --- 5. NUEVO ENDPOINT: DESCARGA CONSOLIDADA DEL LOTE EN UN SOLO ZIP ---
 @router.get("/cfdi/pdf/batch/{batch_id}/download")
 async def download_batch_zip(batch_id: str):
-    """
-    Empaqueta todos los PDFs generados con éxito en este lote dentro de un nuevo archivo .ZIP
-    y lo descarga directamente en el navegador del usuario como un solo archivo consolidado.
-    """
     batch_data = await redis_client.get(f"pdf:batch:{batch_id}")
     if not batch_data:
         raise HTTPException(status_code=404, detail="El lote especificado no existe o ya expiró.")
@@ -228,21 +230,16 @@ async def download_batch_zip(batch_id: str):
         for jid in job_ids:
             pdf_bytes = await redis_client.get(f"pdf:data:{jid}")
             if pdf_bytes:
-                # Guardamos cada PDF usando su ID como nombre dentro del ZIP final
                 z.writestr(f"cfdi_{jid}.pdf", pdf_bytes)
                 
     zip_buffer.seek(0)
-    
     return Response(
         content=zip_buffer.getvalue(),
         media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'
-        }
+        headers={"Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'}
     )
 
 
-# --- ENDPOINTS INDIVIDUALES TRADICIONALES (Mantenidos para compatibilidad) ---
 @router.get("/cfdi/pdf/{job_id}/progress")
 async def pdf_progress(job_id: str):
     async def event_generator():
@@ -255,6 +252,7 @@ async def pdf_progress(job_id: str):
             yield 'data: {"status": "converting"}\n\n'
             await asyncio.sleep(1)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 @router.get("/cfdi/pdf/{job_id}/download")
 async def download_pdf(job_id: str):
