@@ -27,10 +27,14 @@ class SimpleHandler(BaseHTTPRequestHandler):
         return  # Silenciar logs internos para no ensuciar la consola
 
 def start_fake_server():
+    # Si por alguna razón Google no pasa la variable, usamos 8080 por defecto
     port = int(os.getenv("PORT", "8080"))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    print(f"--- Fake Web Server activo en puerto {port} ---")
-    server.serve_forever()
+    try:
+        server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+        print(f"--- Fake Web Server activo en puerto {port} ---")
+        server.serve_forever()
+    except Exception as e:
+        print(f"Error al levantar puerto falso: {e}")
 
 async def startup(ctx):
     """Evento nativo de ARQ que se ejecuta al arrancar el Worker."""
