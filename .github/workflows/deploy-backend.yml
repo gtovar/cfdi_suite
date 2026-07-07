@@ -19,11 +19,40 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Deploy to Cloud Run
+      # --- 1. DESPLIEGUE AUTOMÁTICO DE LA API WEB ---
+      - name: Deploy API to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: cfdi-suite-api
           region: us-central1
           source: ./backend
-          env_vars: ALLOWED_ORIGINS=${{ secrets.VERCEL_URL }}
-          flags: --allow-unauthenticated
+          env_vars: |
+            ALLOWED_ORIGINS=${{ secrets.VERCEL_URL }}
+            REDIS_HOST=dashing-aphid-43185.upstash.io
+            REDIS_PORT=6379
+            REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
+          flags: |
+            --allow-unauthenticated
+            --cpu=1
+            --memory=512Mi
+            --max-instances=10
+      # --- 2. DESPLIEGUE AUTOMÁTICO DEL WORKER ---
+      - name: Deploy Worker to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: cfdi-suite-worker
+          region: us-central1
+          source: ./backend
+          env_vars: |
+            REDIS_HOST=dashing-aphid-43185.upstash.io
+            REDIS_PORT=6379
+            REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
+            PYTHONPATH=.
+          flags: |
+            --cpu=2
+            --memory=2Gi
+            --max-instances=5
+            --concurrency=1
+            --command=python3
+            --args=-m,arq,app.workers.pdf_worker.WorkerSettings
+            --no-traffic
