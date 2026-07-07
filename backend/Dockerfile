@@ -24,4 +24,4 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["sh", "-c", "if [ '$MODE' = 'worker' ]; then uvicorn app.workers.pdf_worker:app --host 0.0.0.0 --port 8080; else uvicorn app.main:app --host 0.0.0.0 --port 8080; fi"]
+CMD ["sh", "-c", "if [ \"$MODE\" = \"worker\" ]; then uvicorn app.workers.pdf_worker:app --host 0.0.0.0 --port 8080; else uvicorn app.main:app --host 0.0.0.0 --port 8080; fi"]
