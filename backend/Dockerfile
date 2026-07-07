@@ -24,4 +24,5 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["sh", "-c", "if [ \"$MODE\" = \"worker\" ]; then arq app.workers.pdf_worker.WorkerSettings & mkdir -p /tmp/empty && cd /tmp/empty && python3 -m http.server ${PORT:-8080}; else uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}; fi"]
+# Comando final usando Honcho para el Worker y Uvicorn para la API
+CMD ["sh", "-c", "if [ \"$MODE\" = \"worker\" ]; then honcho -f Procfile.worker start; else uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}; fi"]

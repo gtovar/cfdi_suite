@@ -1,0 +1,2 @@
+web: python3 -m http.server ${PORT:-8080}
+worker: arq app.workers.pdf_worker.WorkerSettings
