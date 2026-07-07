@@ -1,3 +1,4 @@
+import redis
 import redis.asyncio as aioredis
 import asyncio
 import uuid
@@ -8,7 +9,6 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
-import redis
 
 from ..services.analyze_cfdi import run_analyze_cfdi
 from ..services.batch_reports import generate_diot
