@@ -260,51 +260,58 @@ function getMenuItems(targetType, targetData, handlers, clipboard, hasTitle, onH
 }
 
 // ─── Main Component ─────────────────────────────────────────────
+// ─── Main Component ─────────────────────────────────────────────
 
 export default function ContextMenu({ menuState, onHide, handlers, clipboard, hasTitle }) {
-  const menuRef = useRef(null)
-  const [position, setPosition] = useState({ x: 0, y: 0 })
-  const [ready, setReady] = useState(false)
+    const menuRef = useRef(null)
+    const [position, setPosition] = useState({ x: 0, y: 0 })
+    const [ready, setReady] = useState(false)
 
-  // WhatsApp-style: render offscreen, measure, then place in view
-  useEffect(() => {
-    if (!menuState.visible) {
-      setReady(false)
-      return
+    // Arreglo del doble render: Actualizamos el estado 'ready' inline si se ocultó el menú
+    const [prevVisible, setPrevVisible] = useState(menuState.visible)
+    if (menuState.visible !== prevVisible) {
+        setPrevVisible(menuState.visible)
+        if (!menuState.visible) {
+            setReady(false)
+        } else {
+            // Al abrirse, lo mandamos lejos para medirlo
+            setPosition({ x: -9999, y: -9999 })
+            setReady(false)
+        }
     }
 
-    // Initially place offscreen so we can measure
-    setPosition({ x: -9999, y: -9999 })
-    setReady(false)
+    // WhatsApp-style: render offscreen, measure, then place in view
+    useEffect(() => {
+        if (!menuState.visible) return
 
-    // After first paint, measure and compute final position
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (!menuRef.current) return
-        const rect = menuRef.current.getBoundingClientRect()
-        const vw = window.innerWidth
-        const vh = window.innerHeight
-        const pad = 8
-        let x = menuState.x
-        let y = menuState.y
+        // After first paint, measure and compute final position
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                if (!menuRef.current) return
+                const rect = menuRef.current.getBoundingClientRect()
+                const vw = window.innerWidth
+                const vh = window.innerHeight
+                const pad = 8
+                let x = menuState.x
+                let y = menuState.y
 
-        // If menu overflows right, flip to left of cursor
-        if (x + rect.width > vw - pad) {
-          x = Math.max(pad, x - rect.width)
-        }
-        // If menu overflows bottom, place above cursor
-        if (y + rect.height > vh - pad) {
-          y = Math.max(pad, y - rect.height)
-        }
-        // Final clamp so it never goes offscreen
-        x = Math.max(pad, Math.min(x, vw - rect.width - pad))
-        y = Math.max(pad, Math.min(y, vh - rect.height - pad))
+                // If menu overflows right, flip to left of cursor
+                if (x + rect.width > vw - pad) {
+                    x = Math.max(pad, x - rect.width)
+                }
+                // If menu overflows bottom, place above cursor
+                if (y + rect.height > vh - pad) {
+                    y = Math.max(pad, y - rect.height)
+                }
+                // Final clamp so it never goes offscreen
+                x = Math.max(pad, Math.min(x, vw - rect.width - pad))
+                y = Math.max(pad, Math.min(y, vh - rect.height - pad))
 
-        setPosition({ x, y })
-        setReady(true)
-      })
-    })
-  }, [menuState])
+                setPosition({ x, y })
+                setReady(true)
+            })
+        })
+    }, [menuState])
 
   if (!menuState.visible) return null
 

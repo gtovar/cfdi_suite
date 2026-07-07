@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { CFDIConcept, CFDIData } from '../cfdi/public';
 import { getSeverityColors } from '../app/utils/findingUtils';
@@ -30,7 +30,6 @@ interface FindingsSidebarProps {
   cfdi: CFDIData;
   findingContexts: FindingContext[];
   getFindingOriginLabel: (findingId: string) => string;
-  onSelectConcept: (concept: CFDIConcept) => void;
   selectedFindingId: string | null;
   onSelectFinding: (id: string | null) => void;
 }
@@ -39,16 +38,17 @@ export default function FindingsSidebar({
   cfdi,
   findingContexts,
   getFindingOriginLabel,
-  onSelectConcept,
   selectedFindingId,
   onSelectFinding,
 }: FindingsSidebarProps) {
-  const [showAllFindings, setShowAllFindings] = useState(false);
 
-  useEffect(() => {
-    setShowAllFindings(false);
-  }, [cfdi.uuid]);
+    const [showAllFindings, setShowAllFindings] = useState(false);
+    const [prevUuid, setPrevUuid] = useState(cfdi.uuid);
 
+    if (cfdi.uuid !== prevUuid) {
+        setPrevUuid(cfdi.uuid);
+        setShowAllFindings(false);
+    }
   const visibleFindings = showAllFindings ? cfdi.findings : cfdi.findings.slice(0, 4);
   const hiddenFindingsCount = Math.max(0, cfdi.findings.length - visibleFindings.length);
 

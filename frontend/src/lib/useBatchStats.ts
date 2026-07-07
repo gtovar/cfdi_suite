@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { BatchFileResult } from './batch-api-client';
 
 export interface QueueEntry {
@@ -41,8 +41,8 @@ export function formatRemainingTime(seconds: number): string {
 
 export function useBatchStats(queue: QueueEntry[], totalFiles: number): BatchStats {
   const tsRef = useRef<number[]>([]);
-  const prevCountRef = useRef(0);
   const [fps, setFps] = useState(0);
+  const [prevCompleted, setPrevCompleted] = useState(0);
 
   const base = useMemo(() => {
     const emisorMap = new Map<string, { nombre: string; count: number }>();
@@ -85,29 +85,26 @@ export function useBatchStats(queue: QueueEntry[], totalFiles: number): BatchSta
     return { completed, ok, conErrores, errors, totalMonto, topEmisores, topMonth };
   }, [queue]);
 
-  useEffect(() => {
+  if (base.completed !== prevCompleted) {
+    const newItems = base.completed - prevCompleted;
+    setPrevCompleted(base.completed);
+
     if (base.completed === 0) {
       setFps(0);
       tsRef.current = [];
-      prevCountRef.current = 0;
-      return;
+    } else if (newItems > 0) {
+      const now = Date.now();
+      // Offset batched completions by 1ms each so span is never 0
+      for (let i = 0; i < newItems; i++) tsRef.current.push(now + i);
+      if (tsRef.current.length > 30) tsRef.current = tsRef.current.slice(-30);
+
+      const ts = tsRef.current;
+      if (ts.length >= 2) {
+        const span = (ts[ts.length - 1] - ts[0]) / 1000;
+        if (span > 0) setFps((ts.length - 1) / span);
+      }
     }
-    const newItems = base.completed - prevCountRef.current;
-    if (newItems <= 0) return;
-
-    const now = Date.now();
-    // Offset batched completions by 1ms each so span is never 0
-    for (let i = 0; i < newItems; i++) tsRef.current.push(now + i);
-    if (tsRef.current.length > 30) tsRef.current = tsRef.current.slice(-30);
-
-    const ts = tsRef.current;
-    if (ts.length >= 2) {
-      const span = (ts[ts.length - 1] - ts[0]) / 1000;
-      if (span > 0) setFps((ts.length - 1) / span);
-    }
-
-    prevCountRef.current = base.completed;
-  }, [base.completed]);
+  }
 
   return {
     ...base,

@@ -34,7 +34,7 @@ function useCountUp(target: number, duration = 1200): number {
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (target === 0) { setValue(0); return; }
+    if (target === 0) return;
     let start: number | null = null;
     const step = (ts: number) => {
       if (start === null) start = ts;
@@ -47,7 +47,7 @@ function useCountUp(target: number, duration = 1200): number {
     return () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); };
   }, [target, duration]);
 
-  return value;
+  return target === 0 ? 0 : value;
 }
 
 export function resolveCompletionStatus(totalProblematic: number, totalFiles: number) {

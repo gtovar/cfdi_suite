@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import {
   Eye,
   ZoomIn,
@@ -21,13 +21,13 @@ export default function PdfPreview({ pdfUrl, onClose, title = "PDF Preview" }) {
   const iframeRef = useRef(null)
   const theme = 'light'; // ◄ DÉJALO ASÍ
 
-  useEffect(() => {
+  const [prevPdfUrl, setPrevPdfUrl] = useState(pdfUrl)
+
+  // Ajustamos el estado durante el renderizado (inline render)
+  if (pdfUrl !== prevPdfUrl) {
+    setPrevPdfUrl(pdfUrl)
     setIsLoading(true)
     setHasError(false)
-  }, [pdfUrl])
-
-  const handleZoomIn = () => {
-    setZoomLevel(prev => Math.min(prev + 25, 200))
   }
 
   const handleZoomOut = () => {

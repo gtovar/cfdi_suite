@@ -1,8 +1,59 @@
-
 import { useState } from 'react'
 import { Edit, Settings, Trash2, ArrowLeft, ArrowRight, ArrowDown } from 'lucide-react'
 import { formatProps, parseProps } from './utils'
 import { DEFAULT_FONTS } from './constants'
+
+// 1. AHORA BORDER CONTROLS VIVE AFUERA Y RECIBE PROPS
+const BorderControls = ({ label, index, borders, updateBorder }) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+        <label style={{ fontSize: '0.75rem', fontWeight: '500', color: 'hsl(var(--muted-foreground))' }}>{label}</label>
+        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+            <button
+                style={{
+                    padding: '0.25rem 0.5rem',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '4px',
+                    background: 'hsl(var(--secondary))',
+                    color: 'hsl(var(--foreground))',
+                    cursor: borders[index] <= 0 ? 'not-allowed' : 'pointer',
+                    opacity: borders[index] <= 0 ? 0.5 : 1,
+                    fontSize: '0.8rem',
+                    transition: 'all 0.2s ease'
+                }}
+                onClick={() => updateBorder(index, borders[index] - 1)}
+                disabled={borders[index] <= 0}
+                onMouseEnter={(e) => {
+                    if (borders[index] > 0) e.currentTarget.style.background = 'hsl(var(--accent))'
+                }}
+                onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'hsl(var(--secondary))'
+                }}
+            >−</button>
+            <span style={{ padding: '0.25rem 0.4rem', fontSize: '0.75rem', minWidth: '2.5rem', textAlign: 'center', background: 'hsl(var(--muted))', borderRadius: '4px' }}>{borders[index]}px</span>
+            <button
+                style={{
+                    padding: '0.25rem 0.5rem',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '4px',
+                    background: 'hsl(var(--secondary))',
+                    color: 'hsl(var(--foreground))',
+                    cursor: borders[index] >= 10 ? 'not-allowed' : 'pointer',
+                    opacity: borders[index] >= 10 ? 0.5 : 1,
+                    fontSize: '0.8rem',
+                    transition: 'all 0.2s ease'
+                }}
+                onClick={() => updateBorder(index, borders[index] + 1)}
+                disabled={borders[index] >= 10}
+                onMouseEnter={(e) => {
+                    if (borders[index] < 10) e.currentTarget.style.background = 'hsl(var(--accent))'
+                }}
+                onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'hsl(var(--secondary))'
+                }}
+            >+</button>
+        </div>
+    </div>
+)
 
 function PropsEditor({ props, onChange, fonts = DEFAULT_FONTS, showAlignment = true, showBorders = true }) {
     const parsed = parseProps(props)
@@ -12,57 +63,6 @@ function PropsEditor({ props, onChange, fonts = DEFAULT_FONTS, showAlignment = t
         newBorders[index] = Math.max(0, Math.min(10, value))
         onChange(formatProps({ ...parsed, borders: newBorders }))
     }
-
-    const BorderControls = ({ label, index }) => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-            <label style={{ fontSize: '0.75rem', fontWeight: '500', color: 'hsl(var(--muted-foreground))' }}>{label}</label>
-            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
-                <button
-                    style={{
-                        padding: '0.25rem 0.5rem',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '4px',
-                        background: 'hsl(var(--secondary))',
-                        color: 'hsl(var(--foreground))',
-                        cursor: parsed.borders[index] <= 0 ? 'not-allowed' : 'pointer',
-                        opacity: parsed.borders[index] <= 0 ? 0.5 : 1,
-                        fontSize: '0.8rem',
-                        transition: 'all 0.2s ease'
-                    }}
-                    onClick={() => updateBorder(index, parsed.borders[index] - 1)}
-                    disabled={parsed.borders[index] <= 0}
-                    onMouseEnter={(e) => {
-                        if (parsed.borders[index] > 0) e.currentTarget.style.background = 'hsl(var(--accent))'
-                    }}
-                    onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'hsl(var(--secondary))'
-                    }}
-                >−</button>
-                <span style={{ padding: '0.25rem 0.4rem', fontSize: '0.75rem', minWidth: '2.5rem', textAlign: 'center', background: 'hsl(var(--muted))', borderRadius: '4px' }}>{parsed.borders[index]}px</span>
-                <button
-                    style={{
-                        padding: '0.25rem 0.5rem',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '4px',
-                        background: 'hsl(var(--secondary))',
-                        color: 'hsl(var(--foreground))',
-                        cursor: parsed.borders[index] >= 10 ? 'not-allowed' : 'pointer',
-                        opacity: parsed.borders[index] >= 10 ? 0.5 : 1,
-                        fontSize: '0.8rem',
-                        transition: 'all 0.2s ease'
-                    }}
-                    onClick={() => updateBorder(index, parsed.borders[index] + 1)}
-                    disabled={parsed.borders[index] >= 10}
-                    onMouseEnter={(e) => {
-                        if (parsed.borders[index] < 10) e.currentTarget.style.background = 'hsl(var(--accent))'
-                    }}
-                    onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'hsl(var(--secondary))'
-                    }}
-                >+</button>
-            </div>
-        </div>
-    )
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -118,10 +118,10 @@ function PropsEditor({ props, onChange, fonts = DEFAULT_FONTS, showAlignment = t
                 <div>
                     <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', fontWeight: '600', color: 'hsl(var(--foreground))' }}>Borders</label>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                        <BorderControls label="Left" index={0} />
-                        <BorderControls label="Right" index={1} />
-                        <BorderControls label="Top" index={2} />
-                        <BorderControls label="Bottom" index={3} />
+                <BorderControls label="Left" index={0} borders={parsed.borders} updateBorder={updateBorder} />
+                        <BorderControls label="Right" index={1} borders={parsed.borders} updateBorder={updateBorder} />
+                        <BorderControls label="Top" index={2} borders={parsed.borders} updateBorder={updateBorder} />
+                        <BorderControls label="Bottom" index={3} borders={parsed.borders} updateBorder={updateBorder} />
                     </div>
                     <div>
                         <label style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.25rem', color: 'hsl(var(--muted-foreground))' }}>Quick Set</label>

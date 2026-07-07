@@ -74,12 +74,21 @@ export default function XmlNodeViewer({
   modifiedXml,
   onAcceptChange,
 }: XmlNodeViewerProps) {
-  const [xmlContent, setXmlContent] = useState('');
+    
 
-  useEffect(() => {
-    if (!sourceFile) { setXmlContent(''); return; }
-    sourceFile.text().then(setXmlContent);
-  }, [sourceFile]);
+    const [xmlContent, setXmlContent] = useState('');
+    const [prevSourceFile, setPrevSourceFile] = useState(sourceFile);
+
+    if (sourceFile !== prevSourceFile) {
+        setPrevSourceFile(sourceFile);
+        setXmlContent('');
+    }
+
+    useEffect(() => {
+        if (!sourceFile) return;
+        sourceFile.text().then(setXmlContent);
+    }, [sourceFile]);
+
 
   const displayXml = modifiedXml ?? xmlContent ?? '';
 
@@ -97,20 +106,24 @@ export default function XmlNodeViewer({
 
   // Tokenization is deferred so React can render the loading state first.
   // tokenizeXml on large XMLs creates ~400k objects — cannot run synchronously in render.
-  const [lineTokens, setLineTokens] = useState<XmlToken[][]>([]);
+const [lineTokens, setLineTokens] = useState<XmlToken[][]>([]);
   const [isTokenizing, setIsTokenizing] = useState(false);
-  const tokenizeKeyRef = useRef('');
 
-  useEffect(() => {
+  const currentTokenizeKey = displayXml ? `${displayXml.length}|${snippet?.highlightAttr ?? ''}|${finding?.declared ?? ''}` : '';
+  const [prevTokenizeKey, setPrevTokenizeKey] = useState(currentTokenizeKey);
+
+  if (currentTokenizeKey !== prevTokenizeKey) {
+    setPrevTokenizeKey(currentTokenizeKey);
     if (!displayXml) {
       setLineTokens([]);
       setIsTokenizing(false);
-      return;
+    } else {
+      setIsTokenizing(true);
     }
-    const key = `${displayXml.length}|${snippet?.highlightAttr ?? ''}|${finding?.declared ?? ''}`;
-    if (key === tokenizeKeyRef.current) return; // same inputs, skip
-    tokenizeKeyRef.current = key;
-    setIsTokenizing(true);
+  }
+
+  useEffect(() => {
+    if (!displayXml) return;
 
     const id = setTimeout(() => {
       const tokens = tokenizeXml(
@@ -124,6 +137,8 @@ export default function XmlNodeViewer({
     }, 0);
     return () => clearTimeout(id);
   }, [displayXml, snippet?.highlightAttr, finding?.declared, finding?.expected]);
+
+
 
   const parentRef = useRef<HTMLDivElement>(null);
 
