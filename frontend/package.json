@@ -17,14 +17,13 @@
     "benchmark:current-ts": "node --import tsx src/cfdi/benchmark/runBenchmark.ts --engine=current-ts",
     "benchmark:current-ts:json": "node --import tsx src/cfdi/benchmark/runBenchmark.ts --engine=current-ts --format=json",
     "benchmark:python-satcfdi": "node --import tsx src/cfdi/benchmark/runBenchmark.ts --engine=python-satcfdi",
-    "benchmark:python-satcfdi:json": "node --import tsx src/cfdi/benchmark/runBenchmark.ts --engine=python-satcfdi --format=json"
+    "benchmark:python-satcfdi:json": "node --import tsx src/cfdi/benchmark/runBenchmark.ts --engine=python-satcfdi --format=json",
+    "doctor": "npx react-doctor@latest"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@google/genai": "^1.29.0",
-    "@headlessui/react": "^2.2.10",
     "@tailwindcss/vite": "^4.1.14",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.0",
@@ -47,6 +46,7 @@
     "happy-dom": "^20.8.8",
     "jsdom": "^29.0.1",
     "playwright": "^1.60.0",
+    "react-doctor": "^0.7.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
