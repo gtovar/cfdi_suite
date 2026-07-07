@@ -3,9 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import clsx from 'clsx';
 import { useEffect, useMemo, useState } from 'react';
-import type { CFDIIngresoRow, CFDIPagoRow } from './cfdi/public';
 import { useCfdiAnalysis } from './app/hooks/useCfdiAnalysis';
 import { useCfdiExports } from './app/hooks/useCfdiExports';
 import { useDiagnoseState } from './app/hooks/useDiagnoseState';
@@ -31,7 +29,6 @@ import FindingsSidebar from './components/FindingsSidebar';
 import CfdiAnalysisLoader from './components/CfdiAnalysisLoader';
 import InspectorHeader from './components/InspectorHeader';
 import { type TemplateConfig, DEFAULT_TEMPLATE } from './components/PdfTemplateBuilder';
-import PdfTemplatesPage from './components/PdfTemplatesPage';
 import ConversionMasivaPage from './components/ConversionMasivaPage';
 import ResolutionPanel from './components/ResolutionPanel';
 import TaxAuditPanel from './components/TaxAuditPanel';
@@ -83,7 +80,6 @@ export default function App() {
     analysisStageProgress,
     analysisStageDetail,
     sourceFile,
-    errorMessage,
     handleFileSelect,
     resetAnalysis,
   } = useCfdiAnalysis();
@@ -102,7 +98,7 @@ export default function App() {
   const [pdfPhase, setPdfPhase] = useState<'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error'>('idle');
   const [pdfProgressDetail, setPdfProgressDetail] = useState<string | undefined>();
   const [pdfError, setPdfError] = useState<string | undefined>();
-  const [templateConfig, setTemplateConfig] = useState<TemplateConfig>(() => {
+  const [templateConfig] = useState<TemplateConfig>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem('cfdi-pdf-template') ?? '');
       return stored ? { ...DEFAULT_TEMPLATE, ...stored } : DEFAULT_TEMPLATE;
@@ -135,8 +131,6 @@ export default function App() {
   const extractColumns = activeDatasetType === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
   const {
     extractGrid,
-    extractSearchTerm,
-    filteredExtractRows,
     resetForNewAnalysis,
     resetAll: resetExtractState,
   } = useExtractGridState({
@@ -145,12 +139,6 @@ export default function App() {
     pagoRows,
     extractColumns,
   });
-
-  const filteredIngresoRows = activeDatasetType === 'ingresos' ? (filteredExtractRows as CFDIIngresoRow[]) : ingresoRows;
-  const filteredPagoRows = activeDatasetType === 'pagos' ? (filteredExtractRows as CFDIPagoRow[]) : pagoRows;
-
-  const subtotalDifference = Math.abs((cfdi?.subtotalCalculado ?? 0) - (cfdi?.subtotal ?? 0));
-  const totalDifference = Math.abs((cfdi?.totalCalculado ?? 0) - (cfdi?.total ?? 0));
 
   const summaryFields = buildSummaryFields({ profile, cfdi, pagoRows });
 
@@ -180,7 +168,6 @@ export default function App() {
   const rfcValidationProps = rfcEmisor
     ? {
         rfc: rfcEmisor,
-        razonSocial: nombreEmisor || undefined,
         formatLoading: rfcValidation.formatLoading,
         satLoading: rfcValidation.satLoading,
         formatResult: rfcValidation.formatResult,
@@ -302,10 +289,6 @@ export default function App() {
     }
     setPdfPhase('idle');
     setPdfProgressDetail(undefined);
-  }
-
-  function handleSaveTemplate(t: TemplateConfig) {
-    setTemplateConfig(t);
   }
 
   function handleDownloadModified() {
@@ -451,7 +434,6 @@ export default function App() {
                       cfdi={cfdi}
                       findingContexts={findingContexts}
                       getFindingOriginLabel={getFindingOriginLabel}
-                      onSelectConcept={diagnose.setSelectedConcept}
                       selectedFindingId={selectedFindingId}
                       onSelectFinding={setSelectedFindingId}
                     />
