@@ -1,10 +1,11 @@
+from __future__ import annotations
+import asyncio
 import base64
 import json
 import uuid
 import os
-import asyncio
-# Importamos redis.asyncio para manejar conexiones asíncronas a tu Upstash
-import redis.asyncio as aioredis
+
+# REEMPLAZA TU LÍNEA DE FASTAPI POR ESTA:
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
