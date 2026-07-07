@@ -1,5 +1,17 @@
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
 
+// Estructura de control para el progreso global de un lote ZIP
+export interface BatchProgressPayload {
+  status: 'processing' | 'done' | 'error';
+  total: number;
+  done: number;
+  error: number;
+  converting: number;
+  pending: number;
+  percentage: number;
+  message?: string;
+}
+
 export function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -37,6 +49,52 @@ export async function convertFileToPdf(file: File, templateId?: string): Promise
   const dl = await fetch(`/api/cfdi/pdf/${jobId}/download`);
   if (!dl.ok) throw new Error(`Error ${dl.status} al descargar PDF`);
   return dl.arrayBuffer();
+}
+
+// --- NUEVA FUNCIÓN: INICIAR EL PROCESAMIENTO DEL LOTE ZIP ---
+export async function startZipConversion(file: File, templateId?: string): Promise<{ batchId: string; totalFiles: number }> {
+  const fd = new FormData();
+  fd.append('file', file);
+  if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
+  
+  const res = await fetch('/api/cfdi/pdf/start-zip', { method: 'POST', body: fd });
+  if (!res.ok) throw new Error(`Error ${res.status} al procesar el lote ZIP en el servidor`);
+  return await res.json() as { batchId: string; totalFiles: number };
+}
+
+// --- NUEVA FUNCIÓN: ESCUCHAR LA PIZARRA GLOBAL DEL BATCH EN TIEMPO REAL ---
+export function waitForBatchJob(batchId: string, onProgress: (data: BatchProgressPayload) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/cfdi/pdf/batch/${batchId}/progress`);
+    
+    // 10 minutos de tiempo límite máximo para lotes de miles de archivos
+    const tid = setTimeout(() => {
+      es.close();
+      reject(new Error('Tiempo de espera del lote agotado en el navegador'));
+    }, 600_000);
+
+    es.onmessage = (ev) => {
+      const data = JSON.parse(ev.data) as BatchProgressPayload;
+      onProgress(data);
+      
+      if (data.status === 'done') {
+        clearTimeout(tid);
+        es.close();
+        resolve();
+      }
+      if (data.status === 'error') {
+        clearTimeout(tid);
+        es.close();
+        reject(new Error(data.message || 'Ocurrió un error crítico en el lote'));
+      }
+    };
+
+    es.onerror = () => {
+      clearTimeout(tid);
+      es.close();
+      reject(new Error('La conexión de progreso en tiempo real se interrumpió'));
+    };
+  });
 }
 
 export class Semaphore {

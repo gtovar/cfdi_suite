@@ -8,11 +8,16 @@ import {
   Loader2,
   Upload,
   XCircle,
+  FileArchive,
+  BarChart3
 } from 'lucide-react';
 import {
   type PdfConversionState,
+  type BatchProgressPayload,
   convertFileToPdf,
   triggerBlobDownload,
+  startZipConversion,
+  waitForBatchJob,
   Semaphore,
 } from '../lib/pdf-download';
 
@@ -43,8 +48,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
 const STATE_CONFIG: Record<PdfConversionState, { label: string; className: string }> = {
   idle: { label: 'Pendiente', className: 'bg-gray-100 text-gray-500' },
   converting: { label: 'Convirtiendo…', className: 'bg-primary-50 text-primary-600' },
@@ -64,24 +67,28 @@ function StateChip({ state }: { state: PdfConversionState }) {
   );
 }
 
-// ── Main component ──────────────────────────────────────────────────────────────
-
 interface ConversionMasivaPageProps {
   templateId?: string;
 }
 
 export default function ConversionMasivaPage({ templateId }: ConversionMasivaPageProps) {
+  // Estados para el flujo tradicional (XMLs sueltos)
   const [entries, setEntries] = useState<ConversionEntry[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
   const [isDownloadingSelected, setIsDownloadingSelected] = useState(false);
 
+  // NUEVOS ESTADOS PARA EL FLUJO MASIVO (.ZIP)
+  const [isZipMode, setIsZipMode] = useState(false);
+  const [zipFile, setZipFile] = useState<File | null>(null);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgressPayload | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
 
-  // Set webkitdirectory on folder input (not a valid JSX attr in TS)
   useEffect(() => {
     if (folderInputRef.current) {
       folderInputRef.current.setAttribute('webkitdirectory', '');
@@ -89,22 +96,32 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     }
   }, []);
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-
   const done = entries.filter((e) => e.state === 'done').length;
   const errors = entries.filter((e) => e.state === 'error').length;
   const total = entries.length;
   const allDone = total > 0 && done + errors === total;
 
-  const allSelected =
-    entries.length > 0 && entries.every((e) => selectedRows.has(e.file.name));
+  const allSelected = entries.length > 0 && entries.every((e) => selectedRows.has(e.file.name));
   const someSelected = entries.some((e) => selectedRows.has(e.file.name));
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
   function addFiles(files: File[]) {
+    // Verificamos si el usuario subió un archivo comprimido .zip
+    const zipped = files.find((f) => f.name.endsWith('.zip'));
+    
+    if (zipped) {
+      clearAll();
+      setIsZipMode(true);
+      setZipFile(zipped);
+      return;
+    }
+
+    // Flujo normal si son archivos XML sueltos
     const xmlFiles = files.filter((f) => f.name.endsWith('.xml'));
     if (!xmlFiles.length) return;
+    setIsZipMode(false);
+    setZipFile(null);
     setEntries((prev) =>
       dedupeFiles([...prev.map((e) => e.file), ...xmlFiles]).map((f) => {
         const existing = prev.find((e) => e.file === f);
@@ -128,6 +145,10 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     setEntries([]);
     setSelectedRows(new Set());
     setPhase('idle');
+    setIsZipMode(false);
+    setZipFile(null);
+    setBatchId(null);
+    setBatchProgress(null);
   }
 
   function toggleSelectAll(checked: boolean) {
@@ -135,128 +156,128 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     else setSelectedRows(new Set());
   }
 
-    const startConversion = useCallback(async () => {
-        if (!entries.length) return;
-        cancelledRef.current = false;
-        setPhase('running');
+  const startConversion = useCallback(async () => {
+    cancelledRef.current = false;
+    setPhase('running');
 
-        const sem = new Semaphore(4);
+    // --- EJECUCIÓN DEL MODO MASIVO (ZIP) ---
+    if (isZipMode && zipFile) {
+      try {
+        const res = await startZipConversion(zipFile, templateId);
+        setBatchId(res.batchId);
+        
+        setBatchProgress({
+          status: 'processing',
+          total: res.totalFiles,
+          done: 0,
+          error: 0,
+          converting: 0,
+          pending: res.totalFiles,
+          percentage: 0
+        });
 
-        await Promise.all(
-            entries.map(async (entry) => {
-                if (cancelledRef.current) return;
-                await sem.acquire();
-                try {
-                    if (cancelledRef.current) return;
-                    setEntries((prev) =>
-                        prev.map((e) => e.file === entry.file ? { ...e, state: 'converting' } : e),
-                    );
+        // Nos quedamos escuchando la pizarra de Redis a través del Cartero
+        await waitForBatchJob(res.batchId, (progress) => {
+          setBatchProgress(progress);
+        });
+        
+        setPhase('done');
+      } catch (err) {
+        setPhase('idle');
+        alert(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
 
-                    // 1. Ejecutamos la conversión y guardamos el ArrayBuffer devuelto en 'buf'
-                    const buf = await convertFileToPdf(entry.file, templateId);
+    // --- EJECUCIÓN DEL MODO TRADICIONAL (XML SUELTOS DE 4 EN 4) ---
+    if (!entries.length) return;
+    const sem = new Semaphore(4);
 
-                    // 2. Inyectamos explícitamente el 'buf' en la propiedad 'buffer' del estado
-                    setEntries((prev) =>
-                        prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e),
-                    );
-                } catch (err) {
-                    setEntries((prev) =>
-                        prev.map((e) =>
-                            e.file === entry.file
-                            ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) }
-                            : e,
-                        ),
-                    );
-                } finally {
-                    sem.release();
-                }
-            }),
-        );
-
-        if (!cancelledRef.current) setPhase('done');
-    }, [entries, templateId]);
-
-    async function handleDownloadOne(entry: ConversionEntry) {
-        if (entry.state === 'converting') return;
-
-        // Si ya lo tenemos en memoria, lo descargamos instantáneamente
-        if (entry.buffer) {
-            triggerBlobDownload(
-                new Blob([entry.buffer], { type: 'application/pdf' }), 
-                entry.file.name.replace(/\.xml$/i, '.pdf')
-            );
-            return;
-        }
-
-        // Fallback: si no lo tiene, lo descarga de la API
-        setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e));
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (cancelledRef.current) return;
+        await sem.acquire();
         try {
-            const buf = await convertFileToPdf(entry.file, templateId);
-            triggerBlobDownload(new Blob([buf], { type: 'application/pdf' }), entry.file.name.replace(/\.xml$/i, '.pdf'));
-            setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+          if (cancelledRef.current) return;
+          setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'converting' } : e));
+          const buf = await convertFileToPdf(entry.file, templateId);
+          setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
         } catch (err) {
-            setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: String(err) } : e));
-        }
-    }
-
-    async function handleDownloadSelected() {
-        const targets = entries.filter((e) => selectedRows.has(e.file.name) && e.state !== 'converting');
-        if (!targets.length) return;
-
-        if (targets.length === 1) {
-            await handleDownloadOne(targets[0]!);
-            return;
-        }
-
-        setIsDownloadingSelected(true); // Bloqueamos la UI
-        try {
-            const { default: JSZip } = await import('jszip');
-            const zip = new JSZip();
-            const sem = new Semaphore(2);
-            const usedNames = new Set<string>();
-
-            const results = await Promise.all(
-                targets.map(async (entry) => {
-                    let buf = entry.buffer;
-                    // Si por alguna razón no tiene buffer, lo pide
-                    if (!buf) {
-                        await sem.acquire();
-                        try {
-                            buf = await convertFileToPdf(entry.file, templateId);
-                            setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
-                        } catch {
-                            return null;
-                        } finally { sem.release(); }
-                    }
-
-                    let pdfName = entry.file.name.replace(/\.xml$/i, '.pdf');
-                    if (usedNames.has(pdfName)) {
-                        const base = pdfName.replace(/\.pdf$/i, '');
-                        let i = 1;
-                        while (usedNames.has(`${base}_${i}.pdf`)) i++;
-                        pdfName = `${base}_${i}.pdf`;
-                    }
-                    usedNames.add(pdfName);
-                    return { name: pdfName, buf };
-                }),
-            );
-
-            for (const r of results) {
-                if (r && r.buf) zip.file(r.name, r.buf);
-            }
-
-            const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
-            triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
+          setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) } : e));
         } finally {
-            setIsDownloadingSelected(false); // Liberamos la UI
+          sem.release();
         }
-    }
+      }),
+    );
 
-    async function handleDownloadAll() {
-    // Tomamos todos los que dicen "done", sin importar si tienen el buffer o no
+    if (!cancelledRef.current) setPhase('done');
+  }, [entries, isZipMode, zipFile, templateId]);
+
+  function handleDownloadBatchZip() {
+    if (!batchId) return;
+    // Redirige al navegador directamente a la descarga consolidada limpia generada por la API
+    window.open(`/api/cfdi/pdf/batch/${batchId}/download`, '_blank');
+  }
+
+  async function handleDownloadOne(entry: ConversionEntry) {
+    if (entry.state === 'converting') return;
+    if (entry.buffer) {
+      triggerBlobDownload(new Blob([entry.buffer], { type: 'application/pdf' }), entry.file.name.replace(/\.xml$/i, '.pdf'));
+      return;
+    }
+    setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e));
+    try {
+      const buf = await convertFileToPdf(entry.file, templateId);
+      triggerBlobDownload(new Blob([buf], { type: 'application/pdf' }), entry.file.name.replace(/\.xml$/i, '.pdf'));
+      setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+    } catch (err) {
+      setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: String(err) } : e));
+    }
+  }
+
+  async function handleDownloadSelected() {
+    const targets = entries.filter((e) => selectedRows.has(e.file.name) && e.state !== 'converting');
+    if (!targets.length) return;
+    if (targets.length === 1) { await handleDownloadOne(targets[0]!); return; }
+
+    setIsDownloadingSelected(true);
+    try {
+      const { default: JSZip } = await import('jszip');
+      const zip = new JSZip();
+      const sem = new Semaphore(2);
+      const usedNames = new Set<string>();
+
+      const results = await Promise.all(
+        targets.map(async (entry) => {
+          let buf = entry.buffer;
+          if (!buf) {
+            await sem.acquire();
+            try {
+              buf = await convertFileToPdf(entry.file, templateId);
+              setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+            } catch { return null; } finally { sem.release(); }
+          }
+          let pdfName = entry.file.name.replace(/\.xml$/i, '.pdf');
+          if (usedNames.has(pdfName)) {
+            const base = pdfName.replace(/\.pdf$/i, '');
+            let i = 1;
+            while (usedNames.has(`${base}_${i}.pdf`)) i++;
+            pdfName = `${base}_${i}.pdf`;
+          }
+          usedNames.add(pdfName);
+          return { name: pdfName, buf };
+        }),
+      );
+
+      for (const r of results) { if (r && r.buf) zip.file(r.name, r.buf); }
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
+      triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
+    } finally { setIsDownloadingSelected(false); }
+  }
+
+  async function handleDownloadAll() {
     const doneEntries = entries.filter((e) => e.state === 'done');
     if (!doneEntries.length) return;
-
     setIsDownloadingAll(true);
     try {
       const { default: JSZip } = await import('jszip');
@@ -266,38 +287,20 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
       await Promise.all(
         doneEntries.map(async (entry) => {
           let buf = entry.buffer;
-
-          // Fallback: Si no se guardó el buffer, no lo ignora, lo pide a la API
           if (!buf) {
             await sem.acquire();
             try {
               buf = await convertFileToPdf(entry.file, templateId);
               setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
-            } catch (err) {
-              return null;
-            } finally {
-              sem.release();
-            }
+            } catch { return null; } finally { sem.release(); }
           }
-
-          // Metemos el archivo al empaquetador ZIP
-          if (buf) {
-            zip.file(entry.file.name.replace(/\.xml$/i, '.pdf'), buf);
-          }
+          if (buf) zip.file(entry.file.name.replace(/\.xml$/i, '.pdf'), buf);
         })
       );
-
-      const blob = await zip.generateAsync({
-        type: 'blob',
-        compression: 'DEFLATE',
-        compressionOptions: { level: 3 },
-      });
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
       triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
-    } finally {
-      setIsDownloadingAll(false);
-    }
+    } finally { setIsDownloadingAll(false); }
   }
-  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col md:h-full md:overflow-hidden">
@@ -308,15 +311,11 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
           <div>
             <h2 className="text-sm font-semibold text-gray-900">Conversión masiva XML → PDF</h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              Carga tus XMLs ya corregidos y descárgalos como PDF.
-              Motor canvas_pipeline — ~2 s por archivo.
+              Soporta archivos sueltos (.xml) o paquetes masivos comprimidos (.zip).
             </p>
           </div>
-          {entries.length > 0 && (
-            <button
-              onClick={clearAll}
-              className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
-            >
+          {(entries.length > 0 || zipFile) && (
+            <button onClick={clearAll} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
               Limpiar todo
             </button>
           )}
@@ -328,209 +327,168 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
           onDrop={handleFileDrop}
           className={clsx(
             'flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-8 transition-colors duration-200',
-            entries.length
-              ? 'border-primary-300 bg-primary-50/40'
-              : 'border-gray-300 bg-gray-50 hover:border-primary-300 hover:bg-primary-50/20',
+            entries.length || zipFile ? 'border-primary-300 bg-primary-50/40' : 'border-gray-300 bg-gray-50 hover:border-primary-300 hover:bg-primary-50/20'
           )}
         >
-          <Upload size={24} className="text-gray-400" />
+          {isZipMode ? <FileArchive size={24} className="text-primary-500" /> : <Upload size={24} className="text-gray-400" />}
           <div className="text-center">
-            <p className="text-sm font-medium text-gray-700">Arrastra XMLs o carpetas aquí, o selecciona:</p>
+            <p className="text-sm font-medium text-gray-700">Arrastra tus XMLs o un archivo .ZIP aquí:</p>
             <div className="mt-2 flex justify-center gap-2">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700"
-              >
-                <Upload size={12} />
-                Archivos
-              </button>
-              <button
-                onClick={() => folderInputRef.current?.click()}
-                className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700"
-              >
-                <FolderOpen size={12} />
-                Carpeta
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                <Upload size={12} /> Seleccionar archivos / .ZIP
               </button>
             </div>
           </div>
-          {entries.length > 0 && (
+          {isZipMode && zipFile && (
             <p className="text-xs font-semibold text-primary-600">
-              {entries.length.toLocaleString('es-MX')} {entries.length === 1 ? 'archivo' : 'archivos'} cargados
+              Paquete detectado: {zipFile.name} ({formatBytes(zipFile.size)})
             </p>
           )}
-          <input ref={fileInputRef} type="file" multiple accept=".xml" className="hidden" onChange={handleFileSelect} />
-          <input ref={folderInputRef} type="file" multiple accept=".xml" className="hidden" onChange={handleFileSelect} />
+          {!isZipMode && entries.length > 0 && (
+            <p className="text-xs font-semibold text-primary-600">
+              {entries.length.toLocaleString('es-MX')} archivos XML listos
+            </p>
+          )}
+          <input ref={fileInputRef} type="file" multiple accept=".xml,.zip" className="hidden" onChange={handleFileSelect} />
         </div>
 
-        {/* Progress header */}
-        {entries.length > 0 && phase !== 'idle' && (
+        {/* --- INTERFAZ MONOLÍTICA HÍBRIDA OPCIÓN A (MODO ZIP ACTIVO) --- */}
+        {isZipMode && batchProgress && (
+          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="text-primary-500" size={18} />
+                <h3 className="text-sm font-semibold text-gray-900">Estado del Procesamiento en la Nube</h3>
+              </div>
+              {batchProgress.status === 'processing' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                  <Loader2 size={12} className="animate-spin" /> Convirtiendo en ráfaga...
+                </span>
+              )}
+              {batchProgress.status === 'done' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
+                  <CheckCircle2 size={12} /> Lote completado con éxito
+                </span>
+              )}
+            </div>
+
+            {/* Barra de progreso unificada */}
+            <div className="w-full">
+              <div className="mb-2 flex items-center justify-between text-xs font-medium text-gray-600">
+                <span>Progreso General</span>
+                <span className="text-sm font-bold text-primary-600 tabular-nums">{batchProgress.percentage}%</span>
+              </div>
+              <div className="h-3 w-full overflow-hidden rounded-full bg-gray-100">
+                <div 
+                  className="h-full bg-primary-500 transition-all duration-300 rounded-full" 
+                  style={{ width: `${batchProgress.percentage}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Tablero de contadores en ráfaga */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+              <div className="rounded-lg bg-gray-50 p-3 text-center border border-gray-100">
+                <p className="text-tiny font-medium text-gray-400 uppercase">Total XMLs</p>
+                <p className="mt-1 text-lg font-bold text-gray-800 tabular-nums">{batchProgress.total}</p>
+              </div>
+              <div className="rounded-lg bg-green-50/50 p-3 text-center border border-green-100/50">
+                <p className="text-tiny font-medium text-green-600 uppercase">Listos</p>
+                <p className="mt-1 text-lg font-bold text-green-700 tabular-nums">{batchProgress.done}</p>
+              </div>
+              <div className="rounded-lg bg-blue-50/30 p-3 text-center border border-blue-100/30">
+                <p className="text-tiny font-medium text-blue-500 uppercase">En Proceso</p>
+                <p className="mt-1 text-lg font-bold text-blue-600 tabular-nums">{batchProgress.converting}</p>
+              </div>
+              <div className="rounded-lg bg-red-50/50 p-3 text-center border border-red-100/50">
+                <p className="text-tiny font-medium text-red-500 uppercase">Errores</p>
+                <p className="mt-1 text-lg font-bold text-red-600 tabular-nums">{batchProgress.error}</p>
+              </div>
+            </div>
+
+            {/* Botón único de descarga consolidada */}
+            {batchProgress.status === 'done' && (
+              <button
+                onClick={handleDownloadBatchZip}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-700 shadow-sm"
+              >
+                <Download size={16} /> Descargar paquete de PDFs final (.ZIP)
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* --- INTERFAZ TRADICIONAL OPCIÓN B (MODO XML SUELTO ACTIVO) --- */}
+        {!isZipMode && entries.length > 0 && phase !== 'idle' && (
           <div className="flex items-center gap-4 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
             <div className="flex-1">
               <div className="mb-1.5 flex items-center justify-between text-xs">
                 <span className="font-medium text-gray-700">
                   {done.toLocaleString('es-MX')} / {total.toLocaleString('es-MX')} convertidos
-                  {errors > 0 && (
-                    <span className="ml-2 text-red-500">· {errors} errores</span>
-                  )}
+                  {errors > 0 && <span className="ml-2 text-red-500">· {errors} errores</span>}
                 </span>
-                {phase === 'done' && (
-                  <span className="flex items-center gap-1 text-green-600">
-                    <CheckCircle2 size={12} /> Completado
-                  </span>
-                )}
-                {phase === 'running' && (
-                  <span className="flex items-center gap-1 text-primary-600">
-                    <Loader2 size={12} className="animate-spin" /> En proceso…
-                  </span>
-                )}
+                {phase === 'done' && <span className="flex items-center gap-1 text-green-600"><CheckCircle2 size={12} /> Completado</span>}
+                {phase === 'running' && <span className="flex items-center gap-1 text-primary-600"><Loader2 size={12} className="animate-spin" /> Procesando de 4 en 4...</span>}
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-                <div
-                  className="h-full rounded-full bg-primary-500 transition-all duration-300"
-                  style={{ width: total > 0 ? `${((done + errors) / total) * 100}%` : '0%' }}
-                />
+                <div className="h-full rounded-full bg-primary-500 transition-all duration-300" style={{ width: total > 0 ? `${((done + errors) / total) * 100}%` : '0%' }} />
               </div>
             </div>
             {allDone && done > 0 && (
-              <button
-                onClick={handleDownloadAll}
-                disabled={isDownloadingAll}
-                className="flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
+              <button onClick={handleDownloadAll} disabled={isDownloadingAll} className="flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
                 {isDownloadingAll ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                {isDownloadingAll ? 'Empaquetando ZIP...' : 'Descargar todos (ZIP)'}
+                {isDownloadingAll ? 'Empaquetando...' : 'Descargar todos (ZIP)'}
               </button>
             )}
           </div>
         )}
 
-        {/* Action buttons */}
-        {entries.length > 0 && (
-          <div className="flex items-center gap-3 flex-wrap">
-            {phase === 'idle' && (
-              <button
-                onClick={startConversion}
-                className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-700"
-              >
-                <FileDown size={13} />
-                Convertir {entries.length.toLocaleString('es-MX')} {entries.length === 1 ? 'archivo' : 'archivos'}
-              </button>
-            )}
-            {someSelected && (
-              <button
-                onClick={handleDownloadSelected}
-                disabled={isDownloadingSelected}
-                className="flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs font-semibold text-primary-700 transition-colors hover:bg-primary-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isDownloadingSelected ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                {isDownloadingSelected
-                   ? 'Empaquetando...'
-                   : (selectedRows.size === 1 ? 'Descargar PDF' : `Descargar ZIP (${selectedRows.size})`)}
-              </button>
-            )}
+        {/* Botones de acción */}
+        {phase === 'idle' && (entries.length > 0 || zipFile) && (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={startConversion}
+              className="flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-primary-700 shadow-sm"
+            >
+              <FileDown size={14} />
+              Iniciar conversión masiva en paralelo
+            </button>
           </div>
         )}
 
-        {/* Table */}
-        {entries.length > 0 && (
+        {/* Tabla tradicional (Solo visible para XMLs sueltos) */}
+        {!isZipMode && entries.length > 0 && (
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="max-h-[560px] overflow-auto">
               <table className="w-full text-left">
                 <thead className="border-b border-gray-200 bg-gray-50">
                   <tr>
-                    <th className="px-3 py-2.5">
-                      <input
-                        type="checkbox"
-                        checked={allSelected}
-                        onChange={(e) => toggleSelectAll(e.target.checked)}
-                        className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 accent-primary-600"
-                      />
-                    </th>
-                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">
-                      Archivo
-                    </th>
-                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">
-                      Tamaño
-                    </th>
-                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">
-                      Estado
-                    </th>
+                    <th className="px-3 py-2.5"><input type="checkbox" checked={allSelected} onChange={(e) => toggleSelectAll(e.target.checked)} className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 accent-primary-600" /></th>
+                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Archivo</th>
+                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Tamaño</th>
+                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Estado</th>
                     <th className="px-3 py-2.5" />
                   </tr>
                 </thead>
                 <tbody>
                   {entries.map((entry, i) => (
-                    <tr
-                      key={entry.file.name}
-                      className={clsx(
-                        'border-b border-gray-100 last:border-0',
-                        i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
-                      )}
-                      style={{ height: 36 }}
-                    >
+                    <tr key={entry.file.name} className={clsx('border-b border-gray-100 last:border-0', i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')} style={{ height: 36 }}>
                       <td className="px-3 py-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedRows.has(entry.file.name)}
-                          onChange={(e) => {
-                            setSelectedRows((prev) => {
-                              const next = new Set(prev);
-                              e.target.checked
-                                ? next.add(entry.file.name)
-                                : next.delete(entry.file.name);
-                              return next;
-                            });
-                          }}
-                          className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 accent-primary-600"
-                        />
+                        <input type="checkbox" checked={selectedRows.has(entry.file.name)} onChange={(e) => { setSelectedRows((prev) => { const next = new Set(prev); e.target.checked ? next.add(entry.file.name) : next.delete(entry.file.name); return next; }); }} className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 accent-primary-600" />
                       </td>
                       <td className="px-3 py-2">
-                        <span
-                          className="block max-w-[280px] truncate font-mono text-xs text-gray-800"
-                          title={entry.file.name}
-                        >
-                          {entry.file.name}
-                        </span>
-                        {entry.error && (
-                          <span className="block truncate text-tiny text-red-500" title={entry.error}>
-                            {entry.error}
-                          </span>
-                        )}
+                        <span className="block max-w-[280px] truncate font-mono text-xs text-gray-800" title={entry.file.name}>{entry.file.name}</span>
+                        {entry.error && <span className="block truncate text-tiny text-red-500" title={entry.error}>{entry.error}</span>}
                       </td>
-                      <td className="px-3 py-2">
-                        <span className="text-xs tabular-nums text-gray-400">
-                          {formatBytes(entry.file.size)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <StateChip state={entry.state} />
-                      </td>
+                      <td className="px-3 py-2"><span className="text-xs tabular-nums text-gray-400">{formatBytes(entry.file.size)}</span></td>
+                      <td className="px-3 py-2"><StateChip state={entry.state} /></td>
                       <td className="px-3 py-2 text-right">
                         {entry.state === 'converting' ? (
                           <Loader2 size={12} className="animate-spin text-primary-400 inline" />
                         ) : entry.state === 'done' ? (
-                          <button
-                            onClick={() => handleDownloadOne(entry)}
-                            title="Descargar PDF"
-                            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-green-600 transition-colors hover:bg-green-50"
-                          >
-                            <Download size={11} />
-                            PDF
-                          </button>
+                          <button onClick={() => handleDownloadOne(entry)} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-green-600 hover:bg-green-50"><Download size={11} /> PDF</button>
                         ) : (
-                          <button
-                            onClick={() => handleDownloadOne(entry)}
-                            title={entry.state === 'error' ? 'Reintentar' : 'Descargar PDF'}
-                            className={clsx(
-                              'flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium transition-colors',
-                              entry.state === 'error'
-                                ? 'text-red-400 hover:bg-red-50 hover:text-red-600'
-                                : 'text-gray-400 hover:bg-primary-50 hover:text-primary-600',
-                            )}
-                          >
-                            <FileDown size={11} />
-                            {entry.state === 'error' ? 'Reintentar' : 'PDF'}
-                          </button>
+                          <button onClick={() => handleDownloadOne(entry)} className={clsx('flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium transition-colors', entry.state === 'error' ? 'text-red-400 hover:bg-red-50' : 'text-gray-400 hover:bg-primary-50')}><FileDown size={11} /> {entry.state === 'error' ? 'Reintentar' : 'PDF'}</button>
                         )}
                       </td>
                     </tr>
@@ -538,25 +496,14 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                 </tbody>
               </table>
             </div>
-            <div className="border-t border-gray-100 px-3 py-2 text-tiny text-gray-400">
-              {entries.length.toLocaleString('es-MX')} {entries.length === 1 ? 'archivo' : 'archivos'}
-              {done > 0 && (
-                <span className="ml-2 text-green-600">
-                  · {done.toLocaleString('es-MX')} listos
-                </span>
-              )}
-            </div>
           </div>
         )}
 
         {/* Empty state */}
-        {entries.length === 0 && (
+        {entries.length === 0 && !zipFile && (
           <div className="flex flex-col items-center gap-2 py-10 text-gray-400">
             <FileDown size={28} />
-            <p className="text-sm">Carga tus XMLs para comenzar</p>
-            <p className="text-xs">
-              El motor canvas_pipeline convierte cada XML en ~2 s, 4 en paralelo.
-            </p>
+            <p className="text-sm">Carga tus XMLs o un archivo .ZIP para comenzar</p>
           </div>
         )}
       </div>
