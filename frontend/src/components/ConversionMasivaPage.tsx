@@ -22,6 +22,7 @@ interface ConversionEntry {
   file: File;
   state: PdfConversionState;
   error?: string;
+  buffer?: ArrayBuffer;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -73,6 +74,8 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const [entries, setEntries] = useState<ConversionEntry[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
+  const [isDownloadingAll, setIsDownloadingAll] = useState(false);
+  const [isDownloadingSelected, setIsDownloadingSelected] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -132,162 +135,168 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     else setSelectedRows(new Set());
   }
 
-  const startConversion = useCallback(async () => {
-    if (!entries.length) return;
-    cancelledRef.current = false;
-    setPhase('running');
+    const startConversion = useCallback(async () => {
+        if (!entries.length) return;
+        cancelledRef.current = false;
+        setPhase('running');
 
-    const sem = new Semaphore(2);
+        const sem = new Semaphore(2);
 
-    await Promise.all(
-      entries.map(async (entry) => {
-        if (cancelledRef.current) return;
-        await sem.acquire();
-        try {
-          if (cancelledRef.current) return;
-          setEntries((prev) =>
-            prev.map((e) => e.file === entry.file ? { ...e, state: 'converting' } : e),
-          );
-          await convertFileToPdf(entry.file, templateId);
-          setEntries((prev) =>
-            prev.map((e) => e.file === entry.file ? { ...e, state: 'done' } : e),
-          );
-        } catch (err) {
-          setEntries((prev) =>
-            prev.map((e) =>
-              e.file === entry.file
-                ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) }
-                : e,
-            ),
-          );
-        } finally {
-          sem.release();
+        await Promise.all(
+            entries.map(async (entry) => {
+                if (cancelledRef.current) return;
+                await sem.acquire();
+                try {
+                    if (cancelledRef.current) return;
+                    setEntries((prev) =>
+                        prev.map((e) => e.file === entry.file ? { ...e, state: 'converting' } : e),
+                    );
+
+                    // 1. Ejecutamos la conversión y guardamos el ArrayBuffer devuelto en 'buf'
+                    const buf = await convertFileToPdf(entry.file, templateId);
+
+                    // 2. Inyectamos explícitamente el 'buf' en la propiedad 'buffer' del estado
+                    setEntries((prev) =>
+                        prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e),
+                    );
+                } catch (err) {
+                    setEntries((prev) =>
+                        prev.map((e) =>
+                            e.file === entry.file
+                            ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) }
+                            : e,
+                        ),
+                    );
+                } finally {
+                    sem.release();
+                }
+            }),
+        );
+
+        if (!cancelledRef.current) setPhase('done');
+    }, [entries, templateId]);
+
+    async function handleDownloadOne(entry: ConversionEntry) {
+        if (entry.state === 'converting') return;
+
+        // Si ya lo tenemos en memoria, lo descargamos instantáneamente
+        if (entry.buffer) {
+            triggerBlobDownload(
+                new Blob([entry.buffer], { type: 'application/pdf' }), 
+                entry.file.name.replace(/\.xml$/i, '.pdf')
+            );
+            return;
         }
-      }),
-    );
 
-    if (!cancelledRef.current) setPhase('done');
-  }, [entries, templateId]);
-
-  async function handleDownloadOne(entry: ConversionEntry) {
-    if (entry.state === 'converting') return;
-    setEntries((prev) =>
-      prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e),
-    );
-    try {
-      const buf = await convertFileToPdf(entry.file, templateId);
-      triggerBlobDownload(
-        new Blob([buf], { type: 'application/pdf' }),
-        entry.file.name.replace(/\.xml$/i, '.pdf'),
-      );
-      setEntries((prev) =>
-        prev.map((e) => e.file === entry.file ? { ...e, state: 'done' } : e),
-      );
-    } catch (err) {
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.file === entry.file
-            ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) }
-            : e,
-        ),
-      );
-    }
-  }
-
-  async function handleDownloadSelected() {
-    const targets = entries.filter(
-      (e) => selectedRows.has(e.file.name) && e.state !== 'converting',
-    );
-    if (!targets.length) return;
-
-    if (targets.length === 1) {
-      await handleDownloadOne(targets[0]!);
-      return;
+        // Fallback: si no lo tiene, lo descarga de la API
+        setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e));
+        try {
+            const buf = await convertFileToPdf(entry.file, templateId);
+            triggerBlobDownload(new Blob([buf], { type: 'application/pdf' }), entry.file.name.replace(/\.xml$/i, '.pdf'));
+            setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+        } catch (err) {
+            setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: String(err) } : e));
+        }
     }
 
-    const sem = new Semaphore(2);
-    const usedNames = new Set<string>();
+    async function handleDownloadSelected() {
+        const targets = entries.filter((e) => selectedRows.has(e.file.name) && e.state !== 'converting');
+        if (!targets.length) return;
 
-    const results = await Promise.all(
-      targets.map(async (entry) => {
-        await sem.acquire();
-        try {
-          setEntries((prev) =>
-            prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e),
-          );
-          const buf = await convertFileToPdf(entry.file, templateId);
-          setEntries((prev) =>
-            prev.map((e) => e.file === entry.file ? { ...e, state: 'done' } : e),
-          );
-          let pdfName = entry.file.name.replace(/\.xml$/i, '.pdf');
-          if (usedNames.has(pdfName)) {
-            const base = pdfName.replace(/\.pdf$/i, '');
-            let i = 1;
-            while (usedNames.has(`${base}_${i}.pdf`)) i++;
-            pdfName = `${base}_${i}.pdf`;
-          }
-          usedNames.add(pdfName);
-          return { name: pdfName, buf };
-        } catch (err) {
-          setEntries((prev) =>
-            prev.map((e) =>
-              e.file === entry.file
-                ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) }
-                : e,
-            ),
-          );
-          return null;
-        } finally {
-          sem.release();
+        if (targets.length === 1) {
+            await handleDownloadOne(targets[0]!);
+            return;
         }
-      }),
-    );
 
-    const valid = results.filter(Boolean) as { name: string; buf: ArrayBuffer }[];
-    if (!valid.length) return;
+        setIsDownloadingSelected(true); // Bloqueamos la UI
+        try {
+            const { default: JSZip } = await import('jszip');
+            const zip = new JSZip();
+            const sem = new Semaphore(2);
+            const usedNames = new Set<string>();
 
-    const { default: JSZip } = await import('jszip');
-    const zip = new JSZip();
-    for (const { name, buf } of valid) zip.file(name, buf);
-    const blob = await zip.generateAsync({
-      type: 'blob',
-      compression: 'DEFLATE',
-      compressionOptions: { level: 3 },
-    });
-    triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
-  }
+            const results = await Promise.all(
+                targets.map(async (entry) => {
+                    let buf = entry.buffer;
+                    // Si por alguna razón no tiene buffer, lo pide
+                    if (!buf) {
+                        await sem.acquire();
+                        try {
+                            buf = await convertFileToPdf(entry.file, templateId);
+                            setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+                        } catch {
+                            return null;
+                        } finally { sem.release(); }
+                    }
 
-  async function handleDownloadAll() {
+                    let pdfName = entry.file.name.replace(/\.xml$/i, '.pdf');
+                    if (usedNames.has(pdfName)) {
+                        const base = pdfName.replace(/\.pdf$/i, '');
+                        let i = 1;
+                        while (usedNames.has(`${base}_${i}.pdf`)) i++;
+                        pdfName = `${base}_${i}.pdf`;
+                    }
+                    usedNames.add(pdfName);
+                    return { name: pdfName, buf };
+                }),
+            );
+
+            for (const r of results) {
+                if (r && r.buf) zip.file(r.name, r.buf);
+            }
+
+            const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
+            triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
+        } finally {
+            setIsDownloadingSelected(false); // Liberamos la UI
+        }
+    }
+
+    async function handleDownloadAll() {
+    // Tomamos todos los que dicen "done", sin importar si tienen el buffer o no
     const doneEntries = entries.filter((e) => e.state === 'done');
     if (!doneEntries.length) return;
-    const { default: JSZip } = await import('jszip');
-    const zip = new JSZip();
 
-    const sem = new Semaphore(2);
-    const results = await Promise.all(
-      doneEntries.map(async (entry) => {
-        await sem.acquire();
-        try {
-          const buf = await convertFileToPdf(entry.file, templateId);
-          return { name: entry.file.name.replace(/\.xml$/i, '.pdf'), buf };
-        } catch {
-          return null;
-        } finally {
-          sem.release();
-        }
-      }),
-    );
-    for (const r of results) {
-      if (r) zip.file(r.name, r.buf);
+    setIsDownloadingAll(true);
+    try {
+      const { default: JSZip } = await import('jszip');
+      const zip = new JSZip();
+      const sem = new Semaphore(2);
+
+      await Promise.all(
+        doneEntries.map(async (entry) => {
+          let buf = entry.buffer;
+
+          // Fallback: Si no se guardó el buffer, no lo ignora, lo pide a la API
+          if (!buf) {
+            await sem.acquire();
+            try {
+              buf = await convertFileToPdf(entry.file, templateId);
+              setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+            } catch (err) {
+              return null;
+            } finally {
+              sem.release();
+            }
+          }
+
+          // Metemos el archivo al empaquetador ZIP
+          if (buf) {
+            zip.file(entry.file.name.replace(/\.xml$/i, '.pdf'), buf);
+          }
+        })
+      );
+
+      const blob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 3 },
+      });
+      triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
+    } finally {
+      setIsDownloadingAll(false);
     }
-    const blob = await zip.generateAsync({
-      type: 'blob',
-      compression: 'DEFLATE',
-      compressionOptions: { level: 3 },
-    });
-    triggerBlobDownload(blob, `cfdi-pdfs-${new Date().toISOString().slice(0, 10)}.zip`);
   }
-
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -385,10 +394,11 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
             {allDone && done > 0 && (
               <button
                 onClick={handleDownloadAll}
-                className="flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-primary-700"
+                disabled={isDownloadingAll}
+                className="flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Download size={12} />
-                Descargar todos (ZIP)
+                {isDownloadingAll ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                {isDownloadingAll ? 'Empaquetando ZIP...' : 'Descargar todos (ZIP)'}
               </button>
             )}
           </div>
@@ -409,10 +419,13 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
             {someSelected && (
               <button
                 onClick={handleDownloadSelected}
-                className="flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs font-semibold text-primary-700 transition-colors hover:bg-primary-100"
+                disabled={isDownloadingSelected}
+                className="flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs font-semibold text-primary-700 transition-colors hover:bg-primary-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Download size={12} />
-                {selectedRows.size === 1 ? 'Descargar PDF' : `Descargar ZIP (${selectedRows.size})`}
+                {isDownloadingSelected ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                {isDownloadingSelected
+                   ? 'Empaquetando...'
+                   : (selectedRows.size === 1 ? 'Descargar PDF' : `Descargar ZIP (${selectedRows.size})`)}
               </button>
             )}
           </div>
