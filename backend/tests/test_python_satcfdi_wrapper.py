@@ -8,7 +8,6 @@ se emite correctamente para que _collect_catalog_findings lo detecte.
 from __future__ import annotations
 
 import importlib.util
-import sys
 import types
 import unittest
 from pathlib import Path
@@ -334,7 +333,6 @@ class TestVerifySelloMissing(unittest.TestCase):
     """Verifica comportamiento cuando Sello/Certificado están vacíos."""
 
     def _make_minimal_cfdi(self, sello="", certificado=""):
-        from unittest.mock import MagicMock
         cfdi = {}
         cfdi["Sello"] = sello
         cfdi["Certificado"] = certificado
@@ -356,7 +354,7 @@ class TestVerifySelloVersionAlgorithm(unittest.TestCase):
 
     def _make_cfdi_stub(self, version, sello, certificado):
         """Stub mínimo que imita la interfaz del objeto CFDI de satcfdi."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
         cfdi = MagicMock()
         cfdi.get = lambda k, default=None: {
             "Version": version,
@@ -372,7 +370,6 @@ class TestVerifySelloVersionAlgorithm(unittest.TestCase):
     def test_version_40_usa_sha256(self):
         """Para CFDI 4.0 se debe llamar a verify_sha256, no a verify_sha1."""
         from unittest.mock import MagicMock, patch
-        import base64
         cfdi = self._make_cfdi_stub("4.0", "ZmFrZXNlbGxv", "ZmFrZWNlcnQ=")
         with patch("satcfdi.models.certificate.Certificate.load_certificate") as mock_load, \
              patch("satcfdi.transform.verify_certificate", return_value=False):

@@ -111,17 +111,3 @@ async function tryReadContractualPayload(response: Response): Promise<ApiAnalyze
     return null;
   }
 }
-
-function buildApiReason(meta: CFDIAnalysisMeta) {
-  const parts = [
-    `Provider ${meta.provider}`,
-    `modo ${meta.providerMode}`,
-    `contrato ${meta.contractVersion}`,
-  ];
-
-  if (meta.degraded) {
-    parts.push('degradado');
-  }
-
-  return parts.join(' · ');
-}

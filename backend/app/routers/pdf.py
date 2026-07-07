@@ -4,7 +4,6 @@ import asyncio
 import base64
 import copy
 import hashlib
-import io
 import json
 import time
 from dataclasses import dataclass, field
@@ -12,10 +11,9 @@ from typing import AsyncGenerator
 from uuid import uuid4
 from pathlib import Path
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from satcfdi.cfdi import CFDI
-from satcfdi.render import html_str
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter()

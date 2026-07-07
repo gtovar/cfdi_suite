@@ -74,14 +74,6 @@ export function useExtractGridState(params: {
     const missing = defaultColumnOrder.filter((key) => !known.includes(key));
     return [...known, ...missing];
   }, [activeStoredColumnOrder, defaultColumnOrder]);
-  const visibleExtractColumns = useMemo(
-    () =>
-      columnOrder
-        .map((key) => extractColumns.find((column) => column.key === key))
-        .filter((column): column is ExtractColumn => Boolean(column))
-        .filter((column) => !activeHiddenColumns.includes(column.key)),
-    [activeHiddenColumns, columnOrder, extractColumns],
-  );
   const columnVisibility = useMemo(
     () => Object.fromEntries(extractColumns.map((column) => [column.key, !activeHiddenColumns.includes(column.key)])),
     [activeHiddenColumns, extractColumns],
@@ -152,7 +144,6 @@ export function useExtractGridState(params: {
   });
 
   const filteredExtractRows = table.getFilteredRowModel().rows.map((row) => row.original) as unknown as Array<CFDIIngresoRow | CFDIPagoRow>;
-  const sortedExtractRows = table.getSortedRowModel().rows.map((row) => row.original) as unknown as Array<CFDIIngresoRow | CFDIPagoRow>;
   const filteredExtractCount = table.getFilteredRowModel().rows.length;
   const totalExtractCount = activeExtractRows.length;
   const extractTotalPages = Math.max(1, table.getPageCount());
@@ -173,31 +164,6 @@ export function useExtractGridState(params: {
     );
     setColumnFiltersState((current) => current.filter((filter) => defaultColumnOrder.includes(filter.id)));
   }, [activeDatasetType, defaultColumnOrder]);
-
-  function setExtractPage(nextValue: number | ((current: number) => number)) {
-    setExtractPageState((current) => resolveStateUpdate(nextValue, current));
-  }
-
-  function setExtractPageSize(nextValue: number) {
-    setExtractPageSizeState(nextValue);
-  }
-
-  function setExtractSortKey(nextValue: string) {
-    setSortingState((current) => {
-      const firstDirection = current[0]?.desc ?? false;
-      return [{ id: nextValue, desc: firstDirection }];
-    });
-  }
-
-  function setExtractSortDirection(nextValue: 'asc' | 'desc' | ((current: 'asc' | 'desc') => 'asc' | 'desc')) {
-    setSortingState((current) => {
-      const currentDirection = current[0]?.desc ? 'desc' : 'asc';
-      const resolved = resolveStateUpdate(nextValue, currentDirection);
-      const primary = current[0]?.id ?? (activeDatasetType === 'pagos' ? 'fechaPago' : 'descripcion');
-      const tail = current.slice(1);
-      return [{ id: primary, desc: resolved === 'desc' }, ...tail];
-    });
-  }
 
   function setColumnOrderForActiveDataset(nextOrder: string[]) {
     if (activeDatasetType === 'ingresos') {

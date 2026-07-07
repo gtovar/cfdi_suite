@@ -14,7 +14,6 @@ interface SatEnquiryData {
 
 interface RfcValidationData {
   rfc: string;
-  razonSocial?: string;
   formatLoading: boolean;
   satLoading: boolean;
   formatResult: RfcFormatResult | null;
@@ -249,7 +248,6 @@ export default function InspectorHeader({
               <div className="absolute right-0 top-full mt-2 z-50 shadow-lg">
                 <RfcValidationPanel
                   rfc={rfcValidation.rfc}
-                  razonSocial={rfcValidation.razonSocial}
                   formatLoading={rfcValidation.formatLoading}
                   satLoading={rfcValidation.satLoading}
                   formatResult={rfcValidation.formatResult}

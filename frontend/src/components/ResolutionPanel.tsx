@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Check, ClipboardCopy, Wrench } from 'lucide-react';
-import clsx from 'clsx';
 import type { AuditFinding } from '../cfdi/public';
 import type { CorrectionStep, FindingContext } from './FindingsSidebar';
 

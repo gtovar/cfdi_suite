@@ -6,7 +6,6 @@ Se genera una vez por versión de template y se cachea en backend/shells/.
 """
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from weasyprint import HTML
@@ -161,10 +160,6 @@ def save_html_template(template_id: str, html: str) -> None:
     path.write_text(html, encoding="utf-8")
 
 
-def _shell_path(template_id: str, html_hash: str) -> Path:
-    return SHELLS_DIR / f"{template_id}_{html_hash}.pdf"
-
-
 def _fill_placeholders(html: str, cfdi_data: dict, design_config: dict | None = None) -> str:
     """Sustituye {{placeholder}} en el HTML con datos reales del CFDI y configuración de diseño."""
     emisor   = cfdi_data.get("emisor", {})
@@ -255,9 +250,6 @@ def get_or_create_shell(template_id: str, html_template: str, cfdi_data: dict) -
 
     Si el diseño cambia (html_template distinto), se genera un nuevo shell.
     """
-    html_hash = hashlib.md5(html_template.encode(), usedforsecurity=False).hexdigest()[:12]
-    shell_path = _shell_path(template_id, html_hash)
-
     # El html con datos reales (no se cachea el PDF con datos, sino la generación)
     filled_html = _fill_placeholders(html_template, cfdi_data)
     return HTML(string=filled_html, base_url=None).write_pdf()

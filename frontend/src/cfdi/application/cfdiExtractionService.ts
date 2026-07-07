@@ -1,5 +1,4 @@
 import { XMLParser } from 'fast-xml-parser';
-import { buildCfdiData, detectCfdiProfile } from './cfdiAnalysisService';
 import type { CFDIIngresoRow, CFDIPagoRow } from './cfdiTypes';
 
 type XmlNode = Record<string, unknown>;

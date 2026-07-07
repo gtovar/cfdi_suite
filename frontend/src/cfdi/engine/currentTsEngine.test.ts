@@ -96,7 +96,7 @@ describe('currentTsEngine contract', () => {
       extractIngresoRows() {
         throw new Error('fallo controlado en ingresos');
       },
-      extractPagoRows(xml) {
+      extractPagoRows() {
         return [];
       },
     });
@@ -115,7 +115,7 @@ describe('currentTsEngine contract', () => {
 
   it('degrades to a non-fatal issue when pago extraction fails after parsing', () => {
     const result = analyzeCfdiWithCurrentTsEngine(buildPagosXml(), {
-      extractIngresoRows(xml) {
+      extractIngresoRows() {
         return [];
       },
       extractPagoRows() {

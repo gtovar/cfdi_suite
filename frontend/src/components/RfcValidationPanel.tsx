@@ -4,7 +4,6 @@ import type { FielStatus, RfcFormatResult, RfcSatResult } from '../lib/rfc-valid
 
 interface Props {
   rfc: string;
-  razonSocial?: string;
   formatLoading: boolean;
   satLoading: boolean;
   formatResult: RfcFormatResult | null;
@@ -33,7 +32,6 @@ function Row({ label, ok, text }: { label: string; ok: boolean; text?: string })
 
 export default function RfcValidationPanel({
   rfc,
-  razonSocial,
   formatLoading,
   satLoading,
   formatResult,

@@ -59,7 +59,6 @@ describe('FindingsSidebar', () => {
         cfdi={createCfdi()}
         findingContexts={emptyFindingContexts}
         getFindingOriginLabel={() => 'Matematico'}
-        onSelectConcept={() => {}}
         selectedFindingId={null}
         onSelectFinding={() => {}}
       />,
@@ -79,7 +78,6 @@ describe('FindingsSidebar', () => {
         cfdi={initialCfdi}
         findingContexts={emptyFindingContexts}
         getFindingOriginLabel={() => 'Matematico'}
-        onSelectConcept={() => {}}
         selectedFindingId={null}
         onSelectFinding={() => {}}
       />,
@@ -101,7 +99,6 @@ describe('FindingsSidebar', () => {
         cfdi={createCfdi({ uuid: 'TEST-UUID-2' })}
         findingContexts={emptyFindingContexts}
         getFindingOriginLabel={() => 'Matematico'}
-        onSelectConcept={() => {}}
         selectedFindingId={null}
         onSelectFinding={() => {}}
       />,

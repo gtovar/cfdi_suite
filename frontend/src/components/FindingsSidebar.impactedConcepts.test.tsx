@@ -100,7 +100,6 @@ describe('FindingsSidebar impacted concepts', () => {
         })}
         findingContexts={findingContexts}
         getFindingOriginLabel={() => 'Matematico'}
-        onSelectConcept={() => {}}
         selectedFindingId={null}
         onSelectFinding={(id) => { if (id) selectedFindings.push(id); }}
       />,
