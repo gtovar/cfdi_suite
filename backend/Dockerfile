@@ -20,4 +20,4 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 
 # Por defecto, la imagen arranca la API web
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "if [ '$MODE' = 'worker' ]; then (while true; do echo -e 'HTTP/1.1 200 OK\nContent-Type: application/json\n\n{\"status\":\"alive\"}' | nc -l -p 8080; done & python3 -m arq app.workers.pdf_worker.WorkerSettings); else uvicorn app.main:app --host 0.0.0.0 --port 8080; fi"]
