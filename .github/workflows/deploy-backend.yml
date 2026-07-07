@@ -19,7 +19,7 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # --- 1. DESPLIEGUE AUTOMÁTICO DE LA API WEB ---
+      # --- 1. DESPLIEGUE DE LA API WEB ---
       - name: Deploy API to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
@@ -38,15 +38,21 @@ jobs:
             --memory=512Mi
             --max-instances=10
 
-      # --- 2. DESPLIEGUE AUTOMÁTICO DEL WORKER (COMO CLOUD RUN JOB) ---
-      - name: Deploy Worker to Cloud Run Job
-        run: |
-          gcloud run jobs deploy cfdi-suite-worker \
-            --region us-central1 \
-            --source ./backend \
-            --command python3 \
-            --args -m,arq,app.workers.pdf_worker.WorkerSettings \
-            --cpu 2 \
-            --memory 2Gi \
-            --max-tasks 5 \
-            --set-env-vars REDIS_HOST=dashing-aphid-43185.upstash.io,REDIS_PORT=6379,REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA,PYTHONPATH=.
+      # --- 2. DESPLIEGUE DEL WORKER ---
+      - name: Deploy Worker to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: cfdi-suite-worker
+          region: us-central1
+          source: ./backend
+          env_vars: |
+            REDIS_HOST=dashing-aphid-43185.upstash.io
+            REDIS_PORT=6379
+            REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
+            PYTHONPATH=.
+            MODE=worker
+          flags: |
+            --cpu=2
+            --memory=2Gi
+            --max-instances=5
+            --concurrency=1
