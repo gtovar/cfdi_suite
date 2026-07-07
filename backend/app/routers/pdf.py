@@ -11,7 +11,6 @@ from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, R
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
-from google.cloud import tasks_v2
 
 import redis.asyncio as aioredis
 
@@ -91,14 +90,13 @@ async def start_pdf_generation(
     await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=1800)
 
     try:
-        await enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id)
+        await asyncio.to_thread(enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=template_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en Cloud Tasks: {e}")
     
     return {"jobId": job_id}
 
 
-# --- ENDPOINT MASIVO ZIP BLINDADO CON DETECCIÓN EXPLÍCITA DE QUOTA EN REDIS ---
 @router.post("/cfdi/pdf/start-zip")
 async def start_pdf_zip_generation(
     file: UploadFile = File(...),
@@ -119,9 +117,7 @@ async def start_pdf_zip_generation(
             pass
 
     job_ids = []
-    tasks_client = tasks_v2.CloudTasksAsyncClient()
 
-    # Separamos la lectura del ZIP del guardado en Redis para saber exactamente qué falla
     try:
         with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
             for file_info in z.infolist():
@@ -140,22 +136,18 @@ async def start_pdf_zip_generation(
     if not job_ids:
         raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
 
-    # DISPARO CONTROLADO A REDIS CON CAPTURA EXCLUSIVA DE ERRORES DE CAPACIDAD
     try:
         async with redis_client.pipeline(transaction=False) as pipe:
             for jid, xml_content in job_ids:
-                # Bajamos el tiempo de expiración a 30 minutos (1800s) para limpiar la RAM de Upstash el doble de rápido
                 pipe.set(f"pdf:xml:{jid}", xml_content, ex=1800)
                 pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
             await pipe.execute()
     except Exception as redis_err:
-        # DETECTOR DE OJOS: Si Upstash rechaza el guardado, te lo dice directo sin rodeos
         raise HTTPException(
             status_code=507,
-            detail=f"La base de datos Redis (Upstash) está LLENA o superó su límite de cuota gratuita diaria. Por favor, ve a tu consola de Upstash y dale clic a 'Flush Database' para liberar espacio. Detalles técnicos: {str(redis_err)}"
+            detail=f"La base de datos Redis (Upstash) está LLENA. Detalles: {str(redis_err)}"
         )
 
-    # Una vez guardado en Redis con éxito, procedemos a Google Cloud Tasks
     just_ids = [item[0] for item in job_ids]
     await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(just_ids), ex=3600)
 
@@ -164,7 +156,8 @@ async def start_pdf_zip_generation(
     async def safe_enqueue_task(jid: str):
         async with network_semaphore:
             try:
-                await enqueue_pdf_generation(job_id=jid, xml_b64="", template_id=template_id, client=tasks_client)
+                # Ejecutamos la función síncrona dentro del pool de hilos de forma segura
+                await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
             except Exception as ex:
                 print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
                 await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
@@ -178,7 +171,8 @@ async def start_pdf_zip_generation(
     }
 
 
-@router.get("/api/cfdi/pdf/batch/{batch_id}/progress")
+# CORREGIDO: Eliminamos el /api duplicado de la ruta (ya viene en el prefix del router)
+@router.get("/cfdi/pdf/batch/{batch_id}/progress")
 async def batch_progress(batch_id: str):
     async def event_generator():
         while True:
