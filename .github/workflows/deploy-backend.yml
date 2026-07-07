@@ -43,6 +43,9 @@ jobs:
           service: cfdi-suite-worker
           region: us-central1
           source: ./backend
+          # Propiedades nativas exclusivas para pisar el comando del Dockerfile
+          command: python3
+          args: '["-m", "arq", "app.workers.pdf_worker.WorkerSettings"]'
           env_vars: |
             REDIS_HOST=dashing-aphid-43185.upstash.io
             REDIS_PORT=6379
@@ -53,5 +56,3 @@ jobs:
             --memory=2Gi
             --max-instances=5
             --concurrency=1
-            --command=python3
-            --args=-m,arq,app.workers.pdf_worker.WorkerSettings
