@@ -21,7 +21,7 @@ router = APIRouter()
 CHUNK_SIZE = 1500
 MAX_PARALLEL_PAGES = 4
 _TIMEOUT_SECONDS = 60
-_ARQ_THRESHOLD = 50_000  # conceptos — por encima de este valor se despacha a ARQ
+_ARQ_THRESHOLD = 0  # conceptos — por encima de este valor se despacha a ARQ
 
 _cfdi_cache: dict[str, tuple[CFDI, float]] = {}
 _CACHE_TTL = 300

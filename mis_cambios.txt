@@ -1,0 +1,35 @@
+diff --git a/.github/workflows/deploy-backend.yml b/.github/workflows/deploy-backend.yml
+index 82b251a..e8ee8e7 100644
+--- a/.github/workflows/deploy-backend.yml
++++ b/.github/workflows/deploy-backend.yml
+@@ -55,4 +55,3 @@ jobs:
+             --concurrency=1
+             --command=python3
+             --args=-m,arq,app.workers.pdf_worker.WorkerSettings
+-            --no-traffic
+diff --git a/backend/app/routers/pdf.py b/backend/app/routers/pdf.py
+index 526ae7d..533012e 100644
+--- a/backend/app/routers/pdf.py
++++ b/backend/app/routers/pdf.py
+@@ -21,7 +21,7 @@ router = APIRouter()
+ CHUNK_SIZE = 1500
+ MAX_PARALLEL_PAGES = 4
+ _TIMEOUT_SECONDS = 60
+-_ARQ_THRESHOLD = 50_000  # conceptos — por encima de este valor se despacha a ARQ
++_ARQ_THRESHOLD = 0  # conceptos — por encima de este valor se despacha a ARQ
+ 
+ _cfdi_cache: dict[str, tuple[CFDI, float]] = {}
+ _CACHE_TTL = 300
+diff --git a/frontend/src/components/ConversionMasivaPage.tsx b/frontend/src/components/ConversionMasivaPage.tsx
+index 5d314f1..13110b7 100644
+--- a/frontend/src/components/ConversionMasivaPage.tsx
++++ b/frontend/src/components/ConversionMasivaPage.tsx
+@@ -140,7 +140,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
+         cancelledRef.current = false;
+         setPhase('running');
+ 
+-        const sem = new Semaphore(2);
++        const sem = new Semaphore(4);
+ 
+         await Promise.all(
+             entries.map(async (entry) => {

@@ -140,7 +140,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
         cancelledRef.current = false;
         setPhase('running');
 
-        const sem = new Semaphore(2);
+        const sem = new Semaphore(4);
 
         await Promise.all(
             entries.map(async (entry) => {
