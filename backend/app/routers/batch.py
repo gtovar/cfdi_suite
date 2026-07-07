@@ -24,8 +24,14 @@ redis_client = redis.Redis(
     host=REDIS_HOST, 
     port=REDIS_PORT, 
     password=REDIS_PASSWORD, 
+    ssl=True,
+    ssl_cert_reqs=None, # Mismo parámetro de tu Mac para máxima estabilidad
+    max_connections=30, # Un número balanceado por instancia de Cloud Run
+    health_check_interval=25,
     decode_responses=True
 )
+
+redis_client = aioredis.Redis(connection_pool=pool)
 
 MAX_FILES = 500
 REDIS_TTL = 86400  # 24 horas en segundos

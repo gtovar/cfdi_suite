@@ -28,8 +28,13 @@ redis_client = aioredis.Redis(
     port=REDIS_PORT,
     password=REDIS_PASSWORD,
     ssl=True,
+    ssl_cert_reqs=None, # Mismo parámetro de tu Mac para máxima estabilidad
+    max_connections=30, # Un número balanceado por instancia de Cloud Run
+    health_check_interval=25,
     decode_responses=False
 )
+
+redis_client = aioredis.Redis(connection_pool=pool)
 
 class GeneratePdfPayload(BaseModel):
     job_id: str
