@@ -11,11 +11,11 @@ from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, R
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
+from google.cloud import tasks_v2 # Importamos la librería nativa de Google
 
 import redis.asyncio as aioredis
 
 from ..services.pdf_pipeline import generate
-# Esta función ahora es una corrutina asíncrona
 from ..services.task_dispatcher import enqueue_pdf_generation
 
 router = APIRouter(prefix="/api", tags=["PDF"])
@@ -98,7 +98,7 @@ async def start_pdf_generation(
     return {"jobId": job_id}
 
 
-# --- ENDPOINT MASIVO CORREGIDO: ASINCRONÍA REAL SIN PARPADEO ---
+# --- ENDPOINT MASIVO OPTIMIZADO CON CLIENTE COMPARTIDO ---
 @router.post("/cfdi/pdf/start-zip")
 async def start_pdf_zip_generation(
     file: UploadFile = File(...),
@@ -119,12 +119,14 @@ async def start_pdf_zip_generation(
             pass
 
     job_ids = []
-    async_tasks = []  # Lista para guardar las corrutinas de red simultáneas
+    async_tasks = []
+
+    # Inicializamos UN SOLO cliente de red para todas las llamadas asíncronas
+    tasks_client = tasks_v2.CloudTasksAsyncClient()
 
     try:
         with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
             for file_info in z.infolist():
-                # Descartamos basura oculta del sistema
                 if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
                     continue
 
@@ -132,15 +134,14 @@ async def start_pdf_zip_generation(
                     job_id = str(uuid.uuid4())
                     xml_content = z.read(file_info.filename)
 
-                    # Guardar en Redis toma microsegundos
                     await redis_client.set(f"pdf:xml:{job_id}", xml_content, ex=3600)
                     await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=3600)
                     
                     job_ids.append(job_id)
 
-                    # En lugar de ejecutar la función de inmediato, guardamos la orden en la lista
+                    # Pasamos el cliente compartido para reutilizar la misma conexión
                     async_tasks.append(
-                        enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id)
+                        enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id, client=tasks_client)
                     )
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
@@ -151,15 +152,12 @@ async def start_pdf_zip_generation(
     if not job_ids:
         raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
 
-    # Guardamos la lista del lote en Redis
     await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(job_ids), ex=3600)
 
-    # TRUCO DE MAGIA: Ejecutamos las cientos de llamadas a Google Tasks AL MISMO TIEMPO
-    # Esto tarda entre 1 y 2 segundos en total para todo el lote completo
-    print(f"Disparando {len(async_tasks)} peticiones asíncronas en paralelo a Google Cloud Tasks...")
+    print(f"Disparando {len(async_tasks)} peticiones seguras a través del canal multiplexado...")
     await asyncio.gather(*async_tasks)
 
-    print(f"Lote ZIP {batch_id} encolado exitosamente de forma asíncrona.")
+    print(f"Lote ZIP {batch_id} encolado al 100% exitosamente.")
     
     return {
         "batchId": batch_id,
@@ -221,7 +219,7 @@ async def batch_progress(batch_id: str):
 async def download_batch_zip(batch_id: str):
     batch_data = await redis_client.get(f"pdf:batch:{batch_id}")
     if not batch_data:
-        raise HTTPException(status_code=404, detail="El lote especificado no existe o ya expiró.")
+        raise HTTPException(status_code=404, detail="El lote ya no existe.")
         
     job_ids = json.loads(batch_data.decode("utf-8"))
     zip_buffer = io.BytesIO()
