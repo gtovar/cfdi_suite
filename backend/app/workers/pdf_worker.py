@@ -64,16 +64,17 @@ async def generate_heavy_pdf(
     except Exception as exc:
         await redis.set(f"pdf:status:{job_id}", f"error:{exc}", ex=3600)
 
-
 class WorkerSettings:
     functions = [generate_heavy_pdf]
     redis_settings = RedisSettings(
         host=os.getenv("REDIS_HOST", "localhost"),
         port=int(os.getenv("REDIS_PORT", "6379")),
+        # Agregamos la contraseña y forzamos SSL si estamos en producción
+        password=os.getenv("REDIS_PASSWORD", None),
+        ssl=True if os.getenv("REDIS_PASSWORD") else False
     )
     max_jobs = 4
     job_timeout = 600   # 10 min máximo por job
     keep_result = 3600  # mantener resultado 1h
     
-    # Vinculamos el evento de inicio nativo de ARQ
     on_startup = startup
