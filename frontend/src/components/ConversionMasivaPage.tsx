@@ -352,8 +352,20 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
           <input ref={fileInputRef} type="file" multiple accept=".xml,.zip" className="hidden" onChange={handleFileSelect} />
         </div>
 
-        {/* --- INTERFAZ MONOLÍTICA HÍBRIDA OPCIÓN A (MODO ZIP ACTIVO) --- */}
-        {isZipMode && batchProgress && (
+      {/* --- INDICADOR DE CARGA INICIAL (FEEDBACK INMEDIATO AL USUARIO) --- */}
+      {isZipMode && !batchProgress && phase === 'running' && (
+          <div className="rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm flex flex-col items-center justify-center gap-4 transition-all animate-pulse">
+          <Loader2 className="animate-spin text-primary-500" size={36} />
+          <div>
+          <p className="text-sm font-semibold text-gray-800">Desempaquetando y registrando lote en la nube...</p>
+          <p className="mt-1 text-xs text-gray-400">
+          Estamos creando la fila de tareas en Google Cloud de forma segura. Por favor, mantén esta pestaña abierta.
+          </p>
+          </div>
+          </div>
+      )}
+      {/* --- INTERFAZ MONOLÍTICA HÍBRIDA OPCIÓN A (MODO ZIP ACTIVO) --- */}
+      {isZipMode && batchProgress && (
           <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
