@@ -3,17 +3,43 @@ pdf_worker.py — ARQ worker para jobs pesados de PDF (>50k conceptos).
 
 Levantarlo:
     arq backend.app.workers.pdf_worker.WorkerSettings
-
-El resultado del PDF se guarda en Redis con TTL de 1 hora.
-El endpoint /download lo lee y lo elimina.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from arq.connections import RedisSettings
+
+
+# === SERVIDOR WEB FALSO PARA PASAR EL HEALTH CHECK ===
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status": "worker_alive"}')
+    
+    def log_message(self, format, *args):
+        return  # Silenciar logs internos para no ensuciar la consola
+
+def start_fake_server():
+    port = int(os.getenv("PORT", "8080"))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    print(f"--- Fake Web Server activo en puerto {port} ---")
+    server.serve_forever()
+
+async def startup(ctx):
+    """Evento nativo de ARQ que se ejecuta al arrancar el Worker."""
+    print("Iniciando Worker de ARQ y levantando puerto fake...")
+    # Iniciamos el hilo justo cuando ARQ está listo y activo
+    t = threading.Thread(target=start_fake_server, daemon=True)
+    t.start()
+    print("Puerto fake acoplado con éxito.")
+# ====================================================
 
 
 async def generate_heavy_pdf(
@@ -48,4 +74,6 @@ class WorkerSettings:
     max_jobs = 4
     job_timeout = 600   # 10 min máximo por job
     keep_result = 3600  # mantener resultado 1h
-
+    
+    # Vinculamos el evento de inicio nativo de ARQ
+    on_startup = startup
