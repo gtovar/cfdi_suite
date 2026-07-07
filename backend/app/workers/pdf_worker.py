@@ -1,14 +1,15 @@
 """
-pdf_worker.py — ARQ worker para jobs pesados de PDF.
+pdf_worker.py — Servidor dedicado con Worker ARQ integrado para Cloud Run.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
 import os
-
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 from arq.connections import RedisSettings
-
+from arq.worker import Worker
 
 async def generate_heavy_pdf(
     ctx: dict,
@@ -32,7 +33,6 @@ async def generate_heavy_pdf(
     except Exception as exc:
         await redis.set(f"pdf:status:{job_id}", f"error:{exc}", ex=3600)
 
-
 class WorkerSettings:
     functions = [generate_heavy_pdf]
     redis_settings = RedisSettings(
@@ -42,5 +42,31 @@ class WorkerSettings:
         ssl=True if os.getenv("REDIS_PASSWORD") else False
     )
     max_jobs = 4
-    job_timeout = 600   # 10 min máximo por job
-    keep_result = 3600  # mantener resultado 1h
+    job_timeout = 600
+    keep_result = 3600
+
+# --- CONTROLADOR DEL CICLO DE VIDA ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Enciende ARQ en background en cuanto FastAPI está listo."""
+    print("Iniciando instancia interna de ARQ Worker...")
+    worker = Worker(
+        functions=WorkerSettings.functions,
+        redis_settings=WorkerSettings.redis_settings,
+        max_jobs=WorkerSettings.max_jobs,
+        job_timeout=WorkerSettings.job_timeout,
+        keep_result=WorkerSettings.keep_result
+    )
+    # Corre el loop de ARQ en una tarea asíncrona de fondo
+    asyncio.create_task(worker.async_run())
+    print("ARQ Worker acoplado y escuchando Upstash.")
+    yield
+    print("Apagando Worker...")
+
+# --- MINI API DE MONITOREO PARA GOOGLE ---
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/")
+def health_check():
+    """Responde al Health Check de Google Cloud en el puerto 8080."""
+    return {"status": "worker_running_smoothly"}
