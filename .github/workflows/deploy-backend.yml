@@ -32,6 +32,7 @@ jobs:
             REDIS_PORT=6379
             REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
             MODE=api
+            API_URL=https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app
           flags: |
             --allow-unauthenticated
             --cpu=1
