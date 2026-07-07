@@ -98,7 +98,7 @@ async def start_pdf_generation(
     return {"jobId": job_id}
 
 
-# --- ENDPOINT MASIVO ZIP: TOTALMENTE CORREGIDO Y COMPILADO SIN ERRORES DE SINTAXIS ---
+# --- ENDPOINT MASIVO ZIP: ULTRA VELOZ CON PIPELINE Y MÁS TRANSPARENTE ---
 @router.post("/cfdi/pdf/start-zip")
 async def start_pdf_zip_generation(
     file: UploadFile = File(...),
@@ -121,50 +121,58 @@ async def start_pdf_zip_generation(
     job_ids = []
     tasks_client = tasks_v2.CloudTasksAsyncClient()
 
+    # Usamos un pipeline de Redis para meter los cientos de XMLs en un solo paquete de red instantáneo
     try:
-        with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
-            for file_info in z.infolist():
-                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
-                    continue
+        async with redis_client.pipeline(transaction=False) as pipe:
+            with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
+                for file_info in z.infolist():
+                    if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
+                        continue
 
-                if file_info.filename.lower().endswith(".xml"):
-                    job_id = str(uuid.uuid4())
-                    xml_content = z.read(file_info.filename)
+                    if file_info.filename.lower().endswith(".xml"):
+                        job_id = str(uuid.uuid4())
+                        xml_content = z.read(file_info.filename)
 
-                    await redis_client.set(f"pdf:xml:{job_id}", xml_content, ex=3600)
-                    await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=3600)
-                    job_ids.append(job_id)
+                        # Stackeamos las órdenes en el pipeline local de memoria RAM
+                        pipe.set(f"pdf:xml:{job_id}", xml_content, ex=3600)
+                        pipe.set(f"pdf:status:{job_id}", b"pending", ex=3600)
+                        job_ids.append(job_id)
+            
+            # Si se encontraron facturas, disparamos el pipeline completo en 1 solo viaje de red
+            if job_ids:
+                await pipe.execute()
+                
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
     except Exception as e:
         print(f"Error procesando lote ZIP {batch_id}: {e}")
-        raise HTTPException(status_code=500, detail="Error interno al procesar el archivo ZIP masivo.")
+        # CORREGIDO: Ahora te reporta el error técnico exacto en la pantalla si algo falla
+        raise HTTPException(status_code=500, detail=f"Error en la extracción del paquete ZIP: {str(e)}")
 
     if not job_ids:
         raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
 
-    # Guardamos el lote de control en la pizarra de Redis
+    # Guardamos la pizarra de control general
     await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(job_ids), ex=3600)
 
-    # Semáforo de red de alta velocidad: permite hasta 50 conexiones ráfaga en paralelo
+    # Semáforo de red asíncrono para regular la ráfaga de red hacia Google
     network_semaphore = asyncio.Semaphore(50)
 
-    # Función interna blindada contra caídas individuales de la API de Google
     async def safe_enqueue_task(jid: str):
         async with network_semaphore:
             try:
                 await enqueue_pdf_generation(job_id=jid, xml_b64="", template_id=template_id, client=tasks_client)
             except Exception as ex:
-                print(f"Error encolando archivo {jid} hacia Google Cloud Tasks: {ex}")
+                print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
                 await redis_client.set(f"pdf:status:{jid}", b"error", ex=3600)
 
-    # SINTAXIS CORREGIDA: Creamos la lista de tareas de forma limpia sin duplicar bucles
+    # REPARADO: Se corrigió la sintaxis rota eliminando la duplicidad del ciclo for
     async_tasks = [safe_enqueue_task(jid) for jid in job_ids]
 
-    print(f"Disparando {len(async_tasks)} registros de forma masiva regulada por ráfaga asíncrona...")
+    print(f"Registrando {len(async_tasks)} tareas en ráfaga asíncrona balanceada...")
     await asyncio.gather(*async_tasks)
 
-    print(f"Lote ZIP {batch_id} encolado exitosamente de forma balanceada.")
+    print(f"Éxito: Lote ZIP {batch_id} encolado de forma segura.")
     
     return {
         "batchId": batch_id,
