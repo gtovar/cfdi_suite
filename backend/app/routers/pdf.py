@@ -46,7 +46,7 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 
     print(f"Iniciando generación de PDF para Job ID: {payload.job_id}")
     try:
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"converting", ex=3600)
+        await redis_client.set(f"pdf:status:{payload.job_id}", b"converting", ex=1800)
 
         if payload.xml_b64:
             xml_bytes = base64.b64decode(payload.xml_b64)
@@ -58,15 +58,15 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 
         pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
         
-        await redis_client.set(f"pdf:data:{payload.job_id}", pdf_bytes, ex=3600)
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=3600)
+        await redis_client.set(f"pdf:data:{payload.job_id}", pdf_bytes, ex=1800)
+        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=1800)
         await redis_client.delete(f"pdf:xml:{payload.job_id}")
         
         print(f"PDF {payload.job_id} guardado con éxito.")
         return {"status": "success", "message": "PDF generado"}
     except Exception as e:
         print(f"Error generando PDF {payload.job_id}: {e}")
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=3600)
+        await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -87,8 +87,8 @@ async def start_pdf_generation(
         except Exception:
             pass
 
-    await redis_client.set(f"pdf:xml:{job_id}", xml_content, ex=1800)
-    await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=3600)
+    await redis_client.set(f"pdf:xml:{job_id}", xml_content, ex=900)
+    await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=1800)
 
     try:
         await enqueue_pdf_generation(job_id=job_id, xml_b64="", template_id=template_id)
@@ -98,7 +98,7 @@ async def start_pdf_generation(
     return {"jobId": job_id}
 
 
-# --- ENDPOINT MASIVO ZIP: ULTRA VELOZ CON PIPELINE Y MÁS TRANSPARENTE ---
+# --- ENDPOINT MASIVO ZIP BLINDADO CON DETECCIÓN EXPLÍCITA DE QUOTA EN REDIS ---
 @router.post("/cfdi/pdf/start-zip")
 async def start_pdf_zip_generation(
     file: UploadFile = File(...),
@@ -121,41 +121,44 @@ async def start_pdf_zip_generation(
     job_ids = []
     tasks_client = tasks_v2.CloudTasksAsyncClient()
 
-    # Usamos un pipeline de Redis para meter los cientos de XMLs en un solo paquete de red instantáneo
+    # Separamos la lectura del ZIP del guardado en Redis para saber exactamente qué falla
     try:
-        async with redis_client.pipeline(transaction=False) as pipe:
-            with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
-                for file_info in z.infolist():
-                    if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
-                        continue
+        with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
+            for file_info in z.infolist():
+                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
+                    continue
 
-                    if file_info.filename.lower().endswith(".xml"):
-                        job_id = str(uuid.uuid4())
-                        xml_content = z.read(file_info.filename)
-
-                        # Stackeamos las órdenes en el pipeline local de memoria RAM
-                        pipe.set(f"pdf:xml:{job_id}", xml_content, ex=3600)
-                        pipe.set(f"pdf:status:{job_id}", b"pending", ex=3600)
-                        job_ids.append(job_id)
-            
-            # Si se encontraron facturas, disparamos el pipeline completo en 1 solo viaje de red
-            if job_ids:
-                await pipe.execute()
-                
+                if file_info.filename.lower().endswith(".xml"):
+                    job_id = str(uuid.uuid4())
+                    xml_content = z.read(file_info.filename)
+                    job_ids.append((job_id, xml_content))
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
     except Exception as e:
-        print(f"Error procesando lote ZIP {batch_id}: {e}")
-        # CORREGIDO: Ahora te reporta el error técnico exacto en la pantalla si algo falla
-        raise HTTPException(status_code=500, detail=f"Error en la extracción del paquete ZIP: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al leer el archivo ZIP: {str(e)}")
 
     if not job_ids:
         raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
 
-    # Guardamos la pizarra de control general
-    await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(job_ids), ex=3600)
+    # DISPARO CONTROLADO A REDIS CON CAPTURA EXCLUSIVA DE ERRORES DE CAPACIDAD
+    try:
+        async with redis_client.pipeline(transaction=False) as pipe:
+            for jid, xml_content in job_ids:
+                # Bajamos el tiempo de expiración a 30 minutos (1800s) para limpiar la RAM de Upstash el doble de rápido
+                pipe.set(f"pdf:xml:{jid}", xml_content, ex=1800)
+                pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+            await pipe.execute()
+    except Exception as redis_err:
+        # DETECTOR DE OJOS: Si Upstash rechaza el guardado, te lo dice directo sin rodeos
+        raise HTTPException(
+            status_code=507,
+            detail=f"La base de datos Redis (Upstash) está LLENA o superó su límite de cuota gratuita diaria. Por favor, ve a tu consola de Upstash y dale clic a 'Flush Database' para liberar espacio. Detalles técnicos: {str(redis_err)}"
+        )
 
-    # Semáforo de red asíncrono para regular la ráfaga de red hacia Google
+    # Una vez guardado en Redis con éxito, procedemos a Google Cloud Tasks
+    just_ids = [item[0] for item in job_ids]
+    await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(just_ids), ex=3600)
+
     network_semaphore = asyncio.Semaphore(50)
 
     async def safe_enqueue_task(jid: str):
@@ -164,23 +167,18 @@ async def start_pdf_zip_generation(
                 await enqueue_pdf_generation(job_id=jid, xml_b64="", template_id=template_id, client=tasks_client)
             except Exception as ex:
                 print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
-                await redis_client.set(f"pdf:status:{jid}", b"error", ex=3600)
+                await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
 
-    # REPARADO: Se corrigió la sintaxis rota eliminando la duplicidad del ciclo for
-    async_tasks = [safe_enqueue_task(jid) for jid in job_ids]
-
-    print(f"Registrando {len(async_tasks)} tareas en ráfaga asíncrona balanceada...")
+    async_tasks = [safe_enqueue_task(jid) for jid in just_ids]
     await asyncio.gather(*async_tasks)
-
-    print(f"Éxito: Lote ZIP {batch_id} encolado de forma segura.")
     
     return {
         "batchId": batch_id,
-        "totalFiles": len(job_ids)
+        "totalFiles": len(just_ids)
     }
 
 
-@router.get("/cfdi/pdf/batch/{batch_id}/progress")
+@router.get("/api/cfdi/pdf/batch/{batch_id}/progress")
 async def batch_progress(batch_id: str):
     async def event_generator():
         while True:
