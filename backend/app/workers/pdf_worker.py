@@ -50,18 +50,32 @@ class WorkerSettings:
 async def lifespan(app: FastAPI):
     """Enciende ARQ en background en cuanto FastAPI está listo."""
     print("Iniciando instancia interna de ARQ Worker...")
+    
     worker = Worker(
         functions=WorkerSettings.functions,
         redis_settings=WorkerSettings.redis_settings,
         max_jobs=WorkerSettings.max_jobs,
         job_timeout=WorkerSettings.job_timeout,
-        keep_result=WorkerSettings.keep_result
+        keep_result=WorkerSettings.keep_result,
+        handle_signals=False  # ¡CRÍTICO! Evita que ARQ secuestre las señales de Uvicorn
     )
-    # Corre el loop de ARQ en una tarea asíncrona de fondo
-    asyncio.create_task(worker.async_run())
+    
+    # 1. ARQ usa main() para arrancar, no async_run()
+    # 2. Guardamos la referencia de la tarea para evitar que el Garbage Collector la mate
+    worker_task = asyncio.create_task(worker.main())
     print("ARQ Worker acoplado y escuchando Upstash.")
+    
+    # Liberamos el hilo para que Uvicorn abra el puerto 8080 y pase el Health Check de Google
     yield
-    print("Apagando Worker...")
+    
+    # --- Secuencia de apagado elegante (Graceful Shutdown) ---
+    print("Apagando Worker y limpiando tareas...")
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+    print("Worker apagado correctamente.")
 
 # --- MINI API DE MONITOREO PARA GOOGLE ---
 app = FastAPI(lifespan=lifespan)
