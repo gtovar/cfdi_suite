@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from arq.connections import RedisSettings
@@ -22,14 +23,11 @@ async def generate_heavy_pdf(
     redis = ctx["redis"]
     try:
         await redis.set(f"pdf:status:{job_id}", "generating_pdf", ex=3600)
-
         xml_bytes = base64.b64decode(xml_b64)
         from ..services.pdf_pipeline import generate
         pdf = await asyncio.to_thread(generate, xml_bytes, template_id, html_shell)
-
         await redis.set(f"pdf:result:{job_id}", pdf, ex=3600)
         await redis.set(f"pdf:status:{job_id}", "done", ex=3600)
-
     except Exception as exc:
         await redis.set(f"pdf:status:{job_id}", f"error:{exc}", ex=3600)
 
@@ -45,42 +43,57 @@ class WorkerSettings:
     job_timeout = 600
     keep_result = 3600
 
-# --- CONTROLADOR DEL CICLO DE VIDA ---
+# --- CONTROLADOR DEL CICLO DE VIDA (BLINDADO) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Enciende ARQ en background en cuanto FastAPI está listo."""
     print("Iniciando instancia interna de ARQ Worker...")
     
-    worker = Worker(
-        functions=WorkerSettings.functions,
-        redis_settings=WorkerSettings.redis_settings,
-        max_jobs=WorkerSettings.max_jobs,
-        job_timeout=WorkerSettings.job_timeout,
-        keep_result=WorkerSettings.keep_result,
-        handle_signals=False  # ¡CRÍTICO! Evita que ARQ secuestre las señales de Uvicorn
-    )
+    # 1. Evitamos que un TypeError por versiones viejas de ARQ mate la API
+    try:
+        worker = Worker(
+            functions=WorkerSettings.functions,
+            redis_settings=WorkerSettings.redis_settings,
+            max_jobs=WorkerSettings.max_jobs,
+            job_timeout=WorkerSettings.job_timeout,
+            keep_result=WorkerSettings.keep_result,
+            handle_signals=False
+        )
+    except TypeError:
+        print("Advertencia: Esta versión de arq no soporta handle_signals. Inicializando normal...")
+        worker = Worker(
+            functions=WorkerSettings.functions,
+            redis_settings=WorkerSettings.redis_settings,
+            max_jobs=WorkerSettings.max_jobs,
+            job_timeout=WorkerSettings.job_timeout,
+            keep_result=WorkerSettings.keep_result
+        )
+
+    # 2. Aislamos la ejecución del worker. Si Redis falla, el error se imprime pero Uvicorn sigue vivo.
+    async def run_worker_safely():
+        try:
+            await worker.main()
+        except Exception as e:
+            print(f"ERROR FATAL DE ARQ WORKER (Redis/Conexión): {e}")
+            traceback.print_exc()
+
+    # Lanzamos el worker al background
+    worker_task = asyncio.create_task(run_worker_safely())
+    print("ARQ Worker lanzado. Liberando el hilo principal...")
     
-    # 1. ARQ usa main() para arrancar, no async_run()
-    # 2. Guardamos la referencia de la tarea para evitar que el Garbage Collector la mate
-    worker_task = asyncio.create_task(worker.main())
-    print("ARQ Worker acoplado y escuchando Upstash.")
+    # ¡Liberamos el hilo inmediatamente para que Uvicorn abra el puerto 8080!
+    yield  
     
-    # Liberamos el hilo para que Uvicorn abra el puerto 8080 y pase el Health Check de Google
-    yield
-    
-    # --- Secuencia de apagado elegante (Graceful Shutdown) ---
-    print("Apagando Worker y limpiando tareas...")
+    # Apagado elegante
+    print("Apagando Worker...")
     worker_task.cancel()
     try:
         await worker_task
     except asyncio.CancelledError:
         pass
-    print("Worker apagado correctamente.")
 
 # --- MINI API DE MONITOREO PARA GOOGLE ---
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 def health_check():
-    """Responde al Health Check de Google Cloud en el puerto 8080."""
     return {"status": "worker_running_smoothly"}
