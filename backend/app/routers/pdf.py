@@ -5,27 +5,33 @@ import json
 import uuid
 import os
 
-# REEMPLAZA TU LÍNEA DE FASTAPI POR ESTA:
+# Importaciones nativas de FastAPI y Starlette
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
+# Importación de la librería de Redis asíncrona
+import redis.asyncio as aioredis
+
+# Importaciones locales del proyecto
 from ..services.pdf_pipeline import generate
 from ..services.task_dispatcher import enqueue_pdf_generation
 
 router = APIRouter(prefix="/api", tags=["PDF"])
 
-# 1. CONEXIÓN A TU UPSTASH REDIS (Usa las variables de entorno que ya tienes en Cloud Run)
+# Carga de variables de entorno para la base de datos
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 
+# Configuración del cliente Redis con SSL activo para soportar Upstash Cloud
 redis_client = aioredis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
     password=REDIS_PASSWORD,
-    decode_responses=False  # Lo dejamos en False para que no corrompa los bytes del PDF
+    ssl=True,  # OBLIGATORIO PARA UPSTASH: Evita el error 'Connection closed by server'
+    decode_responses=False  # Mantiene los archivos binarios intactos
 )
 
 class GeneratePdfPayload(BaseModel):
@@ -34,7 +40,8 @@ class GeneratePdfPayload(BaseModel):
     template_id: str
     html_shell: Optional[str] = None
 
-# --- 2. ENDPOINT INTERNO (Llamado por Google Cloud Tasks) ---
+
+# --- ENDPOINT INTERNO (Llamado por Google Cloud Tasks) ---
 @router.post("/internal/generate-pdf")
 async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
     if "x-cloudtasks-queuename" not in request.headers:
@@ -42,14 +49,11 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 
     print(f"Iniciando generación de PDF pesada para Job ID: {payload.job_id}")
     try:
-        # Marcamos en Redis que la tarea ya se está procesando
         await redis_client.set(f"pdf:status:{payload.job_id}", b"converting", ex=3600)
 
-        # Generamos los bytes reales del PDF
         xml_bytes = base64.b64decode(payload.xml_b64)
         pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
         
-        # Guardamos el PDF resultante y actualizamos el estado a "done" (Expira en 1 hora)
         await redis_client.set(f"pdf:data:{payload.job_id}", pdf_bytes, ex=3600)
         await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=3600)
         
@@ -57,12 +61,11 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         return {"status": "success", "message": "PDF generado con éxito"}
     except Exception as e:
         print(f"Error generando PDF {payload.job_id}: {e}")
-        # Si algo falla, le avisamos a Redis para que el frontend no se quede esperando eternamente
         await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=3600)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- 3. ENDPOINT DE INICIO (Llamado por el Frontend) ---
+# --- ENDPOINT DE INICIO (Llamado por el Frontend) ---
 @router.post("/cfdi/pdf/start")
 async def start_pdf_generation(
     file: UploadFile = File(...),
@@ -82,10 +85,8 @@ async def start_pdf_generation(
         except Exception:
             pass
 
-    # Colocamos el estado inicial en Redis
     await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=3600)
 
-    # Despachamos la tarea asíncrona a la cola de Google Cloud Tasks
     try:
         enqueue_pdf_generation(
             job_id=job_id,
@@ -100,12 +101,9 @@ async def start_pdf_generation(
     return {"jobId": job_id}
 
 
-# --- 4. ENDPOINT DE PROGRESO (Llamado por el Frontend) ---
+# --- ENDPOINT DE PROGRESO (Llamado por el Frontend) ---
 @router.get("/cfdi/pdf/{job_id}/progress")
 async def pdf_progress(job_id: str):
-    """
-    Monitorea Redis en tiempo real y le avisa al frontend (SSE) el estado de la tarea.
-    """
     async def event_generator():
         while True:
             status_bytes = await redis_client.get(f"pdf:status:{job_id}")
@@ -120,18 +118,14 @@ async def pdf_progress(job_id: str):
             else:
                 yield 'data: {"status": "converting"}\n\n'
             
-            # Esperamos 1 segundo antes de volver a consultar Redis para no saturar la base de datos
             await asyncio.sleep(1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# --- 5. ENDPOINT DE DESCARGA (Llamado por el Frontend) ---
+# --- ENDPOINT DE DESCARGA (Llamado por el Frontend) ---
 @router.get("/cfdi/pdf/{job_id}/download")
 async def download_pdf(job_id: str):
-    """
-    Entrega los bytes reales del PDF que Cloud Tasks guardó en Redis.
-    """
     pdf_bytes = await redis_client.get(f"pdf:data:{job_id}")
     
     if not pdf_bytes:
