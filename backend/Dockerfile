@@ -2,7 +2,6 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Agrega herramientas de desarrollo para poder compilar extensiones de C/C++
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
@@ -24,5 +23,5 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-# Comando final usando Honcho para el Worker y Uvicorn para la API
-CMD ["sh", "-c", "if [ \"$MODE\" = \"worker\" ]; then honcho -f Procfile.worker start; else uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}; fi"]
+# Un solo comando, limpio y directo para tu API
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

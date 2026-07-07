@@ -11,6 +11,5 @@ pypdf>=5.0,<6
 reportlab>=4.2,<5
 qrcode>=7.4,<8
 lxml>=5.0,<6
-arq>=0.25,<1
 redis>=5.0,<6
-honcho>=1.1,<2
+google-cloud-tasks>=2.16,<3
