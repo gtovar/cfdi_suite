@@ -45,6 +45,9 @@ async def _lifespan(app: FastAPI):
             RedisSettings(
                 host=os.getenv("REDIS_HOST", "localhost"),
                 port=int(os.getenv("REDIS_PORT", "6379")),
+                password=os.getenv("REDIS_PASSWORD", None),
+                ssl=True,
+                ssl_cert_reqs=None,
                 conn_timeout=2,
                 max_connections=20,
             )
