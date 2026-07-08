@@ -1,5 +1,12 @@
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
 
+function resolveApiBaseUrl() {
+  const meta = import.meta as ImportMeta & {
+    env?: Record<string, string | undefined>;
+  };
+  return meta.env?.VITE_API_BASE_URL || '';
+}
+
 // Estructura de control para el progreso global de un lote ZIP
 export interface BatchProgressPayload {
   status: 'processing' | 'done' | 'error';
@@ -57,7 +64,7 @@ export async function startZipConversion(file: File, templateId?: string): Promi
   fd.append('file', file);
   if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
   
-  const res = await fetch('/api/cfdi/pdf/start-zip', { method: 'POST', body: fd });
+  const res = await fetch('${resolveApiBaseUrl()}/api/cfdi/pdf/start-zip', { method: 'POST', body: fd });
   if (!res.ok) throw new Error(`Error ${res.status} al procesar el lote ZIP en el servidor`);
   return await res.json() as { batchId: string; totalFiles: number };
 }
@@ -65,7 +72,7 @@ export async function startZipConversion(file: File, templateId?: string): Promi
 // --- NUEVA FUNCIÓN: ESCUCHAR LA PIZARRA GLOBAL DEL BATCH EN TIEMPO REAL ---
 export function waitForBatchJob(batchId: string, onProgress: (data: BatchProgressPayload) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const es = new EventSource(`/api/cfdi/pdf/batch/${batchId}/progress`);
+    const es = new EventSource(`${resolveApiBaseUrl()}/api/cfdi/pdf/batch/${batchId}/progress`);
     
     // 10 minutos de tiempo límite máximo para lotes de miles de archivos
     const tid = setTimeout(() => {

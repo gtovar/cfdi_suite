@@ -48,7 +48,7 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 
     print(f"Iniciando generación de PDF para Job ID: {payload.job_id}")
     try:
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"converting", ex=1800)
+        await redis_client.set(f"pdf:status:{payload.job_id}", b"converting", ex=3600)
 
         if payload.xml_b64:
             xml_bytes = base64.b64decode(payload.xml_b64)
