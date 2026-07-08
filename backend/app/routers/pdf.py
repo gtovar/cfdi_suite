@@ -6,6 +6,7 @@ import uuid
 import os
 import zipfile
 import io
+import zlib
 
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
@@ -53,14 +54,15 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         if payload.xml_b64:
             xml_bytes = base64.b64decode(payload.xml_b64)
         else:
-            xml_bytes = await redis_client.get(f"pdf:xml:{payload.job_id}")
+            compressed_xml = await redis_client.get(f"pdf:xml:{payload.job_id}")
+            xml_bytes = zlib.decompress(compressed_xml) if compressed_xml else None
             
         if not xml_bytes:
             raise HTTPException(status_code=400, detail="XML no encontrado en caché.")
 
         pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
         
-        await redis_client.set(f"pdf:data:{payload.job_id}", pdf_bytes, ex=1800)
+        await redis_client.set(f"pdf:data:{payload.job_id}", zlib.compress(pdf_bytes), ex=1800)
         await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=1800)
         await redis_client.delete(f"pdf:xml:{payload.job_id}")
         
@@ -89,7 +91,7 @@ async def start_pdf_generation(
         except Exception:
             pass
 
-    await redis_client.set(f"pdf:xml:{job_id}", xml_content, ex=900)
+    await redis_client.set(f"pdf:xml:{job_id}", zlib.compress(xml_content), ex=900)
     await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=1800)
 
     try:
@@ -164,7 +166,7 @@ async def start_pdf_zip_generation(
             
             async with redis_client.pipeline(transaction=False) as pipe:
                 for jid, xml_content in chunk:
-                    pipe.set(f"pdf:xml:{jid}", xml_content, ex=1800)
+                    pipe.set(f"pdf:xml:{jid}", zlib.compress(xml_content), ex=1800)
                     pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
                 await pipe.execute() # <-- Cada paquete medirá escasos 4 MB, entrando limpiecito al embudo
                 
@@ -259,9 +261,9 @@ async def download_batch_zip(batch_id: str):
     
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as z:
         for jid in job_ids:
-            pdf_bytes = await redis_client.get(f"pdf:data:{jid}")
-            if pdf_bytes:
-                z.writestr(f"cfdi_{jid}.pdf", pdf_bytes)
+            compressed_pdf = await redis_client.get(f"pdf:data:{jid}")
+            if compressed_pdf:
+                z.writestr(f"cfdi_{jid}.pdf", zlib.decompress(compressed_pdf))
                 
     zip_buffer.seek(0)
     return Response(
@@ -286,11 +288,11 @@ async def pdf_progress(job_id: str):
 
 @router.get("/cfdi/pdf/{job_id}/download")
 async def download_pdf(job_id: str):
-    pdf_bytes = await redis_client.get(f"pdf:data:{job_id}")
-    if not pdf_bytes:
+    compressed_pdf = await redis_client.get(f"pdf:data:{job_id}")
+    if not compressed_pdf:
         raise HTTPException(status_code=404, detail="El PDF expiró o no existe.")
     return Response(
-        content=pdf_bytes,
+        content=zlib.decompress(compressed_pdf),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="cfdi_{job_id}.pdf"'}
     )
