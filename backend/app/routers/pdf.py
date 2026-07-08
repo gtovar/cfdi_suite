@@ -158,16 +158,22 @@ async def start_pdf_zip_generation(
     print(f"🔀 COMANDOS EN PIPELINE:     Total de comandos de escritura en el Pipeline: {total_comandos_pipeline} de {UPSTASH_DAILY_COMMANDS_LIMIT}.")
     print("="*80 + "\n")
 
+    # El bloque que va justo abajo de los prints de auditoría en pdf.py
     try:
-        async with redis_client.pipeline(transaction=False) as pipe:
-            for jid, xml_content in job_ids:
-                pipe.set(f"pdf:xml:{jid}", xml_content, ex=1800)
-                pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
-            await pipe.execute()
+        CHUNK_SIZE = 20
+        for i in range(0, len(job_ids), CHUNK_SIZE):
+            chunk = job_ids[i:i + CHUNK_SIZE]
+            
+            async with redis_client.pipeline(transaction=False) as pipe:
+                for jid, xml_content in chunk:
+                    pipe.set(f"pdf:xml:{jid}", xml_content, ex=1800)
+                    pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                await pipe.execute() # <-- Cada paquete medirá escasos 4 MB, entrando limpiecito al embudo
+                
     except Exception as redis_err:
         raise HTTPException(
-            status_code=507,
-            detail=f"La base de datos Redis (Upstash) está LLENA. Detalles: {str(redis_err)}"
+            status_code=500,
+            detail=f"Error de comunicación con el State Store de Redis: {str(redis_err)}"
         )
 
     just_ids = [item[0] for item in job_ids]
