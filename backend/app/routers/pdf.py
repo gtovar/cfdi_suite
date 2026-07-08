@@ -141,6 +141,23 @@ async def start_pdf_zip_generation(
     if not job_ids:
         raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
 
+    # 📊 CONTROL DE CALIDAD Y AUDITORÍA (Validación del Embudo)
+    total_bytes_descomprimidos = sum(len(xml_content) for jid, xml_content in job_ids)
+    mb_reales = total_bytes_descomprimidos / (1024 * 1024)
+    total_comandos_pipeline = len(job_ids) * 2 # 2 comandos (SET xml y SET status) por cada archivo
+
+    # Constantes oficiales de tu plan de Upstash para pintar la comparativa
+    UPSTASH_STORAGE_MAX_MB = 256         # Capacidad total del Tanque
+    UPSTASH_REQUEST_MAX_MB = 50          # Capacidad máxima del Embudo por petición
+    UPSTASH_DAILY_COMMANDS_LIMIT = "10,000 (Plan Free) / ilimitados (Plan Paid)"
+
+    print("\n" + "="*80)
+    print("🔍 [AUDITORÍA DE INFRAESTRUCTURA - TRANSMISIÓN DE DATOS]")
+    print(f"📦 EL TANQUE (Almacenamiento): {mb_reales:.2f} MB ocupados de {UPSTASH_STORAGE_MAX_MB} MB disponibles en tu capacidad total.")
+    print(f"⚠️ EL EMBUDO (Payload Size):  {mb_reales:.2f} MB enviados de {UPSTASH_REQUEST_MAX_MB} MB máximos permitidos en una sola petición.")
+    print(f"🔀 COMANDOS EN PIPELINE:     Total de comandos de escritura en el Pipeline: {total_comandos_pipeline} de {UPSTASH_DAILY_COMMANDS_LIMIT}.")
+    print("="*80 + "\n")
+
     try:
         async with redis_client.pipeline(transaction=False) as pipe:
             for jid, xml_content in job_ids:
