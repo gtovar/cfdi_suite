@@ -21,18 +21,17 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 
-pool = redis.ConnectionPool(
-    host=REDIS_HOST, 
-    port=REDIS_PORT, 
-    password=REDIS_PASSWORD, 
+# Pasamos los parámetros de control directamente al cliente síncrono de redis.
+redis_client = redis.Redis(
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    password=REDIS_PASSWORD,
     ssl=True,
-    ssl_cert_reqs=None, # Mismo parámetro de tu Mac para máxima estabilidad
-    max_connections=30, # Un número balanceado por instancia de Cloud Run
+    ssl_cert_reqs=None,
+    max_connections=30,
     health_check_interval=25,
-    decode_responses=True
+    decode_responses=True # True para recibir strings limpios en el estatus
 )
-
-redis_client = aioredis.Redis(connection_pool=pool)
 
 MAX_FILES = 500
 REDIS_TTL = 86400  # 24 horas en segundos

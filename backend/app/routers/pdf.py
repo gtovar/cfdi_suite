@@ -23,18 +23,16 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 
-pool = aioredis.ConnectionPool(
+redis_client = aioredis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
     password=REDIS_PASSWORD,
     ssl=True,
-    ssl_cert_reqs=None, # Mismo parámetro de tu Mac para máxima estabilidad
-    max_connections=30, # Un número balanceado por instancia de Cloud Run
+    ssl_cert_reqs=None,
+    max_connections=30,
     health_check_interval=25,
-    decode_responses=False
+    decode_responses=False # Mantener en False para los bytes binarios del PDF
 )
-
-redis_client = aioredis.Redis(connection_pool=pool)
 
 class GeneratePdfPayload(BaseModel):
     job_id: str
