@@ -58,33 +58,55 @@ export async function convertFileToPdf(file: File, templateId?: string): Promise
   return dl.arrayBuffer();
 }
 
-//  ESTA ES LA NUEVA FUNCIÓN OPTIMIZADA CON GCS:
-export async function startZipConversion(file: File, templateId?: string): Promise<{ batchId: string; totalFiles: number }> {
+
+export async function startZipConversion(
+  file: File, 
+  templateId?: string,
+  onUploadProgress?: (percent: number) => void // <-- NUEVO: Callback para el Frontend
+): Promise<{ batchId: string; totalFiles: number }> {
   const baseUrl = resolveApiBaseUrl();
 
-  // Paso A: Pedirle al backend la URL firmada temporal de Google Cloud Storage
+  // Paso A: Pedirle al backend la URL firmada
   const resUrl = await fetch(baseUrl + "/api/cfdi/pdf/request-upload", { 
     method: 'POST' 
   });
+  
   if (!resUrl.ok) {
+    if (resUrl.status === 429) {
+      throw new Error("El sistema está saturado. Por favor, intenta en unos minutos.");
+    }
     throw new Error(`Error (${resUrl.status}) al preparar el espacio de subida segura.`);
   }
+  
   const { uploadUrl, gcsPath } = await resUrl.json() as { uploadUrl: string; gcsPath: string };
 
-  // Paso B: Subir el ZIP pesado (los 350 MB) DIRECTO al Bucket de Google Storage usando PUT
-  // Aquí es donde evitamos pasar por Cloud Run, por lo que nunca más verás el error 413
-  const resUpload = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/zip'
-    },
-    body: file // Enviamos el archivo binario nativo crudo
-  });
-  if (!resUpload.ok) {
-    throw new Error("No se pudo depositar el archivo en el almacén de la nube. Verifica tu conexión.");
-  }
+  // Paso B: Subir el ZIP usando XMLHttpRequest para rastrear el progreso exacto
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl, true);
+    xhr.setRequestHeader('Content-Type', 'application/zip');
+    
+    // Escuchar el progreso de subida de los bytes reales
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onUploadProgress) {
+        const percentComplete = Math.round((e.loaded / e.total) * 100);
+        onUploadProgress(percentComplete);
+      }
+    };
 
-  // Paso C: Avisarle al backend que el archivo ya se encuentra en GCS para que lo procese
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Falló la subida a la nube: ${xhr.statusText}`));
+      }
+    };
+    
+    xhr.onerror = () => reject(new Error("Error de red al intentar subir el archivo."));
+    xhr.send(file);
+  });
+
+  // Paso C: Avisarle al backend que procese el archivo (AQUÍ ES DONDE SUELE SALTAR EL 429 SI SE LLENA)
   const resProcess = await fetch(baseUrl + "/api/cfdi/pdf/start-zip-gcs", {
     method: 'POST',
     headers: {
@@ -95,14 +117,23 @@ export async function startZipConversion(file: File, templateId?: string): Promi
       template: templateId ? JSON.stringify({ _id: templateId }) : undefined
     })
   });
+  
   if (!resProcess.ok) {
     const errorText = await resProcess.text().catch(() => 'Error desconocido');
+    
+    // AQUÍ CACHAMOS EL MICRO-PASO 1 DEL BACKEND
+    if (resProcess.status === 429) {
+      throw new Error("El motor de procesamiento está a máxima capacidad. Por favor, espera unos minutos e intenta de nuevo.");
+    }
+    
     throw new Error(`Error al iniciar la descompresión interna: ${errorText}`);
   }
 
-  // Devolvemos el batchId y totalFiles exactamente igual que antes
   return await resProcess.json() as { batchId: string; totalFiles: number };
 }
+
+
+
 
 // --- NUEVA FUNCIÓN: ESCUCHAR LA PIZARRA GLOBAL DEL BATCH EN TIEMPO REAL ---
 export function waitForBatchJob(batchId: string, onProgress: (data: BatchProgressPayload) => void): Promise<void> {

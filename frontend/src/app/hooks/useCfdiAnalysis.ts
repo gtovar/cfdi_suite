@@ -79,6 +79,11 @@ export function useCfdiAnalysis() {
       } else {
         message = 'Error al procesar el XML. Asegúrate de que sea un CFDI válido.';
       }
+     // 1. Detenemos el spinner/progreso devolviéndolo a su estado inicial
+      setProgress(INITIAL_PROGRESS);
+
+      // 2. Opcional: También puedes crear un estado específico de error para el progreso si tu UI lo soporta
+      // setProgress({ label: 'Error', progress: 0, detail: message });
       setResult((prev) => ({ ...prev, errorMessage: message }));
     }
   }

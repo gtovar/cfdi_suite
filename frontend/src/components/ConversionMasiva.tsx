@@ -89,6 +89,9 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const [batchId, setBatchId] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgressPayload | null>(null);
 
+  // ---> NUEVOS ESTADOS AQUÍ <---
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
@@ -161,6 +164,8 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     setZipFile(null);
     setBatchId(null);
     setBatchProgress(null);
+    setUploadProgress(null);
+    setErrorMessage(null);
   }
 
   function toggleSelectAll(checked: boolean) {
@@ -171,32 +176,39 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const startConversion = useCallback(async () => {
     cancelledRef.current = false;
     setPhase('running');
-
+    // --- EJECUCIÓN DEL MODO MASIVO (ZIP) ---
     if (isZipMode && zipFile) {
+      setErrorMessage(null); // Limpiamos errores previos
       try {
-        // En este punto, 'currentStep' = 1 automáticamente
-        const res = await startZipConversion(zipFile, templateId);
+        // Le pasamos el callback de progreso que creaste en el Micropaso 2
+        const res = await startZipConversion(zipFile, templateId, (percent) => {
+          setUploadProgress(percent);
+        });
+
+        setUploadProgress(null); // Subida terminada
         setBatchId(res.batchId);
-        
-        // Al setear el progress inicial, 'currentStep' = 2
+
         setBatchProgress({
           status: 'processing',
-          total: res.totalFiles || 0,
+          total: res.totalFiles,
           done: 0,
           error: 0,
           converting: 0,
-          pending: res.totalFiles || 0,
+          pending: res.totalFiles,
           percentage: 0
         });
 
+        // Nos quedamos escuchando la pizarra de Redis a través del Cartero
         await waitForBatchJob(res.batchId, (progress) => {
           setBatchProgress(progress);
         });
-        
+
         setPhase('done');
       } catch (err) {
         setPhase('idle');
-        alert(err instanceof Error ? err.message : String(err));
+        setUploadProgress(null);
+        // EN LUGAR DE UN ALERT, GUARDAMOS EL MENSAJE BONITO:
+        setErrorMessage(err instanceof Error ? err.message : "Ocurrió un error inesperado de red.");
       }
       return;
     }
@@ -277,7 +289,17 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     <div className="flex flex-col md:h-full md:overflow-hidden">
       <div className="flex flex-1 flex-col gap-5 overflow-auto p-6">
 
-        {/* Header */}
+      {/* Header */}
+        {/* Banner de Errores Seguros */}
+        {errorMessage && (
+          <div className="rounded-lg bg-red-50 p-4 border border-red-200 flex items-start gap-3 shadow-sm animate-in fade-in slide-in-from-top-2">
+            <XCircle className="text-red-600 mt-0.5 shrink-0" size={20} />
+            <div>
+              <h3 className="text-sm font-semibold text-red-800">El procesamiento no pudo iniciar</h3>
+              <p className="mt-1 text-sm text-red-700">{errorMessage}</p>
+            </div>
+          </div>
+        )}
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-sm font-semibold text-gray-900">Conversión masiva XML → PDF</h2>
@@ -321,6 +343,33 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                 {entries.length.toLocaleString('es-MX')} archivos XML listos
               </p>
             )}
+            {/* --- INDICADOR DE CARGA INICIAL (FEEDBACK INMEDIATO AL USUARIO) --- */}
+      {isZipMode && !batchProgress && phase === 'running' && (
+          <div className="rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm flex flex-col items-center justify-center gap-4 transition-all">
+            <Loader2 className="animate-spin text-primary-500" size={36} />
+            <div className="w-full max-w-sm">
+              {uploadProgress !== null ? (
+                <>
+                  <p className="text-sm font-semibold text-gray-800">Subiendo paquete masivo: {uploadProgress}%</p>
+                  <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                    <div
+                      className="h-full bg-primary-500 transition-all duration-200 ease-out rounded-full"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-gray-400">Transfiriendo a Google Cloud Storage...</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-semibold text-gray-800 animate-pulse">Desempaquetando y registrando lote...</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    El archivo está en la nube. Creando fila de tareas seguras. Mantén esta pestaña abierta.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+      )}
             <input ref={fileInputRef} type="file" multiple accept=".xml,.zip" className="hidden" onChange={handleFileSelect} />
           </div>
         )}

@@ -54,6 +54,27 @@ export async function analyzeCFDI(
     body: JSON.stringify({ xml }),
   });
 
+    // NUEVO: Interceptar errores HTTP inmediatamente para extraer el detalle real
+  if (!response.ok) {
+    let errorDetail = `Error del servidor: ${response.status}`;
+    try {
+      // Intentamos extraer el JSON del error de FastAPI/Python
+      const errorData = await response.json();
+      if (errorData.detail) {
+        // FastAPI suele mandar los errores en la propiedad "detail"
+        errorDetail = typeof errorData.detail === 'string'
+          ? errorData.detail
+          : JSON.stringify(errorData.detail);
+      }
+    } catch (e) {
+      // Si no es JSON, leemos el texto plano (ej. errores de Cloud Run)
+      const errorText = await response.text();
+      if (errorText) errorDetail = errorText.substring(0, 200);
+    }
+    // Este throw será atrapado por el catch de useCfdiAnalysis.ts
+    throw new Error(errorDetail);
+  }
+
   onProgress?.({
     label: 'Procesando respuesta del backend',
     progress: 76,

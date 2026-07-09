@@ -97,7 +97,19 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         return {"status": "success", "message": "PDF generado"}
     except Exception as e:
         print(f"Error generando PDF {payload.job_id}: {e}")
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
+        # 1. Envolvemos el intento de actualizar Redis en su propio try/catch
+        try:
+            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
+        except Exception as redis_err:
+            print(f"Doble fallo (Redis ignorado): No se pudo actualizar el estatus a error. Detalle: {redis_err}")
+        
+        # 2. Detectamos si el error original o el de Redis fue por falta de memoria (cuota excedida)
+        error_str = str(e).lower()
+        if "quota exceeded" in error_str or "oom" in error_str:
+            raise HTTPException(
+                status_code=429, 
+                detail="El motor de procesamiento está a máxima capacidad. Por favor, intenta en unos minutos."
+            )
         raise HTTPException(status_code=500, detail=str(e))
 
 
