@@ -8,6 +8,8 @@ import zipfile
 import io
 import zlib
 import datetime
+from fastapi import BackgroundTasks
+import tempfile
 
 # --- AÑADIR ESTAS DOS LÍNEAS AQUÍ ARRIBA ---
 import google.auth
@@ -228,7 +230,16 @@ async def start_pdf_zip_generation(
 async def batch_progress(batch_id: str):
     async def event_generator():
         while True:
+            # Verificamos si aún se está descargando/descomprimiendo en el fondo
+            is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
             batch_data = await redis_client.get(f"pdf:batch:{batch_id}")
+
+            # NUEVO: Si está extrayendo y aún no hay datos, enviamos 0% en vez de error
+            if is_extracting and not batch_data:
+                yield f'data: {json.dumps({"status": "processing", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 0})}\n\n'
+                await asyncio.sleep(1)
+                continue
+
             if not batch_data:
                 yield 'data: {"status": "error", "message": "Lote no encontrado"}\n\n'
                 break
@@ -379,12 +390,89 @@ async def request_upload_url():
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error creando la Signed URL: {str(e)}")
 
-# 5. Agrega el endpoint que procesa el ZIP desde Google Cloud Storage
-@router.post("/cfdi/pdf/start-zip-gcs")
-async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
+
+async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: str):
     """
-    Descarga y procesa el ZIP guardado en GCS. Conserva al 100% tu lógica 
-    original de chunking para Redis y encolamiento en Cloud Tasks.
+    Esta función corre en segundo plano. Descarga el ZIP a disco (no a RAM),
+    lo lee y manda a Cloud Tasks en lotes de 20 para no explotar la memoria.
+    """
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(gcs_path)
+    
+    just_ids = []
+    
+    # 1. Descargamos a un archivo temporal en disco, liberando la RAM
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+        temp_filename = tmp.name
+        blob.download_to_filename(temp_filename)
+
+    try:
+        with zipfile.ZipFile(temp_filename, "r") as z:
+            chunk = []
+            CHUNK_SIZE = 20
+
+            for file_info in z.infolist():
+                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
+                    continue
+
+                if file_info.filename.lower().endswith(".xml"):
+                    job_id = str(uuid.uuid4())
+                    xml_content = z.read(file_info.filename)
+                    
+                    chunk.append((job_id, xml_content))
+                    just_ids.append(job_id)
+
+                    # 2. Si ya juntamos 20, los procesamos y vaciamos la memoria
+                    if len(chunk) >= CHUNK_SIZE:
+                        # a) Mandar a Redis
+                        async with redis_client.pipeline(transaction=False) as pipe:
+                            for jid, xml_data in chunk:
+                                pipe.set(f"pdf:xml:{jid}", zlib.compress(xml_data), ex=1800)
+                                pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                            await pipe.execute()
+                        
+                        # b) Mandar a Cloud Tasks (en lotes pequeños de 20)
+                        for jid, _ in chunk:
+                            try:
+                                await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
+                            except Exception as ex:
+                                print(f"Error registrando en Tasks {jid}: {ex}")
+                                await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
+                        
+                        # c) ¡CRUCIAL! Vaciamos la lista para liberar la RAM
+                        chunk = []
+
+            # 3. Procesamos los que hayan sobrado al final (ej. si eran 25, procesamos los últimos 5)
+            if chunk:
+                async with redis_client.pipeline(transaction=False) as pipe:
+                    for jid, xml_data in chunk:
+                        pipe.set(f"pdf:xml:{jid}", zlib.compress(xml_data), ex=1800)
+                        pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                    await pipe.execute()
+                
+                for jid, _ in chunk:
+                    try:
+                        await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
+                    except Exception as ex:
+                        await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
+
+        # 4. Al terminar todo el ZIP, guardamos la lista total de IDs para el front
+        await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(just_ids), ex=3600)
+
+    except Exception as e:
+        print(f"Error crítico procesando ZIP en background: {e}")
+    finally:
+        await redis_client.delete(f"pdf:extracting:{batch_id}")
+        # Siempre borramos el archivo temporal para no llenar el disco del servidor
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+
+
+@router.post("/cfdi/pdf/start-zip-gcs")
+async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload, background_tasks: BackgroundTasks):
+    """
+    Endpoint que responde instantáneamente al frontend y delega el trabajo pesado.
     """
     template_id = "default"
     if payload.template:
@@ -395,79 +483,15 @@ async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
             pass
 
     batch_id = str(uuid.uuid4())
-    job_ids = []
 
-    try:
-        # Descargamos los bytes del ZIP de GCS directo a la memoria del contenedor
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(BUCKET_NAME)
-        blob = bucket.blob(payload.gcsPath)
-        
-        zip_bytes = blob.download_as_bytes()
-        zip_buffer = io.BytesIO(zip_bytes)
-        
-        # Leemos el ZIP exactamente igual que antes
-        with zipfile.ZipFile(zip_buffer, "r") as z:
-            for file_info in z.infolist():
-                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
-                    continue
-
-                if file_info.filename.lower().endswith(".xml"):
-                    job_id = str(uuid.uuid4())
-                    xml_content = z.read(file_info.filename)
-                    job_ids.append((job_id, xml_content))
-                    
-        # OPCIONAL: Si no deseas almacenar basura histórica, puedes eliminar el ZIP de GCS aquí
-        # blob.delete()
-        
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al descargar o leer desde GCS: {str(e)}")
-
-    if not job_ids:
-        raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
-
-    # 📊 AUDITORÍA (Conserva tu código original intacto)
-    total_bytes_descomprimidos = sum(len(xml_content) for jid, xml_content in job_ids)
-    mb_reales = total_bytes_descomprimidos / (1024 * 1024)
-    total_comandos_pipeline = len(job_ids) * 2
-
-    print("\n" + "="*80)
-    print("🔍 [AUDITORÍA DE INFRAESTRUCTURA DESDE STORAGE]")
-    print(f"📦 DATOS PROCESADOS: {mb_reales:.2f} MB.")
-    print("="*80 + "\n")
-
-    # 🔀 CHUNKING DE REDIS EN BLOQUES DE 20 (Mantiene protegido tu Upstash Redis)
-    try:
-        CHUNK_SIZE = 20
-        for i in range(0, len(job_ids), CHUNK_SIZE):
-            chunk = job_ids[i:i + CHUNK_SIZE]
-            async with redis_client.pipeline(transaction=False) as pipe:
-                for jid, xml_content in chunk:
-                    pipe.set(f"pdf:xml:{jid}", zlib.compress(xml_content), ex=1800)
-                    pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
-                await pipe.execute()
-    except Exception as redis_err:
-        raise HTTPException(status_code=500, detail=f"Error con State Store de Redis: {str(redis_err)}")
-
-    just_ids = [item[0] for item in job_ids]
-    await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(just_ids), ex=3600)
-
-    network_semaphore = asyncio.Semaphore(50)
-
-    async def safe_enqueue_task(jid: str):
-        async with network_semaphore:
-            try:
-                await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
-            except Exception as ex:
-                print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
-                await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
-
-    async_tasks = [safe_enqueue_task(jid) for jid in just_ids]
-    await asyncio.gather(*async_tasks)
+    # NUEVO: Avisamos a Redis que este lote está en fase de descarga/extracción (expira en 1 hr)
+    await redis_client.set(f"pdf:extracting:{batch_id}", b"true", ex=3600)
     
+    # Le decimos a FastAPI: "Ejecuta esta función pesada en segundo plano"
+    background_tasks.add_task(process_zip_in_background, payload.gcsPath, batch_id, template_id)
+
+    # Respondemos al Front-End INMEDIATAMENTE para que no se quede trabado
     return {
         "batchId": batch_id,
-        "totalFiles": len(just_ids)
+        "message": "El archivo ZIP se está procesando en segundo plano."
     }
