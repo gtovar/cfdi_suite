@@ -116,7 +116,6 @@ async def start_pdf_zip_generation(
         raise HTTPException(status_code=400, detail="El archivo cargado debe ser un formato .ZIP válido.")
 
     batch_id = str(uuid.uuid4())
-    zip_contents = await file.read()
     
     template_id = "default"
     if template:
@@ -129,7 +128,7 @@ async def start_pdf_zip_generation(
     job_ids = []
 
     try:
-        with zipfile.ZipFile(io.BytesIO(zip_contents)) as z:
+        with zipfile.ZipFile(file.file, "r") as z:
             for file_info in z.infolist():
                 if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
                     continue
@@ -270,12 +269,20 @@ async def download_batch_zip(batch_id: str):
             if compressed_pdf:
                 z.writestr(f"cfdi_{jid}.pdf", zlib.decompress(compressed_pdf))
                 
+    # 1. Regresamos el puntero al inicio del buffer en memoria
     zip_buffer.seek(0)
+    
+    # 2. Creamos un generador que va leyendo y entregando el archivo en bloques de 64KB
+    def stream_chunks():
+        while chunk := zip_buffer.read(64 * 1024):
+            yield chunk
+
+    # 3. Le pasamos la función ejecutada stream_chunks() al StreamingResponse
     return StreamingResponse(
-            zip_buffer,  # Enviamos el puntero del buffer directamente
-            media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'}
-            )
+        stream_chunks(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'}
+    )
 
 @router.get("/cfdi/pdf/{job_id}/progress")
 async def pdf_progress(job_id: str):
