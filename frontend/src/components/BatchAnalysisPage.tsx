@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import Pusher from 'pusher-js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -555,6 +556,8 @@ function PdfDownloadButton({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBatchNav, pendingFiles, templateId }: BatchAnalysisPageProps) {
+  const pusherRef = useRef<Pusher | null>(null);
+  const channelRef = useRef<any>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
@@ -737,46 +740,98 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     };
   }, []);
 
-  // Función encargada del Polling asíncrono hacia el backend (Redis)
-    function startPollingStatus(batchId: string) {
-        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
 
-        pollingIntervalRef.current = setInterval(async () => {
-            try {
-                const response = await fetch(`/api/cfdi/batch/status/${batchId}`);
-                if (!response.ok) {
-                    throw new Error('El lote expiró o no fue encontrado');
-                }
-                const data = await response.json();
-
-                // Mapeamos los resultados del servidor respetando la estructura de tu UI original
-                setQueue((prevQueue) => {
-                    // Si la cola interna de archivos locales está vacía (por una recarga de página), 
-                    // la reconstruimos usando la información asíncrona del backend
-                    const baselineQueue = prevQueue.length > 0 ? prevQueue : data.results.map((res: any) => ({
-                        file: new File([], res.filename),
-                        result: null
-                    }));
-
-                    return baselineQueue.map((entry) => {
-                        const serverResult = data.results.find((r: any) => r.filename === entry.file.name);
-                        return serverResult ? { ...entry, result: serverResult } : entry;
-                    });
-                });
-
-                if (data.status === 'done') {
-                    if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-                    localStorage.removeItem('cfdi_active_batch_id');
-                    setPhase('done');
-                    setProcessEndTime(Date.now());
-                    setShowModal(true);
-                }
-            } catch (err) {
-                console.error("Error obteniendo estatus del lote:", err);
-                if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-            }
-        }, 2000); // Polling optimizado cada 2 segundos
+  // Reemplazamos la función de Polling por una de Suscripción en Tiempo Real con Auto-Hidratación
+  async function startPollingStatus(batchId: string) {
+    // Limpieza de intervalos o conexiones previas si existieran
+    if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+    if (channelRef.current) {
+      channelRef.current.unbind_all();
+      pusherRef.current?.unsubscribe(`batch_${batchId}`);
     }
+
+    try {
+      // === PASO A: HIDRATACIÓN (Una sola petición HTTP rápida) ===
+      // Le preguntamos al servidor qué lleva procesado hasta este milisegundo exacto.
+      // Esto resuelve el problema de si el usuario recarga la página (F5).
+      const response = await fetch(`/api/cfdi/batch/status/${batchId}`);
+      if (response.ok) {
+        const data = await response.json();
+
+        setQueue((prevQueue) => {
+          const baselineQueue = prevQueue.length > 0 ? prevQueue : data.results.map((res: any) => ({
+            file: new File([], res.filename),
+            result: null
+          }));
+
+          return baselineQueue.map((entry) => {
+            const serverResult = data.results.find((r: any) => r.filename === entry.file.name);
+            return serverResult ? { ...entry, result: serverResult } : entry;
+          });
+        });
+
+        if (data.status === 'done') {
+          localStorage.removeItem('cfdi_active_batch_id');
+          setPhase('done');
+          setProcessEndTime(Date.now());
+          setShowModal(true);
+          return; // Si el lote ya había terminado en segundo plano, terminamos aquí.
+        }
+      }
+    } catch (err) {
+      console.warn("[Auto-Hidratación] No se pudo recuperar el estado inicial, confiando en WebSockets...", err);
+    }
+
+    // === PASO B: ESCUCHAR (Conexión persistente por fuera de Vercel) ===
+    // Inicializamos Pusher usando tu Llave Pública de producción/desarrollo
+    if (!pusherRef.current) {
+      pusherRef.current = new Pusher(import.meta.env.VITE_PUSHER_KEY || 'TU_PUSHER_KEY_AQUÍ', {
+        cluster: import.meta.env.VITE_PUSHER_CLUSTER || 'us2',
+        forceTLS: true
+      });
+    }
+
+    // Nos suscribimos al canal exclusivo de este lote de facturas
+    const channel = pusherRef.current.subscribe(`batch_${batchId}`);
+    channelRef.current = channel;
+
+    // Escuchamos el evento exacto que dispara nuestro webhook de Cloud Tasks
+    channel.bind('file_processed', (parsedResult: any) => {
+      setQueue((prevQueue) => {
+        let updated = false;
+
+        const nextQueue = prevQueue.map((entry) => {
+          if (entry.file.name === parsedResult.filename) {
+            updated = true;
+            return { ...entry, result: parsedResult };
+          }
+          return entry;
+        });
+
+        // Si la cola interna estaba vacía por una recarga forzada, rehidratamos al vuelo
+        if (!updated) {
+          return [...prevQueue, { file: new File([], parsedResult.filename), result: parsedResult }];
+        }
+
+        // Validación de cierre: Evaluamos si con esta factura entrante completamos el lote entero
+        const completedCount = nextQueue.filter((e) => e.result !== null).length;
+        if (completedCount >= nextQueue.length && nextQueue.length > 0) {
+          // Desconectamos el WebSocket limpiamente
+          channel.unbind_all();
+          pusherRef.current?.unsubscribe(`batch_${batchId}`);
+          localStorage.removeItem('cfdi_active_batch_id');
+
+          // Despachamos el estado final en la interfaz
+          setPhase('done');
+          setProcessEndTime(Date.now());
+          setShowModal(true);
+        }
+
+        return nextQueue;
+      });
+    });
+  }
+
   // Tu función modificada de procesamiento masivo limpio
   async function handleProcess() {
     if (!files.length) return;
@@ -864,6 +919,18 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       onProgressUpdate?.({ completed: files.length, total: files.length, phase: 'done' });
     }
   }, [stats.completed, phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Asegurar la desconexión del WebSocket si el componente se desmonta de la pantalla
+  useEffect(() => {
+    return () => {
+      if (channelRef.current && pusherRef.current) {
+        channelRef.current.unbind_all();
+        // Intentamos recuperar el lote del localStorage si existiera para desvincularlo
+        const savedBatchId = localStorage.getItem('cfdi_active_batch_id');
+        if (savedBatchId) pusherRef.current.unsubscribe(`batch_${savedBatchId}`);
+      }
+    };
+  }, []);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
 

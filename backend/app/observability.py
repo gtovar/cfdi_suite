@@ -156,3 +156,68 @@ def _latency_bucket_name(timing_ms: int | None) -> str:
             return name
 
     return "gt_1000ms"
+
+from dataclasses import dataclass
+
+@dataclass
+class InfraDiagnosticReport:
+    status: str
+    verdict: str
+    evidence: dict[str, Any]
+    recommendations: list[str]
+
+def run_infrastructure_self_diagnostic() -> InfraDiagnosticReport:
+    """
+    Analiza el historial de métricas del servidor para deducir de forma inteligente
+    si la infraestructura serverless está estrangulando el rendimiento del backend.
+    """
+    snap = snapshot_metrics()
+    recommendations = []
+    verdict = "La infraestructura serverless opera dentro de los parámetros saludables."
+    status = "OK"
+
+    # 1. Diagnóstico de CPU Throttling o caídas de contenedores (HTTP 504 / 502)
+    errors_504 = snap.by_http_status.get("504", 0)
+    errors_502 = snap.by_http_status.get("502", 0)
+    
+    if errors_504 > 0 or errors_502 > 0:
+        status = "INFRASTRUCTURE_STRESSED"
+        verdict = f"ALERTA: Se detectaron {errors_504} timeouts (504) y {errors_502} caídas de pasarela (502)."
+        recommendations.append(
+            "Diagnóstico: Contenedor Cloud Run colapsado por límites físicos (Memory Limit Exceeded o CPU Throttling)."
+        )
+        recommendations.append(
+            "Solución inmediata: Incrementa la configuración de hardware de tu servicio en Cloud Run a mínimo 2 vCPU y 2 GB de RAM."
+        )
+
+    # 2. Diagnóstico de Riesgo de Desconexión por el Enrutador de Vercel
+    total_requests = snap.request_total or 1
+    latencias_extremas = snap.latency_buckets.get("gt_1000ms", 0)
+    
+    if (latencias_extremas / total_requests) > 0.35 and total_requests > 15:
+        if status == "OK":
+            status = "VERCEL_TIMEOUT_RISK"
+            verdict = "ADVERTENCIA: Alta concentración de latencias prolongadas (>1000ms en el 35%+ de peticiones)."
+        recommendations.append(
+            "Diagnóstico: Estás procesando XMLs masivos de forma sincrónica. Vercel matará conexiones que duren más de 10s-60s."
+        )
+        recommendations.append(
+            "Solución inmediata: Sintoniza la cola de Cloud Tasks reduciendo el parámetro 'max_dispatches_per_second' a un valor menor (ej. 2 o 3) para no asfixiar el contenedor."
+        )
+
+    # 3. Diagnóstico de Exponential Backoff en la Cola distribuida
+    if snap.fallback_total > (total_requests * 0.2):
+        recommendations.append(
+            "Diagnóstico: Activación frecuente de mecanismos alternos (Fallback Mode). Cloud Tasks entró en Exponential Backoff defensivo."
+        )
+
+    return InfraDiagnosticReport(
+        status=status,
+        verdict=verdict,
+        evidence={
+            "http_statuses": snap.by_http_status,
+            "latency_profile": snap.latency_buckets,
+            "total_traffic": snap.request_total
+        },
+        recommendations=recommendations
+    )

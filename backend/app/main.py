@@ -1,10 +1,12 @@
 from __future__ import annotations
+from .observability import run_infrastructure_self_diagnostic
 
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
+import sentry_sdk 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +14,12 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 # Importamos el parser nativo de Starlette para alterar su configuración global
 from starlette.formparsers import MultiPartParser
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
 from .observability import record_analyze_cfdi_error
@@ -36,34 +44,30 @@ async def _lifespan(app: FastAPI):
     (_BACKEND_ROOT / "shells").mkdir(exist_ok=True)
     (_BACKEND_ROOT / "templates" / "html").mkdir(parents=True, exist_ok=True)
 
-    # ARQ pool — opcional: si Redis no está disponible, el sistema sigue funcionando
-    # en modo sync. Jobs >50k solo se despachan a ARQ cuando el pool existe.
-    try:
-        from arq import create_pool
-        from arq.connections import RedisSettings
-        app.state.arq_pool = await create_pool(
-            RedisSettings(
-                host=os.getenv("REDIS_HOST", "localhost"),
-                port=int(os.getenv("REDIS_PORT", "6379")),
-                password=os.getenv("REDIS_PASSWORD", None),
-                ssl=True,
-                ssl_cert_reqs=None,
-                conn_timeout=2,
-                max_connections=20,
-            )
-        )
-        print("ARQ: conectado a Redis")
-    except Exception:
-        app.state.arq_pool = None
-        print("ARQ: Redis no disponible — canvas_pipeline corre en modo sync")
+    # app.state.arq_pool ya no se usa, toda la carga va por Cloud Tasks
 
     yield
 
-    if getattr(app.state, "arq_pool", None):
-        await app.state.arq_pool.close()
-
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN"),
+    traces_sample_rate=1.0, # Captura el 100% de las transacciones para medir rendimiento
+)
 
 app = FastAPI(title="cfdi-suite-api", version="0.1.0", lifespan=_lifespan)
+
+# --- INICIO CLOUD TRACE ---
+# Inyectamos el líquido fluorescente (Google Cloud Trace) en toda la tubería.
+provider = TracerProvider()
+try:
+    cloud_trace_exporter = CloudTraceSpanExporter()
+    provider.add_span_processor(BatchSpanProcessor(cloud_trace_exporter))
+    trace.set_tracer_provider(provider)
+    FastAPIInstrumentor.instrument_app(app)
+    print("Cloud Trace activado con éxito.")
+except Exception as e:
+    print(f"Cloud Trace inactivo (probable entorno local sin credenciales GCP): {e}")
+# --- FIN CLOUD TRACE ---
+
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 _allowed_origins = os.getenv(
@@ -132,6 +136,19 @@ async def handle_request_validation_error(
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
+# Agrega este endpoint justo debajo de tu ruta de /api/health
+@app.get("/api/infrastructure/diagnose")
+def get_infra_diagnostic() -> dict[str, Any]:
+    """
+    Endpoint clínico de autodiagnóstico para evaluar la salud de Cloud Run, Vercel y Cloud Tasks.
+    """
+    report = run_infrastructure_self_diagnostic()
+    return {
+        "status": report.status,
+        "verdict": report.verdict,
+        "evidence": report.evidence,
+        "recommendations": report.recommendations
+    }
 
 @app.post("/api/cfdi/analyze", response_model=AnalyzeCfdiResponse)
 def analyze_cfdi(payload: AnalyzeCfdiRequest) -> AnalyzeCfdiResponse:

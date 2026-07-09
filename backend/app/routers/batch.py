@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
+from pusher import Pusher 
 
 from ..services.analyze_cfdi import run_analyze_cfdi
 from ..services.batch_reports import generate_diot
@@ -31,6 +32,14 @@ redis_client = redis.Redis(
     max_connections=30,
     health_check_interval=25,
     decode_responses=True # True para recibir strings limpios en el estatus
+)
+
+pusher_client = Pusher(
+    app_id=os.getenv("PUSHER_APP_ID"),
+    key=os.getenv("PUSHER_KEY"),
+    secret=os.getenv("PUSHER_SECRET"),
+    cluster=os.getenv("PUSHER_CLUSTER", "us2"),
+    ssl=True
 )
 
 MAX_FILES = 500
@@ -206,3 +215,42 @@ async def batch_diot(
     rfc_label = (rfc_presentante or "DIOT").upper().replace(" ", "_")
     filename = f"DIOT_{rfc_label}_{year}{str(month).zfill(2)}.txt"
     return StreamingResponse(iter([diot_bytes]), media_type="text/plain; charset=windows-1252", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+@router.post("/worker-task")
+async def batch_worker_task(request: Request):
+    """Webhook asíncrono e independiente invocado por Google Cloud Tasks."""
+    payload = await request.json()
+    batch_id = payload["batch_id"]
+    filename = payload["filename"]
+    xml_str = payload["xml_str"]
+
+    try:
+        # Analizamos el CFDI de manera aislada
+        result = run_analyze_cfdi(xml_str)
+        # ... (Toda tu lógica interna de extracción de campos se queda EXACTAMENTE igual)
+
+        parsed_result = {
+            "filename": filename,
+            "status": status,
+            "profile": profile,
+            "rfc_emisor": rfc_emisor,
+            "rfc_receptor": rfc_receptor,
+            "nombre_emisor": nombre_emisor,
+            "total": total,
+            "fecha": fecha,
+            "findings_count": len(findings),
+            "error": error_msg,
+        }
+
+    # Guardado atómico en la lista de resultados de Redis (para resiliencia e hidratación)
+    redis_client.rpush(f"batch:{batch_id}:results", json.dumps(parsed_result))
+    redis_client.hincrby(f"batch:{batch_id}", "completed_count", 1)
+
+    # 3. ¡LA MAGIA! Emitimos el evento en tiempo real por WebSockets
+    try:
+        pusher_client.trigger(f"batch_{batch_id}", "file_processed", parsed_result)
+    except Exception as e:
+        # Si Pusher parpadea, no tiramos la tarea de Cloud Tasks, dejamos que el log avise
+        print(f"[Pusher Error] No se pudo enviar el evento en tiempo real: {e}")
+
+    return {"status": "processed"}

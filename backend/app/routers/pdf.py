@@ -12,6 +12,9 @@ from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, R
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
 
 import redis.asyncio as aioredis
 
@@ -60,7 +63,9 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         if not xml_bytes:
             raise HTTPException(status_code=400, detail="XML no encontrado en caché.")
 
-        pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
+        # 🕒 Medimos exactamente la "Regadera"
+        with tracer.start_as_current_span("generacion_pdf_intensiva"):
+            pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
         
         await redis_client.set(f"pdf:data:{payload.job_id}", zlib.compress(pdf_bytes), ex=1800)
         await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=1800)

@@ -13,3 +13,9 @@ qrcode>=7.4,<8
 lxml>=5.0,<6
 redis>=5.0,<6
 google-cloud-tasks>=2.16,<3
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-exporter-gcp-trace
+sentry-sdk[fastapi]>=2.0.0,<3
+pusher>=3.3.0,<4
