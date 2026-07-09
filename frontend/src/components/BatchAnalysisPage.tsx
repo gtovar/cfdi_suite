@@ -154,6 +154,11 @@ const COLUMNS = [
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
+// Añade este helper aquí:
+function resolveApiBaseUrl() {
+  return (import.meta as any).env?.VITE_API_BASE_URL || '';
+}
+
 function defaultPeriod() {
   const d = new Date();
   const month = d.getMonth() === 0 ? 12 : d.getMonth();
@@ -754,7 +759,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       // === PASO A: HIDRATACIÓN (Una sola petición HTTP rápida) ===
       // Le preguntamos al servidor qué lleva procesado hasta este milisegundo exacto.
       // Esto resuelve el problema de si el usuario recarga la página (F5).
-      const response = await fetch(`/api/cfdi/batch/status/${batchId}`);
+      const response = await fetch(`${resolveApiBaseUrl()}/api/cfdi/batch/status/${batchId}`);
       if (response.ok) {
         const data = await response.json();
 
@@ -847,7 +852,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     files.forEach(f => formData.append('files', f));
 
     try {
-    const response = await fetch('/api/cfdi/batch/analyze', {
+      const response = await fetch(`${resolveApiBaseUrl()}/api/cfdi/batch/analyze`, {
       method: 'POST',
       body: formData,
     });
@@ -1133,7 +1138,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     failedFilesToRetry.forEach((f) => formData.append('files', f));
 
     // Despachamos un nuevo lote exclusivo para los errores
-    fetch('/api/cfdi/batch/analyze', {
+    fetch(`${resolveApiBaseUrl()}/api/cfdi/batch/analyze`, {
       method: 'POST',
       body: formData,
     })
