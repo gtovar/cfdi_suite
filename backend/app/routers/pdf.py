@@ -271,12 +271,11 @@ async def download_batch_zip(batch_id: str):
                 z.writestr(f"cfdi_{jid}.pdf", zlib.decompress(compressed_pdf))
                 
     zip_buffer.seek(0)
-    return Response(
-        content=zip_buffer.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'}
-    )
-
+    return StreamingResponse(
+            zip_buffer,  # Enviamos el puntero del buffer directamente
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'}
+            )
 
 @router.get("/cfdi/pdf/{job_id}/progress")
 async def pdf_progress(job_id: str):
