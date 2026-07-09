@@ -272,12 +272,12 @@ async def download_batch_zip(batch_id: str):
     # 1. Regresamos el puntero al inicio del buffer en memoria
     zip_buffer.seek(0)
     
-    # 2. Creamos un generador que va leyendo y entregando el archivo en bloques de 64KB
-    def stream_chunks():
+    # 2. SOLUCIÓN: Agregamos 'async def' para que sea un iterador asíncrono nativo
+    async def stream_chunks():
         while chunk := zip_buffer.read(64 * 1024):
             yield chunk
 
-    # 3. Le pasamos la función ejecutada stream_chunks() al StreamingResponse
+    # 3. Le pasamos el generador asíncrono al StreamingResponse
     return StreamingResponse(
         stream_chunks(),
         media_type="application/zip",
