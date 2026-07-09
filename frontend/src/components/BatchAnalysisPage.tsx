@@ -156,7 +156,7 @@ const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto'
 
 // Añade este helper aquí:
 function resolveApiBaseUrl() {
-  return (import.meta as any).env?.VITE_API_BASE_URL || '';
+  return (import.meta as any).env?.VITE_API_BASE_URL || 'https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app';
 }
 
 function defaultPeriod() {
