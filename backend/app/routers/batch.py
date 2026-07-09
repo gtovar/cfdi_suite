@@ -102,7 +102,15 @@ async def batch_analyze(files: list[UploadFile] = File(...)):
     # Encolar cada archivo de manera inmediata en Cloud Tasks
     for fname, raw in contents:
         xml_str = raw.decode("utf-8", errors="replace")
-        enqueue_cfdi_analysis(batch_id, fname, xml_str)
+        
+        # 1. Creamos una llave única para el contenido de este archivo en Redis
+        redis_xml_key = f"xml_payload:{batch_id}:{fname}"
+        
+        # 2. Guardamos el XML en Redis con 1 hora (3600 seg) de expiración
+        redis_client.set(redis_xml_key, xml_str, ex=3600)
+        
+        # 3. Le pasamos a Cloud Tasks la LLAVE de Redis, NO el XML gigante
+        enqueue_cfdi_analysis(batch_id, fname, redis_xml_key)
 
     return {"batch_id": batch_id, "total_files": len(contents), "status": "processing"}
 
@@ -143,7 +151,14 @@ async def batch_worker_task(request: Request):
     payload = await request.json()
     batch_id = payload["batch_id"]
     filename = payload["filename"]
-    xml_str = payload["xml_str"]
+    redis_key = payload["redis_key"]
+
+    # 1. Traemos el XML real desde Redis
+    xml_str = redis_client.get(redis_key)
+    
+    # Respaldo por si la cola tarda más de una hora en procesar y el caché ya expiró
+    if not xml_str:
+        return {"status": "error", "message": "El contenido del XML expiró en la caché de Redis"}
 
     try:
         # Analizamos el CFDI de manera aislada

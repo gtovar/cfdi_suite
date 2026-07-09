@@ -30,6 +30,7 @@ from .routers.templates import router as templates_router
 from .routers.rfc_validation import router as rfc_router
 from .routers.sat_enquiry import router as sat_router
 from .services.analyze_cfdi import run_analyze_cfdi
+from google.api_core.exceptions import InvalidArgument
 
 # === PARCHE GLOBAL DE SEGURIDAD PARA MULTIPART ===
 # Incrementamos el límite por sección a 100 MB para soportar tus XMLs masivos de 50 MB
@@ -51,6 +52,26 @@ sentry_sdk.init(
 )
 
 app = FastAPI(title="cfdi-suite-api", version="0.1.0", lifespan=_lifespan)
+
+# ¡AQUÍ ESTÁ TU ALERTA AUTOMÁTICA!
+@app.exception_handler(InvalidArgument)
+async def google_invalid_argument_handler(request: Request, exc: InvalidArgument):
+    # Enviar el error detallado a Sentry con esteroides
+    if "Task size too large" in str(exc):
+        sentry_sdk.capture_exception(exc, tags={
+            "mecanismo": "cloud_tasks",
+            "error_infra": "task_payload_limit_100kb"
+        })
+
+        # Devolver una respuesta clara que el frontend pueda entender
+        return JSONResponse(
+            status_code=413, # Cambiamos a 413 para indicar que el contenido es muy grande
+            content={"message": "Uno de los archivos XML excede el límite de 100KB permitido por la cola de tareas."}
+        )
+
+    # Reportar cualquier otro error de argumentos de Google
+    sentry_sdk.capture_exception(exc)
+    return JSONResponse(status_code=400, content={"message": str(exc)})
 
 # --- INICIO CLOUD TRACE ---
 # Inyectamos el líquido fluorescente (Google Cloud Trace) en toda la tubería.
