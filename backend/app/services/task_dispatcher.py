@@ -37,7 +37,7 @@ def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_she
     response = client.create_task(request={"parent": parent, "task": task})
     return response.name
 
-def enqueue_cfdi_analysis(batch_id: str, filename: str, xml_str: str):
+def enqueue_cfdi_analysis(batch_id: str, filename: str, redis_key: str):
     """Inyecta el análisis asíncrono de un CFDI a la cola de Cloud Tasks."""
     client = get_tasks_client()  # <-- ¡Fijamos esto! Antes llamabas a client.queue_path pero la variable local no existía en esta función.
     parent = client.queue_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME)
