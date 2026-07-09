@@ -1,5 +1,4 @@
 from __future__ import annotations
-from .observability import run_infrastructure_self_diagnostic
 
 import os
 from contextlib import asynccontextmanager
@@ -43,11 +42,9 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 async def _lifespan(app: FastAPI):
     (_BACKEND_ROOT / "shells").mkdir(exist_ok=True)
     (_BACKEND_ROOT / "templates" / "html").mkdir(parents=True, exist_ok=True)
-
-    # app.state.arq_pool ya no se usa, toda la carga va por Cloud Tasks
-
     yield
 
+# === INICIALIZACIÓN DE SENTRY ===
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
     traces_sample_rate=1.0, # Captura el 100% de las transacciones para medir rendimiento
@@ -136,19 +133,6 @@ async def handle_request_validation_error(
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
-# Agrega este endpoint justo debajo de tu ruta de /api/health
-@app.get("/api/infrastructure/diagnose")
-def get_infra_diagnostic() -> dict[str, Any]:
-    """
-    Endpoint clínico de autodiagnóstico para evaluar la salud de Cloud Run, Vercel y Cloud Tasks.
-    """
-    report = run_infrastructure_self_diagnostic()
-    return {
-        "status": report.status,
-        "verdict": report.verdict,
-        "evidence": report.evidence,
-        "recommendations": report.recommendations
-    }
 
 @app.post("/api/cfdi/analyze", response_model=AnalyzeCfdiResponse)
 def analyze_cfdi(payload: AnalyzeCfdiRequest) -> AnalyzeCfdiResponse:
