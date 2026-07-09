@@ -1,14 +1,9 @@
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
 
 function resolveApiBaseUrl() {
-  const meta = import.meta as ImportMeta & {
-    env?: Record<string, string | undefined>;
-  };
-  const url = meta.env?.VITE_API_BASE_URL || '';
-  
-  // 📡 Agrega esto para ver el log cuando subas un ZIP o conviertas masivamente
+  // @ts-ignore
+  const url = import.meta.env.VITE_API_BASE_URL || '';
   console.log("📡 URL BASE PARA ZIP DETECTADA EN PDF-DOWNLOAD:", url);
-  
   return url;
 }
 

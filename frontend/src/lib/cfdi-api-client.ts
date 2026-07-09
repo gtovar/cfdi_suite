@@ -31,11 +31,8 @@ interface ApiAnalyzeResponse extends Omit<CfdiAnalysisContractResult, 'engine'> 
 }
 
 function resolveApiBaseUrl() {
-  const meta = import.meta as ImportMeta & {
-    env?: Record<string, string | undefined>;
-  };
-
-  return meta.env?.VITE_API_BASE_URL || '';
+  // @ts-ignore
+  return import.meta.env.VITE_API_BASE_URL || '';
 }
 
 export async function analyzeCFDI(
