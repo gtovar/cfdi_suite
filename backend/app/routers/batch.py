@@ -34,13 +34,25 @@ redis_client = redis.Redis(
     decode_responses=True # True para recibir strings limpios en el estatus
 )
 
-pusher_client = Pusher(
-    app_id=os.getenv("PUSHER_APP_ID"),
-    key=os.getenv("PUSHER_KEY"),
-    secret=os.getenv("PUSHER_SECRET"),
-    cluster=os.getenv("PUSHER_CLUSTER", "us2"),
-    ssl=True
-)
+# --- INICIALIZACIÓN SEGURA Y RESILIENTE DE PUSHER ---
+PUSHER_APP_ID = os.getenv("PUSHER_APP_ID")
+PUSHER_KEY = os.getenv("PUSHER_KEY")
+PUSHER_SECRET = os.getenv("PUSHER_SECRET")
+PUSHER_CLUSTER = os.getenv("PUSHER_CLUSTER", "us2")
+
+pusher_client = None
+
+# Solo encendemos Pusher si todas las credenciales requeridas están presentes
+if PUSHER_APP_ID and PUSHER_KEY and PUSHER_SECRET:
+    pusher_client = Pusher(
+        app_id=PUSHER_APP_ID,
+        key=PUSHER_KEY,
+        secret=PUSHER_SECRET,
+        cluster=PUSHER_CLUSTER,
+        ssl=True
+    )
+else:
+    print("[Pusher Warning] Faltan variables de entorno. Los WebSockets en tiempo real estarán desactivados temporamente.")
 
 MAX_FILES = 500
 REDIS_TTL = 86400  # 24 horas en segundos
@@ -183,6 +195,13 @@ async def batch_worker_task(request: Request):
     # Guardado atómico en la lista de resultados e incremento de contadores en Redis
     redis_client.rpush(f"batch:{batch_id}:results", json.dumps(parsed_result))
     redis_client.hincrby(f"batch:{batch_id}", "completed_count", 1)
+
+    # 3. Emitimos el evento en tiempo real solo si Pusher se inicializó correctamente
+    if pusher_client:
+        try:
+            pusher_client.trigger(f"batch_{batch_id}", "file_processed", parsed_result)
+        except Exception as e:
+            print(f"[Pusher Error] No se pudo enviar el evento en tiempo real: {e}")
 
     return {"status": "processed"}
 

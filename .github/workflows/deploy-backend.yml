@@ -33,6 +33,11 @@ jobs:
             REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
             MODE=api
             API_URL=https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app
+            SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+            PUSHER_APP_ID=${{ secrets.PUSHER_APP_ID }}
+            PUSHER_KEY=${{ secrets.PUSHER_KEY }}
+            PUSHER_SECRET=${{ secrets.PUSHER_SECRET }}
+            PUSHER_CLUSTER=us2
           flags: |
             --allow-unauthenticated
             --cpu=1
