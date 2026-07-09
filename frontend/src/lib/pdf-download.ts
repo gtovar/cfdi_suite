@@ -58,15 +58,50 @@ export async function convertFileToPdf(file: File, templateId?: string): Promise
   return dl.arrayBuffer();
 }
 
-// --- NUEVA FUNCIÓN: INICIAR EL PROCESAMIENTO DEL LOTE ZIP ---
+//  ESTA ES LA NUEVA FUNCIÓN OPTIMIZADA CON GCS:
 export async function startZipConversion(file: File, templateId?: string): Promise<{ batchId: string; totalFiles: number }> {
-  const fd = new FormData();
-  fd.append('file', file);
-  if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
-  
-  const res = await fetch(resolveApiBaseUrl() + "/api/cfdi/pdf/start-zip", { method: 'POST', body: fd });
-  if (!res.ok) throw new Error(`Error ${res.status} al procesar el lote ZIP en el servidor`);
-  return await res.json() as { batchId: string; totalFiles: number };
+  const baseUrl = resolveApiBaseUrl();
+
+  // Paso A: Pedirle al backend la URL firmada temporal de Google Cloud Storage
+  const resUrl = await fetch(baseUrl + "/api/cfdi/pdf/request-upload", { 
+    method: 'POST' 
+  });
+  if (!resUrl.ok) {
+    throw new Error(`Error (${resUrl.status}) al preparar el espacio de subida segura.`);
+  }
+  const { uploadUrl, gcsPath } = await resUrl.json() as { uploadUrl: string; gcsPath: string };
+
+  // Paso B: Subir el ZIP pesado (los 350 MB) DIRECTO al Bucket de Google Storage usando PUT
+  // Aquí es donde evitamos pasar por Cloud Run, por lo que nunca más verás el error 413
+  const resUpload = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/zip'
+    },
+    body: file // Enviamos el archivo binario nativo crudo
+  });
+  if (!resUpload.ok) {
+    throw new Error("No se pudo depositar el archivo en el almacén de la nube. Verifica tu conexión.");
+  }
+
+  // Paso C: Avisarle al backend que el archivo ya se encuentra en GCS para que lo procese
+  const resProcess = await fetch(baseUrl + "/api/cfdi/pdf/start-zip-gcs", {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      gcsPath: gcsPath,
+      template: templateId ? JSON.stringify({ _id: templateId }) : undefined
+    })
+  });
+  if (!resProcess.ok) {
+    const errorText = await resProcess.text().catch(() => 'Error desconocido');
+    throw new Error(`Error al iniciar la descompresión interna: ${errorText}`);
+  }
+
+  // Devolvemos el batchId y totalFiles exactamente igual que antes
+  return await resProcess.json() as { batchId: string; totalFiles: number };
 }
 
 // --- NUEVA FUNCIÓN: ESCUCHAR LA PIZARRA GLOBAL DEL BATCH EN TIEMPO REAL ---

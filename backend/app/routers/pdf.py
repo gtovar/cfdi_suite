@@ -7,6 +7,8 @@ import os
 import zipfile
 import io
 import zlib
+import datetime
+from google.cloud import storage
 
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
@@ -26,6 +28,7 @@ router = APIRouter(prefix="/api", tags=["PDF"])
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "tu-bucket-cfdi-suite")
 
 redis_client = aioredis.Redis(
     host=REDIS_HOST,
@@ -44,6 +47,14 @@ class GeneratePdfPayload(BaseModel):
     template_id: str
     html_shell: Optional[str] = None
 
+# --- NUEVOS MODELOS PARA EL FLUJO STORAGE ---
+class SignedUrlResponse(BaseModel):
+    uploadUrl: str
+    gcsPath: str
+
+class ProcessGcsZipPayload(BaseModel):
+    gcsPath: str
+    template: Optional[str] = None
 
 @router.post("/internal/generate-pdf")
 async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
@@ -307,3 +318,128 @@ async def download_pdf(job_id: str):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="cfdi_{job_id}.pdf"'}
     )
+
+# 4. Agrega el endpoint para generar la URL Firmada (Bypassea los 32MB)
+@router.post("/cfdi/pdf/request-upload", response_model=SignedUrlResponse)
+async def request_upload_url():
+    """
+    Genera una URL temporal firmada para que el frontend pueda subir el ZIP pesado 
+    directamente a un Bucket de Google Cloud Storage.
+    """
+    try:
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BUCKET_NAME)
+        
+        # Creamos una ruta única dentro del bucket para evitar sobreescrituras
+        unique_id = str(uuid.uuid4())
+        gcs_path = f"uploads/{unique_id}.zip"
+        blob = bucket.blob(gcs_path)
+        
+        # Generamos la URL firmada de tipo PUT, válida por 15 minutos
+        upload_url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(minutes=15),
+            method="PUT",
+            content_type="application/zip"
+        )
+        
+        return {
+            "uploadUrl": upload_url,
+            "gcsPath": gcs_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creando la Signed URL: {str(e)}")
+
+
+# 5. Agrega el endpoint que procesa el ZIP desde Google Cloud Storage
+@router.post("/cfdi/pdf/start-zip-gcs")
+async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
+    """
+    Descarga y procesa el ZIP guardado en GCS. Conserva al 100% tu lógica 
+    original de chunking para Redis y encolamiento en Cloud Tasks.
+    """
+    template_id = "default"
+    if payload.template:
+        try:
+            template_data = json.loads(payload.template)
+            template_id = template_data.get("_id", "default")
+        except Exception:
+            pass
+
+    batch_id = str(uuid.uuid4())
+    job_ids = []
+
+    try:
+        # Descargamos los bytes del ZIP de GCS directo a la memoria del contenedor
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(payload.gcsPath)
+        
+        zip_bytes = blob.download_as_bytes()
+        zip_buffer = io.BytesIO(zip_bytes)
+        
+        # Leemos el ZIP exactamente igual que antes
+        with zipfile.ZipFile(zip_buffer, "r") as z:
+            for file_info in z.infolist():
+                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
+                    continue
+
+                if file_info.filename.lower().endswith(".xml"):
+                    job_id = str(uuid.uuid4())
+                    xml_content = z.read(file_info.filename)
+                    job_ids.append((job_id, xml_content))
+                    
+        # OPCIONAL: Si no deseas almacenar basura histórica, puedes eliminar el ZIP de GCS aquí
+        # blob.delete()
+        
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al descargar o leer desde GCS: {str(e)}")
+
+    if not job_ids:
+        raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
+
+    # 📊 AUDITORÍA (Conserva tu código original intacto)
+    total_bytes_descomprimidos = sum(len(xml_content) for jid, xml_content in job_ids)
+    mb_reales = total_bytes_descomprimidos / (1024 * 1024)
+    total_comandos_pipeline = len(job_ids) * 2
+
+    print("\n" + "="*80)
+    print("🔍 [AUDITORÍA DE INFRAESTRUCTURA DESDE STORAGE]")
+    print(f"📦 DATOS PROCESADOS: {mb_reales:.2f} MB.")
+    print("="*80 + "\n")
+
+    # 🔀 CHUNKING DE REDIS EN BLOQUES DE 20 (Mantiene protegido tu Upstash Redis)
+    try:
+        CHUNK_SIZE = 20
+        for i in range(0, len(job_ids), CHUNK_SIZE):
+            chunk = job_ids[i:i + CHUNK_SIZE]
+            async with redis_client.pipeline(transaction=False) as pipe:
+                for jid, xml_content in chunk:
+                    pipe.set(f"pdf:xml:{jid}", zlib.compress(xml_content), ex=1800)
+                    pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                await pipe.execute()
+    except Exception as redis_err:
+        raise HTTPException(status_code=500, detail=f"Error con State Store de Redis: {str(redis_err)}")
+
+    just_ids = [item[0] for item in job_ids]
+    await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(just_ids), ex=3600)
+
+    network_semaphore = asyncio.Semaphore(50)
+
+    async def safe_enqueue_task(jid: str):
+        async with network_semaphore:
+            try:
+                await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
+            except Exception as ex:
+                print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
+                await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
+
+    async_tasks = [safe_enqueue_task(jid) for jid in just_ids]
+    await asyncio.gather(*async_tasks)
+    
+    return {
+        "batchId": batch_id,
+        "totalFiles": len(just_ids)
+    }
