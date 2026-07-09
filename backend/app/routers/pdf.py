@@ -327,20 +327,40 @@ async def request_upload_url():
     directamente a un Bucket de Google Cloud Storage.
     """
     try:
-        storage_client = storage.Client()
+        # 1. Obtenemos las credenciales por defecto del entorno de Google Cloud
+        import google.auth
+        credentials, project = google.auth.default()
+        
+        # 2. Extraemos el email de la cuenta de servicio con la que corre el servidor
+        service_account_email = None
+        if hasattr(credentials, 'service_account_email') and credentials.service_account_email:
+            service_account_email = credentials.service_account_email
+        else:
+            # Si es necesario, intentamos obtenerlo del servidor de metadatos interno
+            import requests
+            try:
+                meta_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
+                meta_headers = {"Metadata-Flavor": "Google"}
+                response = requests.get(meta_url, headers=meta_headers, timeout=2)
+                if response.status_code == 200:
+                    service_account_email = response.text.strip()
+            except Exception:
+                pass
+
+        storage_client = storage.Client(credentials=credentials)
         bucket = storage_client.bucket(BUCKET_NAME)
         
-        # Creamos una ruta única dentro del bucket para evitar sobreescrituras
         unique_id = str(uuid.uuid4())
         gcs_path = f"uploads/{unique_id}.zip"
         blob = bucket.blob(gcs_path)
         
-        # Generamos la URL firmada de tipo PUT, válida por 15 minutos
+        # 3. CRUCIAL: Pasamos el service_account_email para activar la firma vía IAM remota
         upload_url = blob.generate_signed_url(
             version="v4",
             expiration=datetime.timedelta(minutes=15),
             method="PUT",
-            content_type="application/zip"
+            content_type="application/zip",
+            service_account_email=service_account_email  # <-- Línea agregada
         )
         
         return {
@@ -349,7 +369,6 @@ async def request_upload_url():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creando la Signed URL: {str(e)}")
-
 
 # 5. Agrega el endpoint que procesa el ZIP desde Google Cloud Storage
 @router.post("/cfdi/pdf/start-zip-gcs")
