@@ -8,6 +8,12 @@ import zipfile
 import io
 import zlib
 import datetime
+
+# --- AÑADIR ESTAS DOS LÍNEAS AQUÍ ARRIBA ---
+import google.auth
+import google.auth.transport.requests
+# ----------------------------------------
+
 from google.cloud import storage
 
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
@@ -15,6 +21,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from opentelemetry import trace
+
+import urllib.request
+import traceback
 
 tracer = trace.get_tracer(__name__)
 
@@ -319,24 +328,23 @@ async def download_pdf(job_id: str):
         headers={"Content-Disposition": f'attachment; filename="cfdi_{job_id}.pdf"'}
     )
 
-# 4. Agrega el endpoint para generar la URL Firmada (Bypassea los 32MB)
-import urllib.request
-import traceback
 
 @router.post("/cfdi/pdf/request-upload", response_model=SignedUrlResponse)
 async def request_upload_url():
     """
     Genera una URL temporal firmada para que el frontend pueda subir el ZIP pesado 
-    directamente a un Bucket de Google Cloud Storage.
+    directamente a un Bucket de Google Cloud Storage usando Cloud Run.
     """
     try:
-        import google.auth
+        # 1. Obtenemos credenciales base
         credentials, project = google.auth.default()
         
-        # 1. Intentamos obtener el email directamente de las credenciales
-        service_account_email = getattr(credentials, 'service_account_email', None)
+        # 2. CRUCIAL: Refrescamos explícitamente para garantizar que tengamos un 'access_token'
+        auth_request = google.auth.transport.requests.Request()
+        credentials.refresh(auth_request)
         
-        # 2. Si es None (como sucede en Cloud Run), usamos el servidor de metadatos con la librería nativa
+        # 3. Extraemos el email
+        service_account_email = getattr(credentials, 'service_account_email', None)
         if not service_account_email:
             try:
                 meta_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
@@ -353,13 +361,14 @@ async def request_upload_url():
         gcs_path = f"uploads/{unique_id}.zip"
         blob = bucket.blob(gcs_path)
         
-        # 3. Firmamos la URL delegando en la API de IAM remota de Google
+        # 4. Generamos la URL usando la firma remota de IAM
         upload_url = blob.generate_signed_url(
             version="v4",
             expiration=datetime.timedelta(minutes=15),
             method="PUT",
             content_type="application/zip",
-            service_account_email=service_account_email
+            service_account_email=service_account_email,
+            access_token=credentials.token  # <--- ESTO EVITA EL ERROR DE LA PRIVATE KEY
         )
         
         return {
@@ -367,7 +376,6 @@ async def request_upload_url():
             "gcsPath": gcs_path
         }
     except Exception as e:
-        # Imprimimos el stacktrace completo para verlo en Cloud Run si falla
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error creando la Signed URL: {str(e)}")
 
