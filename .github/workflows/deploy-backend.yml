@@ -40,6 +40,6 @@ jobs:
             PUSHER_CLUSTER=us2
           flags: |
             --allow-unauthenticated
-            --cpu=1
-            --memory=1Gi
+            --cpu=2
+            --memory=2Gi
             --max-instances=10

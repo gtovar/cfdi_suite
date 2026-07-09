@@ -7,10 +7,16 @@ GCP_REGION = os.getenv("GCP_REGION", "us-central1")
 QUEUE_NAME = os.getenv("CFDI_QUEUE_NAME", "pdf-generator-queue") 
 API_URL = os.getenv("API_URL", "https://TU_URL_DE_CLOUD_RUN.a.run.app")
 
-client = tasks_v2.CloudTasksClient()
+_client = None
+
+def get_tasks_client():
+    global _client
+    if _client is None:
+        _client = tasks_v2.CloudTasksClient()
+    return _client
 
 def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_shell: str = None):
-    """Encola un trabajo en Google Cloud Tasks de forma síncrona y ultra estable."""
+    client = get_tasks_client()  # Se inicializa de forma segura aquí
     parent = client.queue_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME)
     payload = {
         "job_id": job_id,
