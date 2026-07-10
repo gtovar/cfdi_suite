@@ -21,7 +21,10 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --timeout=1800
-      - --set-env-vars=ALLOWED_ORIGINS=https://REPLACE_WITH_VERCEL_URL
+      # --update-env-vars fusiona con las env vars existentes del servicio;
+      # --set-env-vars las REEMPLAZA por completo y borra todo lo demás
+      # (REDIS_*, GCS_BUCKET_NAME, SENTRY_DSN, PUSHER_*) — no usar --set-env-vars aquí.
+      - --update-env-vars=ALLOWED_ORIGINS=https://cfdiinspector.vercel.app
 
 images:
   - gcr.io/$PROJECT_ID/cfdi-suite-api:$COMMIT_SHA
