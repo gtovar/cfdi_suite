@@ -44,4 +44,4 @@ jobs:
             --memory=2Gi
             --max-instances=10
             --timeout=1800
-            --concurrency=1
+            --concurrency=5
