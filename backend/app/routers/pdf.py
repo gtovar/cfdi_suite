@@ -67,6 +67,13 @@ class ProcessGcsZipPayload(BaseModel):
     gcsPath: str
     template: Optional[str] = None
 
+
+def _is_valid_xml_entry(file_info: zipfile.ZipInfo) -> bool:
+    if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
+        return False
+    return file_info.filename.lower().endswith(".xml")
+
+
 @router.post("/internal/generate-pdf")
 async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
     if "x-cloudtasks-queuename" not in request.headers:
@@ -192,10 +199,7 @@ async def start_pdf_zip_generation(
     try:
         with zipfile.ZipFile(file.file, "r") as z:
             for file_info in z.infolist():
-                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
-                    continue
-
-                if file_info.filename.lower().endswith(".xml"):
+                if _is_valid_xml_entry(file_info):
                     job_id = str(uuid.uuid4())
                     xml_content = z.read(file_info.filename)
                     job_ids.append((job_id, xml_content))
@@ -251,7 +255,9 @@ async def start_pdf_zip_generation(
         )
 
     just_ids = [item[0] for item in job_ids]
-    await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(just_ids), ex=3600)
+    await redis_client.set(f"pdf:extracting_total:{batch_id}", len(just_ids), ex=3600)
+    await redis_client.sadd(f"pdf:batch_ids:{batch_id}", *just_ids)
+    await redis_client.expire(f"pdf:batch_ids:{batch_id}", 3600)
 
     network_semaphore = asyncio.Semaphore(50)
 
@@ -278,45 +284,54 @@ async def start_pdf_zip_generation(
 async def batch_progress(batch_id: str):
     async def event_generator():
         while True:
-            # Verificamos si aún se está descargando/descomprimiendo en el fondo
-            is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
-            batch_data = await redis_client.get(f"pdf:batch:{batch_id}")
+            # Si el loop de extracción murió a mitad de camino, no dejamos la barra
+            # congelada hasta el timeout del cliente: reportamos el error de inmediato.
+            extracting_error = await redis_client.get(f"pdf:extracting_error:{batch_id}")
+            if extracting_error:
+                msg = extracting_error.decode("utf-8")
+                yield f'data: {json.dumps({"status": "error", "message": msg})}\n\n'
+                break
 
-            # NUEVO: Si está extrayendo y aún no hay datos, enviamos 0% en vez de error
-            if is_extracting and not batch_data:
-                yield f'data: {json.dumps({"status": "processing", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 0})}\n\n'
-                await asyncio.sleep(1)
-                continue
+            total_bytes = await redis_client.get(f"pdf:extracting_total:{batch_id}")
 
-            if not batch_data:
+            if total_bytes is None:
+                # Aún no conocemos el total real (ventana muy breve al arrancar).
+                is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
+                if is_extracting:
+                    yield f'data: {json.dumps({"status": "processing", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 0, "message": "Preparando lote..."})}\n\n'
+                    await asyncio.sleep(1)
+                    continue
                 yield 'data: {"status": "error", "message": "Lote no encontrado"}\n\n'
                 break
-                
-            job_ids = json.loads(batch_data.decode("utf-8"))
-            total = len(job_ids)
-            
-            done = 0
-            error = 0
-            converting = 0
-            pending = 0
-            
-            keys = [f"pdf:status:{jid}" for jid in job_ids]
-            statuses = await redis_client.mget(keys)
-            
-            for status_bytes in statuses:
-                status = status_bytes.decode("utf-8") if status_bytes else "pending"
-                if status == "done":
-                    done += 1
-                elif status == "error":
-                    error += 1
-                elif status == "converting":
-                    converting += 1
-                else:
-                    pending += 1
-                    
+
+            total = int(total_bytes)
+            if total == 0:
+                yield f'data: {json.dumps({"status": "done", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 100})}\n\n'
+                break
+
+            registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
+            registered_ids = [rid.decode("utf-8") for rid in registered_raw]
+
+            done = error = converting = 0
+            if registered_ids:
+                keys = [f"pdf:status:{jid}" for jid in registered_ids]
+                statuses = await redis_client.mget(keys)
+                for status_bytes in statuses:
+                    status = status_bytes.decode("utf-8") if status_bytes else "pending"
+                    if status == "done":
+                        done += 1
+                    elif status == "error":
+                        error += 1
+                    elif status == "converting":
+                        converting += 1
+
+            registered_pending = len(registered_ids) - done - error - converting
+            not_yet_registered = total - len(registered_ids)
+            pending = max(registered_pending, 0) + max(not_yet_registered, 0)
+
             processed = done + error
             porcentaje = int((processed / total) * 100) if total > 0 else 0
-            
+
             payload = {
                 "status": "processing" if processed < total else "done",
                 "total": total,
@@ -339,11 +354,11 @@ async def batch_progress(batch_id: str):
 
 @router.get("/cfdi/pdf/batch/{batch_id}/download")
 async def download_batch_zip(batch_id: str):
-    batch_data = await redis_client.get(f"pdf:batch:{batch_id}")
-    if not batch_data:
+    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
+    if not registered_raw:
         raise HTTPException(status_code=404, detail="El lote especificado no existe o ya expiró.")
-        
-    job_ids = json.loads(batch_data.decode("utf-8"))
+
+    job_ids = [rid.decode("utf-8") for rid in registered_raw]
     zip_buffer = io.BytesIO()
     
     storage_client = storage.Client()
@@ -472,75 +487,65 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(gcs_path)
     
-    just_ids = []
-    
-    # Descargamos a un archivo temporal en disco, liberando la RAM
+    # Descargamos a un archivo temporal en disco, liberando la RAM. Esto puede
+    # tardar segundos para ZIPs grandes — correrlo en un hilo evita bloquear el
+    # event loop (y con él, el polling de progreso de este u otros batches en
+    # la misma instancia).
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
         temp_filename = tmp.name
-        blob.download_to_filename(temp_filename)
+    await asyncio.to_thread(blob.download_to_filename, temp_filename)
 
     try:
         with zipfile.ZipFile(temp_filename, "r") as z:
+            xml_entries = [fi for fi in z.infolist() if _is_valid_xml_entry(fi)]
+            # Total real conocido de inmediato: el frontend deja de ver 0% fijo
+            # desde los primeros segundos, en vez de hasta que todo el ZIP termine.
+            await redis_client.set(f"pdf:extracting_total:{batch_id}", len(xml_entries), ex=3600)
+
             chunk = []
             CHUNK_SIZE = 20
 
-            for file_info in z.infolist():
-                if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
-                    continue
-
-                if file_info.filename.lower().endswith(".xml"):
-                    job_id = str(uuid.uuid4())
-                    xml_content = z.read(file_info.filename)
-                    
-                    chunk.append((job_id, xml_content))
-                    just_ids.append(job_id)
-
-                    # Si juntamos 20, procesamos y vaciamos memoria
-                    if len(chunk) >= CHUNK_SIZE:
-                        # a) Redis: solo estado
-                        async with redis_client.pipeline(transaction=False) as pipe:
-                            for jid, _ in chunk:
-                                pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
-                            await pipe.execute()
-                        
-                        # b) Storage: el archivo pesado
-                        for jid, xml_data in chunk:
-                            blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
-                            await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
-                        
-                        # c) Cloud Tasks: encolamos
-                        for jid, _ in chunk:
-                            try:
-                                await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
-                            except Exception as ex:
-                                print(f"Error registrando en Tasks {jid}: {ex}")
-                                await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
-                        
-                        # Vaciamos la lista para liberar RAM
-                        chunk = []
-
-            # Procesamos el residuo final (si sobraron menos de 20)
-            if chunk:
+            async def flush_chunk(current_chunk):
+                # a) Redis: estado "pending" + registro incremental del batch
+                #    (mismo pipeline, así el TTL del set nunca queda huérfano
+                #    si el proceso muere a mitad de camino)
                 async with redis_client.pipeline(transaction=False) as pipe:
-                    for jid, _ in chunk:
+                    for jid, _ in current_chunk:
                         pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                    pipe.sadd(f"pdf:batch_ids:{batch_id}", *[jid for jid, _ in current_chunk])
+                    pipe.expire(f"pdf:batch_ids:{batch_id}", 3600)
                     await pipe.execute()
-                
-                for jid, xml_data in chunk:
+
+                # b) Storage: el archivo pesado
+                for jid, xml_data in current_chunk:
                     blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
                     await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
-                
-                for jid, _ in chunk:
+
+                # c) Cloud Tasks: encolamos
+                for jid, _ in current_chunk:
                     try:
                         await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
                     except Exception as ex:
+                        print(f"Error registrando en Tasks {jid}: {ex}")
                         await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
 
-        # Guardamos la lista total de IDs para el front
-        await redis_client.set(f"pdf:batch:{batch_id}", json.dumps(just_ids), ex=3600)
+            for file_info in xml_entries:
+                job_id = str(uuid.uuid4())
+                xml_content = z.read(file_info.filename)
+                chunk.append((job_id, xml_content))
+
+                # Si juntamos 20, procesamos y vaciamos memoria
+                if len(chunk) >= CHUNK_SIZE:
+                    await flush_chunk(chunk)
+                    chunk = []
+
+            # Procesamos el residuo final (si sobraron menos de 20)
+            if chunk:
+                await flush_chunk(chunk)
 
     except Exception as e:
         print(f"Error crítico procesando ZIP en background: {e}")
+        await redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600)
     finally:
         await redis_client.delete(f"pdf:extracting:{batch_id}")
         if os.path.exists(temp_filename):
