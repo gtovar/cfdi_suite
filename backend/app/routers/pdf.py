@@ -39,7 +39,7 @@ router = APIRouter(prefix="/api", tags=["PDF"])
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
-BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "tu-bucket-cfdi-suite")
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
 
 redis_client = aioredis.Redis(
     host=REDIS_HOST,
@@ -79,47 +79,62 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         if payload.xml_b64:
             xml_bytes = base64.b64decode(payload.xml_b64)
         else:
+            # 1️⃣ Buscamos en Redis primero (por si quedaron tareas viejas en la cola)
             compressed_xml = await redis_client.get(f"pdf:xml:{payload.job_id}")
-            xml_bytes = zlib.decompress(compressed_xml) if compressed_xml else None
+            if compressed_xml:
+                xml_bytes = zlib.decompress(compressed_xml)
+            else:
+                # 2️⃣ NUEVO: Si no está en Redis, buscamos en Cloud Storage temporal
+                storage_client = storage.Client()
+                bucket = storage_client.bucket(BUCKET_NAME)
+                blob_xml = bucket.blob(f"xml_temp/{payload.job_id}.xml")
+                
+                if await asyncio.to_thread(blob_xml.exists):
+                    xml_bytes = await asyncio.to_thread(blob_xml.download_as_bytes)
+                else:
+                    xml_bytes = None
             
         if not xml_bytes:
-            raise HTTPException(status_code=400, detail="XML no encontrado en caché.")
+            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
+            print(f"Abortando Job {payload.job_id}: XML ya no existe ni en Redis ni en GCS.")
+            return Response(status_code=204)
 
-       # 🕒 Medimos exactamente la "Regadera"
         with tracer.start_as_current_span("generacion_pdf_intensiva"):
             pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
         
-        # ☁️ NUEVO: Subir a Google Cloud Storage en lugar de Redis
+        # Guardado final del PDF
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(f"pdfs/{payload.job_id}.pdf")
-        
-        # Subimos el archivo a GCS sin bloquear el event loop principal
         await asyncio.to_thread(blob.upload_from_string, pdf_bytes, content_type="application/pdf")
         
-        # 🟢 En Redis AHORA SOLO GUARDAMOS EL ESTATUS (Pesa bytes, no Megabytes)
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=86400) # Lo dejamos 1 día si quieres
-        await redis_client.delete(f"pdf:xml:{payload.job_id}") # Borramos el XML para limpiar
+        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=86400)
+        await redis_client.delete(f"pdf:xml:{payload.job_id}")
+        
+        # 3️⃣ NUEVO: Borramos el XML temporal de GCS para no dejar basura
+        try:
+            blob_xml = bucket.blob(f"xml_temp/{payload.job_id}.xml")
+            if await asyncio.to_thread(blob_xml.exists):
+                await asyncio.to_thread(blob_xml.delete)
+        except Exception as e:
+            print(f"Aviso: No se pudo limpiar el XML temporal {payload.job_id}: {e}")
  
         print(f"PDF {payload.job_id} guardado con éxito.")
         return {"status": "success", "message": "PDF generado"}
+
+    except HTTPException as http_exc:
+        raise http_exc
     except Exception as e:
         print(f"Error generando PDF {payload.job_id}: {e}")
-        # 1. Envolvemos el intento de actualizar Redis en su propio try/catch
         try:
             await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
         except Exception as redis_err:
-            print(f"Doble fallo (Redis ignorado): No se pudo actualizar el estatus a error. Detalle: {redis_err}")
+            pass
         
-        # 2. Detectamos si el error original o el de Redis fue por falta de memoria (cuota excedida)
         error_str = str(e).lower()
         if "quota exceeded" in error_str or "oom" in error_str:
-            raise HTTPException(
-                status_code=429, 
-                detail="El motor de procesamiento está a máxima capacidad. Por favor, intenta en unos minutos."
-            )
+            raise HTTPException(status_code=429, detail="El motor de procesamiento está a máxima capacidad.")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/cfdi/pdf/start")
 async def start_pdf_generation(
@@ -138,7 +153,13 @@ async def start_pdf_generation(
         except Exception:
             pass
 
-    await redis_client.set(f"pdf:xml:{job_id}", zlib.compress(xml_content), ex=900)
+    # ☁️ NUEVO: Subir XML temporal a Google Cloud Storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob_xml = bucket.blob(f"xml_temp/{job_id}.xml")
+    await asyncio.to_thread(blob_xml.upload_from_string, xml_content, content_type="application/xml")
+
+    # 🟢 En Redis SOLO guardamos el estatus inicial pendiente (pesa nada)
     await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=1800)
 
     try:
@@ -147,7 +168,6 @@ async def start_pdf_generation(
         raise HTTPException(status_code=500, detail=f"Error en Cloud Tasks: {e}")
     
     return {"jobId": job_id}
-
 
 @router.post("/cfdi/pdf/start-zip")
 async def start_pdf_zip_generation(
