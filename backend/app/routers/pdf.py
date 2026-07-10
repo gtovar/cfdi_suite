@@ -85,14 +85,22 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         if not xml_bytes:
             raise HTTPException(status_code=400, detail="XML no encontrado en caché.")
 
-        # 🕒 Medimos exactamente la "Regadera"
+       # 🕒 Medimos exactamente la "Regadera"
         with tracer.start_as_current_span("generacion_pdf_intensiva"):
             pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
         
-        await redis_client.set(f"pdf:data:{payload.job_id}", zlib.compress(pdf_bytes), ex=1800)
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=1800)
-        await redis_client.delete(f"pdf:xml:{payload.job_id}")
+        # ☁️ NUEVO: Subir a Google Cloud Storage en lugar de Redis
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"pdfs/{payload.job_id}.pdf")
         
+        # Subimos el archivo a GCS sin bloquear el event loop principal
+        await asyncio.to_thread(blob.upload_from_string, pdf_bytes, content_type="application/pdf")
+        
+        # 🟢 En Redis AHORA SOLO GUARDAMOS EL ESTATUS (Pesa bytes, no Megabytes)
+        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=86400) # Lo dejamos 1 día si quieres
+        await redis_client.delete(f"pdf:xml:{payload.job_id}") # Borramos el XML para limpiar
+ 
         print(f"PDF {payload.job_id} guardado con éxito.")
         return {"status": "success", "message": "PDF generado"}
     except Exception as e:
@@ -306,12 +314,17 @@ async def download_batch_zip(batch_id: str):
     job_ids = json.loads(batch_data.decode("utf-8"))
     zip_buffer = io.BytesIO()
     
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as z:
         for jid in job_ids:
-            compressed_pdf = await redis_client.get(f"pdf:data:{jid}")
-            if compressed_pdf:
-                z.writestr(f"cfdi_{jid}.pdf", zlib.decompress(compressed_pdf))
-                
+            # Buscamos cada PDF directo en el Bucket
+            blob = bucket.blob(f"pdfs/{jid}.pdf")
+            if blob.exists():
+                pdf_bytes = await asyncio.to_thread(blob.download_as_bytes)
+                z.writestr(f"cfdi_{jid}.pdf", pdf_bytes)
+ 
     # 1. Regresamos el puntero al inicio del buffer en memoria
     zip_buffer.seek(0)
     
@@ -342,15 +355,26 @@ async def pdf_progress(job_id: str):
 
 @router.get("/cfdi/pdf/{job_id}/download")
 async def download_pdf(job_id: str):
-    compressed_pdf = await redis_client.get(f"pdf:data:{job_id}")
-    if not compressed_pdf:
-        raise HTTPException(status_code=404, detail="El PDF expiró o no existe.")
+    # Primero verificamos rápidamente en Redis si el estatus dice "done"
+    status_bytes = await redis_client.get(f"pdf:status:{job_id}")
+    if not status_bytes or status_bytes.decode("utf-8") != "done":
+        raise HTTPException(status_code=404, detail="El PDF aún no está listo o expiró.")
+
+    # Descargamos desde Google Cloud Storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(f"pdfs/{job_id}.pdf")
+    
+    if not blob.exists():
+         raise HTTPException(status_code=404, detail="El archivo PDF no se encontró en Storage.")
+         
+    pdf_bytes = await asyncio.to_thread(blob.download_as_bytes)
+
     return Response(
-        content=zlib.decompress(compressed_pdf),
+        content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="cfdi_{job_id}.pdf"'}
     )
-
 
 @router.post("/cfdi/pdf/request-upload", response_model=SignedUrlResponse)
 async def request_upload_url():
