@@ -32,6 +32,7 @@ tracer = trace.get_tracer(__name__)
 import redis.asyncio as aioredis
 
 from ..services.pdf_pipeline import generate
+from ..services.realtime import publish_batch_progress
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
 
 router = APIRouter(prefix="/api", tags=["PDF"])
@@ -63,6 +64,7 @@ class GeneratePdfPayload(BaseModel):
     xml_b64: str
     template_id: str
     html_shell: Optional[str] = None
+    batch_id: Optional[str] = None
 
 # --- NUEVOS MODELOS PARA EL FLUJO STORAGE ---
 class SignedUrlResponse(BaseModel):
@@ -86,6 +88,44 @@ def _is_valid_xml_entry(file_info: zipfile.ZipInfo) -> bool:
     if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
         return False
     return file_info.filename.lower().endswith(".xml")
+
+
+PUBLISH_EVERY_N_JOBS = 5
+
+
+async def _publish_batch_tick(batch_id: str, *, definitive_error: bool = False):
+    """Cuenta el avance con INCR atómico y lo empuja a Pusher.
+
+    Publica cada N archivos (y siempre al llegar al total) — así los
+    espectadores reciben el progreso sin SSE ni polling a Redis. Solo se
+    cuenta el error definitivo (XML desaparecido); los errores transitorios
+    no, porque Cloud Tasks los reintenta y podrían terminar en éxito.
+    """
+    counter = "error_count" if definitive_error else "done_count"
+    await redis_client.incr(f"pdf:{counter}:{batch_id}")
+    await redis_client.expire(f"pdf:{counter}:{batch_id}", 3600)
+
+    total_bytes = await redis_client.get(f"pdf:extracting_total:{batch_id}")
+    total = int(total_bytes) if total_bytes else 0
+    if total <= 0:
+        return
+
+    done = int(await redis_client.get(f"pdf:done_count:{batch_id}") or 0)
+    error = int(await redis_client.get(f"pdf:error_count:{batch_id}") or 0)
+    processed = done + error
+    if processed < total and processed % PUBLISH_EVERY_N_JOBS != 0 and not definitive_error:
+        return
+
+    payload = {
+        "status": "done" if processed >= total else "processing",
+        "total": total,
+        "done": done,
+        "error": error,
+        "converting": 0,
+        "pending": max(total - processed, 0),
+        "percentage": int((processed / total) * 100),
+    }
+    await asyncio.to_thread(publish_batch_progress, batch_id, payload)
 
 
 @router.post("/internal/generate-pdf")
@@ -118,6 +158,11 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         if not xml_bytes:
             await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
             print(f"Abortando Job {payload.job_id}: XML ya no existe ni en Redis ni en GCS.")
+            if payload.batch_id:
+                try:
+                    await _publish_batch_tick(payload.batch_id, definitive_error=True)
+                except Exception as tick_err:
+                    print(f"Aviso: tick de progreso no publicado para {payload.batch_id}: {tick_err}")
             return Response(status_code=204)
 
         with tracer.start_as_current_span("generacion_pdf_intensiva"):
@@ -141,6 +186,11 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
             print(f"Aviso: No se pudo limpiar el XML temporal {payload.job_id}: {e}")
  
         print(f"PDF {payload.job_id} guardado con éxito.")
+        if payload.batch_id:
+            try:
+                await _publish_batch_tick(payload.batch_id)
+            except Exception as tick_err:
+                print(f"Aviso: tick de progreso no publicado para {payload.batch_id}: {tick_err}")
         return {"status": "success", "message": "PDF generado"}
 
     except HTTPException as http_exc:
@@ -279,7 +329,7 @@ async def start_pdf_zip_generation(
         async with network_semaphore:
             try:
                 # Ejecutamos la función síncrona dentro del pool de hilos de forma segura
-                await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
+                await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
             except Exception as ex:
                 print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
                 await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
@@ -293,71 +343,81 @@ async def start_pdf_zip_generation(
     }
 
 
+async def _batch_progress_snapshot(batch_id: str) -> dict:
+    """Estado actual del lote calculado desde Redis (fuente de verdad).
+
+    Lo comparten el SSE legacy y el endpoint /status; los ticks de Pusher usan
+    contadores aproximados, este cálculo (MGET de statuses) es el exacto.
+    """
+    # Si el loop de extracción murió a mitad de camino, no dejamos la barra
+    # congelada hasta el timeout del cliente: reportamos el error de inmediato.
+    extracting_error = await redis_client.get(f"pdf:extracting_error:{batch_id}")
+    if extracting_error:
+        return {"status": "error", "message": extracting_error.decode("utf-8")}
+
+    total_bytes = await redis_client.get(f"pdf:extracting_total:{batch_id}")
+    if total_bytes is None:
+        # Aún no conocemos el total real (ventana muy breve al arrancar).
+        is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
+        if is_extracting:
+            return {"status": "processing", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 0, "message": "Preparando lote..."}
+        return {"status": "error", "message": "Lote no encontrado"}
+
+    total = int(total_bytes)
+    if total == 0:
+        return {"status": "done", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 100}
+
+    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
+    registered_ids = [rid.decode("utf-8") for rid in registered_raw]
+
+    done = error = converting = 0
+    if registered_ids:
+        keys = [f"pdf:status:{jid}" for jid in registered_ids]
+        statuses = await redis_client.mget(keys)
+        for status_bytes in statuses:
+            status = status_bytes.decode("utf-8") if status_bytes else "pending"
+            if status == "done":
+                done += 1
+            elif status == "error":
+                error += 1
+            elif status == "converting":
+                converting += 1
+
+    registered_pending = len(registered_ids) - done - error - converting
+    not_yet_registered = total - len(registered_ids)
+    pending = max(registered_pending, 0) + max(not_yet_registered, 0)
+    processed = done + error
+
+    return {
+        "status": "processing" if processed < total else "done",
+        "total": total,
+        "done": done,
+        "error": error,
+        "converting": converting,
+        "pending": pending,
+        "percentage": int((processed / total) * 100)
+    }
+
+
+@router.get("/cfdi/pdf/batch/{batch_id}/status")
+async def batch_status(batch_id: str):
+    """Snapshot puntual del progreso — request corta que no retiene instancia.
+
+    El frontend lo usa para hidratarse al conectar/reconectar y como
+    reconciliación periódica; el avance en vivo llega por Pusher.
+    """
+    return await _batch_progress_snapshot(batch_id)
+
+
 # CORREGIDO: Eliminamos el /api duplicado de la ruta (ya viene en el prefix del router)
 @router.get("/cfdi/pdf/batch/{batch_id}/progress")
 async def batch_progress(batch_id: str):
     async def event_generator():
         deadline = time.monotonic() + SSE_MAX_STREAM_SECONDS
         while time.monotonic() < deadline:
-            # Si el loop de extracción murió a mitad de camino, no dejamos la barra
-            # congelada hasta el timeout del cliente: reportamos el error de inmediato.
-            extracting_error = await redis_client.get(f"pdf:extracting_error:{batch_id}")
-            if extracting_error:
-                msg = extracting_error.decode("utf-8")
-                yield f'data: {json.dumps({"status": "error", "message": msg})}\n\n'
-                break
-
-            total_bytes = await redis_client.get(f"pdf:extracting_total:{batch_id}")
-
-            if total_bytes is None:
-                # Aún no conocemos el total real (ventana muy breve al arrancar).
-                is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
-                if is_extracting:
-                    yield f'data: {json.dumps({"status": "processing", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 0, "message": "Preparando lote..."})}\n\n'
-                    await asyncio.sleep(1)
-                    continue
-                yield 'data: {"status": "error", "message": "Lote no encontrado"}\n\n'
-                break
-
-            total = int(total_bytes)
-            if total == 0:
-                yield f'data: {json.dumps({"status": "done", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 100})}\n\n'
-                break
-
-            registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
-            registered_ids = [rid.decode("utf-8") for rid in registered_raw]
-
-            done = error = converting = 0
-            if registered_ids:
-                keys = [f"pdf:status:{jid}" for jid in registered_ids]
-                statuses = await redis_client.mget(keys)
-                for status_bytes in statuses:
-                    status = status_bytes.decode("utf-8") if status_bytes else "pending"
-                    if status == "done":
-                        done += 1
-                    elif status == "error":
-                        error += 1
-                    elif status == "converting":
-                        converting += 1
-
-            registered_pending = len(registered_ids) - done - error - converting
-            not_yet_registered = total - len(registered_ids)
-            pending = max(registered_pending, 0) + max(not_yet_registered, 0)
-
-            processed = done + error
-            porcentaje = int((processed / total) * 100) if total > 0 else 0
-
-            payload = {
-                "status": "processing" if processed < total else "done",
-                "total": total,
-                "done": done,
-                "error": error,
-                "converting": converting,
-                "pending": pending,
-                "percentage": porcentaje
-            }
-            yield f"data: {json.dumps(payload)}\n\n"
-            if processed >= total:
+            snapshot = await _batch_progress_snapshot(batch_id)
+            yield f"data: {json.dumps(snapshot)}\n\n"
+            if snapshot["status"] in ("done", "error"):
                 break
             await asyncio.sleep(1)
     return StreamingResponse(
@@ -625,7 +685,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                 # c) Cloud Tasks: encolamos
                 for jid, _ in current_chunk:
                     try:
-                        await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id)
+                        await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
                     except Exception as ex:
                         print(f"Error registrando en Tasks {jid}: {ex}")
                         await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)

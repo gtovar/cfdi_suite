@@ -17,14 +17,15 @@ def get_tasks_client():
         _client = tasks_v2.CloudTasksClient()
     return _client
 
-def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_shell: str = None):
+def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_shell: str = None, batch_id: str = None):
     client = get_tasks_client()  # Se inicializa de forma segura aquí
     parent = client.queue_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME)
     payload = {
         "job_id": job_id,
         "xml_b64": xml_b64,
         "template_id": template_id,
-        "html_shell": html_shell
+        "html_shell": html_shell,
+        "batch_id": batch_id
     }
     task = {
         "http_request": {

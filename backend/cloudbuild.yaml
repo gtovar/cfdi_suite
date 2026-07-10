@@ -25,10 +25,11 @@ steps:
       # "corrupted size vs. prev_size in fastbins") bajo alta concurrencia —
       # ver plan de estabilidad. Evita que un mismo proceso maneje varias
       # peticiones en simultáneo mientras se investiga la causa raíz.
-      - --concurrency=5
-      # PRUEBA: ¿desaparece el crash de heap (signal 6) al subir de 1 a 5?
-      # Si no hay crashes en 10+ minutos de carga, el bug fue mitigado.
-      # Si aparecen, revertir a 1.
+      # NO subir de 1: probado el 2026-07-10 con concurrency=5 — el crash de
+      # heap nativo (signal 6) reapareció tras ~4 min de carga real (~420 PDFs)
+      # y tumbó la instancia con trabajo en curso. Hasta no identificar la
+      # librería nativa culpable, 1 es obligatorio.
+      - --concurrency=1
       # Mantener en paridad con .github/workflows/deploy-backend.yml — los dos
       # pipelines despliegan el mismo servicio y divergir aquí ya causó
       # incidentes (caso --set-env-vars).

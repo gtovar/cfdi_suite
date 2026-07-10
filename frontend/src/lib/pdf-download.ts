@@ -1,3 +1,5 @@
+import Pusher from 'pusher-js';
+
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
 
 function resolveApiBaseUrl() {
@@ -222,7 +224,82 @@ export async function startZipConversion(
 
 
 
+// --- PROGRESO DEL BATCH VÍA PUSHER (Fase C) ---
+// El SSE anterior retenía una instancia entera de Cloud Run por espectador
+// (concurrency=1, obligatorio por el bug de heap nativo) y consultaba Redis
+// cada segundo. Aquí la conexión persistente vive en la infraestructura de
+// Pusher: cero instancias retenidas y cero polling. Un snapshot inicial
+// hidrata el estado, y una reconciliación cada 30s (request corta a /status)
+// cubre eventos perdidos — si Pusher está caído, la barra sigue avanzando a
+// ritmo de 30s en vez de congelarse.
+export function watchBatchProgress(
+  batchId: string,
+  onProgress: (data: BatchProgressPayload) => void,
+  onStatusChange?: (state: SseConnectionState, attempt: number) => void,
+): Promise<void> {
+  // La key de Pusher es pública por diseño (viaja en el bundle de cualquier
+  // SPA que use pusher-js); VITE_PUSHER_KEY en Vercel la sobreescribe.
+  const key = (import.meta as any).env.VITE_PUSHER_KEY || 'ec582a031473e2da1654'; // pragma: allowlist secret
+  const cluster = (import.meta as any).env.VITE_PUSHER_CLUSTER || 'us2';
+  const statusUrl = resolveApiBaseUrl() + '/api/cfdi/pdf/batch/' + batchId + '/status';
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let maxProcessed = -1;
+    let pusher: Pusher | null = null;
+    let snapshotTid: ReturnType<typeof setInterval> | undefined;
+    let overallTid: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (overallTid) clearTimeout(overallTid);
+      if (snapshotTid) clearInterval(snapshotTid);
+      try {
+        pusher?.unsubscribe('pdf-batch-' + batchId);
+        pusher?.disconnect();
+      } catch { /* desconexión best-effort */ }
+      fn();
+    };
+
+    overallTid = setTimeout(
+      () => finish(() => reject(new Error('Tiempo de espera agotado en el navegador'))),
+      2_700_000,
+    );
+
+    const handle = (data: BatchProgressPayload) => {
+      if (settled) return;
+      const processed = (data.done ?? 0) + (data.error ?? 0);
+      // Los ticks de Pusher y los snapshots pueden llegar fuera de orden:
+      // nunca retroceder la barra mientras el lote siga en proceso.
+      if (data.status === 'processing' && processed < maxProcessed) return;
+      maxProcessed = Math.max(maxProcessed, processed);
+      onProgress(data);
+      if (data.status === 'done') finish(resolve);
+      else if (data.status === 'error') finish(() => reject(new Error(data.message || 'Ocurrió un error crítico en el lote')));
+    };
+
+    const fetchSnapshot = async () => {
+      if (settled || document.hidden) return;
+      try {
+        const res = await fetch(statusUrl);
+        if (res.ok) handle(await res.json() as BatchProgressPayload);
+      } catch { /* transitorio: Pusher y el siguiente snapshot siguen vivos */ }
+    };
+
+    pusher = new Pusher(key, { cluster, forceTLS: true });
+    pusher.connection.bind('connected', () => onStatusChange?.('connected', 0));
+    pusher.connection.bind('unavailable', () => onStatusChange?.('reconnecting', 1));
+    pusher.subscribe('pdf-batch-' + batchId).bind('progress', handle);
+
+    void fetchSnapshot();
+    snapshotTid = setInterval(fetchSnapshot, 30_000);
+  });
+}
+
 // --- ESCUCHAR LA PIZARRA GLOBAL DEL BATCH EN TIEMPO REAL (con reconexión) ---
+// Conservado como fallback manual del SSE legacy; el flujo activo usa
+// watchBatchProgress (Pusher).
 export function waitForBatchJob(
   batchId: string,
   onProgress: (data: BatchProgressPayload) => void,

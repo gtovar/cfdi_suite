@@ -17,7 +17,7 @@ import {
   convertFileToPdf,
   triggerBlobDownload,
   startZipConversion,
-  waitForBatchJob,
+  watchBatchProgress,
   getBatchDownloadUrl,
   fetchReadyFileIds,
   fetchPdfDownloadUrl,
@@ -186,14 +186,14 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     else setSelectedRows(new Set());
   }
 
-  // Escucha la pizarra de Redis a través del Cartero. No lanza: los cortes de
-  // conexión (transitorios o definitivos, tras agotar reintentos) se reportan
+  // Escucha el progreso vía Pusher (snapshot inicial + eventos en vivo +
+  // reconciliación cada 30s). No lanza: los cortes de conexión se reportan
   // en batchError para mostrarse inline, sin alert() bloqueante.
   const listenToBatch = useCallback(async (id: string) => {
     setBatchError(null);
     setBatchConnState(null);
     try {
-      await waitForBatchJob(
+      await watchBatchProgress(
         id,
         (progress) => setBatchProgress(progress),
         (state, attempt) => setBatchConnState({ state, attempt }),
