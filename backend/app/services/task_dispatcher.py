@@ -37,6 +37,30 @@ def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_she
     response = client.create_task(request={"parent": parent, "task": task})
     return response.name
 
+def enqueue_zip_extraction(gcs_path: str, batch_id: str, template_id: str):
+    """
+    Encola la extracción de un ZIP como Cloud Task en vez de correrla como
+    BackgroundTask en memoria — así el trabajo sobrevive al reciclaje de
+    instancias de Cloud Run y Cloud Tasks reintenta si falla a medio camino.
+    """
+    client = get_tasks_client()
+    parent = client.queue_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME)
+    payload = {
+        "gcs_path": gcs_path,
+        "batch_id": batch_id,
+        "template_id": template_id,
+    }
+    task = {
+        "http_request": {
+            "http_method": tasks_v2.HttpMethod.POST,
+            "url": f"{API_URL}/api/internal/extract-zip",
+            "headers": {"Content-type": "application/json"},
+            "body": json.dumps(payload).encode("utf-8")
+        }
+    }
+    response = client.create_task(request={"parent": parent, "task": task})
+    return response.name
+
 def enqueue_cfdi_analysis(batch_id: str, filename: str, redis_key: str):
     """Inyecta el análisis asíncrono de un CFDI a la cola de Cloud Tasks."""
     client = get_tasks_client()  # <-- ¡Fijamos esto! Antes llamabas a client.queue_path pero la variable local no existía en esta función.

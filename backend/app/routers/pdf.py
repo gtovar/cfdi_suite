@@ -8,7 +8,6 @@ import zipfile
 import io
 import zlib
 import datetime
-from fastapi import BackgroundTasks
 import tempfile
 
 # --- AÑADIR ESTAS DOS LÍNEAS AQUÍ ARRIBA ---
@@ -32,7 +31,7 @@ tracer = trace.get_tracer(__name__)
 import redis.asyncio as aioredis
 
 from ..services.pdf_pipeline import generate
-from ..services.task_dispatcher import enqueue_pdf_generation
+from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
 
 router = APIRouter(prefix="/api", tags=["PDF"])
 
@@ -69,6 +68,11 @@ class ProcessGcsZipPayload(BaseModel):
 
 class DownloadUrlResponse(BaseModel):
     downloadUrl: str
+
+class ExtractZipPayload(BaseModel):
+    gcs_path: str
+    batch_id: str
+    template_id: str
 
 
 def _is_valid_xml_entry(file_info: zipfile.ZipInfo) -> bool:
@@ -551,10 +555,25 @@ async def get_pdf_download_url(job_id: str):
         raise HTTPException(status_code=500, detail=f"Error creando la Signed URL de descarga: {str(e)}")
 
 
+@router.post("/internal/extract-zip")
+async def internal_extract_zip(payload: ExtractZipPayload, request: Request):
+    """
+    Disparado por Cloud Tasks (no directo por el usuario) — corre la
+    extracción dentro de un request HTTP real en vez de un BackgroundTask,
+    para que Cloud Run mantenga la instancia activa mientras dura, y para
+    que Cloud Tasks reintente automáticamente si falla a medio camino.
+    """
+    if "x-cloudtasks-queuename" not in request.headers:
+        raise HTTPException(status_code=403, detail="Acceso denegado. Solo Cloud Tasks.")
+
+    await process_zip_in_background(payload.gcs_path, payload.batch_id, payload.template_id)
+    return {"status": "success"}
+
+
 async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: str):
     """
-    Esta función corre en segundo plano. Descarga el ZIP a disco (no a RAM),
-    lo lee y manda los XMLs a GCS temporal y los estados mínimos a Redis.
+    Descarga el ZIP a disco (no a RAM), lo lee y manda los XMLs a GCS
+    temporal y los estados mínimos a Redis. Invocada desde internal_extract_zip.
     """
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
@@ -603,7 +622,10 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                         await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
 
             for file_info in xml_entries:
-                job_id = str(uuid.uuid4())
+                # Determinístico (no uuid4): si Cloud Tasks reintenta esta
+                # extracción completa tras un fallo, regenera los mismos IDs
+                # en vez de duplicar registros para los mismos archivos.
+                job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{batch_id}:{file_info.filename}"))
                 xml_content = z.read(file_info.filename)
                 chunk.append((job_id, xml_content))
 
@@ -631,9 +653,12 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             print(f"Aviso: no se pudo borrar {gcs_path} de GCS: {cleanup_err}")
 
 @router.post("/cfdi/pdf/start-zip-gcs")
-async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload, background_tasks: BackgroundTasks):
+async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
     """
-    Endpoint que responde instantáneamente al frontend y delega el trabajo pesado.
+    Endpoint que responde instantáneamente al frontend y delega el trabajo
+    pesado a un Cloud Task real (no un BackgroundTask en memoria) — así
+    sobrevive al reciclaje de instancias de Cloud Run y Cloud Tasks
+    reintenta automáticamente si falla a medio camino.
     """
     template_id = "default"
     if payload.template:
@@ -645,11 +670,16 @@ async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload, background
 
     batch_id = str(uuid.uuid4())
 
-    # NUEVO: Avisamos a Redis que este lote está en fase de descarga/extracción (expira en 1 hr)
+    # Avisamos a Redis que este lote está en fase de descarga/extracción (expira en 1 hr)
     await redis_client.set(f"pdf:extracting:{batch_id}", b"true", ex=3600)
-    
-    # Le decimos a FastAPI: "Ejecuta esta función pesada en segundo plano"
-    background_tasks.add_task(process_zip_in_background, payload.gcsPath, batch_id, template_id)
+
+    try:
+        await asyncio.to_thread(
+            enqueue_zip_extraction, gcs_path=payload.gcsPath, batch_id=batch_id, template_id=template_id
+        )
+    except Exception as e:
+        await redis_client.delete(f"pdf:extracting:{batch_id}")
+        raise HTTPException(status_code=500, detail=f"Error encolando la extracción en Cloud Tasks: {e}")
 
     # Respondemos al Front-End INMEDIATAMENTE para que no se quede trabado
     return {
