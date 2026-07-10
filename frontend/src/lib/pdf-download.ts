@@ -53,12 +53,13 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
 
   return new Promise((resolve, reject) => {
     let attempt = 0;
-    let es: EventSource;
+    let es: EventSource | undefined;
     let settled = false;
 
     const overallTid = setTimeout(() => {
       settled = true;
       es?.close();
+      document.removeEventListener('visibilitychange', onVisibility);
       reject(new Error('Tiempo de espera agotado en el navegador'));
     }, overallTimeoutMs);
 
@@ -66,11 +67,23 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
       if (settled) return;
       settled = true;
       clearTimeout(overallTid);
-      es.close();
+      es?.close();
+      document.removeEventListener('visibilitychange', onVisibility);
       fn();
     };
 
+    // Pestaña oculta = sin nadie mirando la barra de progreso: cerramos el
+    // stream para no quemar comandos de Redis ni retener una instancia de
+    // Cloud Run (concurrency=1), y reconectamos al volver a ser visible.
+    const onVisibility = () => {
+      if (document.hidden) es?.close();
+      else if (!settled) connect();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     const connect = () => {
+      if (settled || document.hidden) return;
+      es?.close();
       es = new EventSource(url);
 
       es.onmessage = (ev) => {
@@ -82,8 +95,9 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
       };
 
       es.onerror = () => {
-        es.close();
+        es?.close();
         if (settled) return;
+        if (document.hidden) return;
         if (attempt >= maxRetries) {
           finish(() => reject(new Error('La conexión de progreso en tiempo real se interrumpió después de varios intentos')));
           return;

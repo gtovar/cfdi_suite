@@ -41,3 +41,6 @@ backend/shells/
 
 # Dumps de repomix (contexto para IA), no versionar
 repomix-output-*.md
+
+# Config local de CORS para el bucket de GCS, no versionar
+cors-gcs.json

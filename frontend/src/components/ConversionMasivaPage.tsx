@@ -74,6 +74,13 @@ interface ConversionMasivaPageProps {
   templateId?: string;
 }
 
+// Lote en curso guardado para sobrevivir un refresh — el trabajo del servidor
+// sigue vivo aunque la UI se recargue. El tope de edad coincide con el
+// overallTimeoutMs de waitForBatchJob (45 min): más viejo que eso ya no hay
+// stream que retomar.
+const ACTIVE_BATCH_KEY = 'cfdi-active-batch';
+const ACTIVE_BATCH_MAX_AGE_MS = 45 * 60 * 1000;
+
 export default function ConversionMasivaPage({ templateId }: ConversionMasivaPageProps) {
   // Estados para el flujo tradicional (XMLs sueltos)
   const [entries, setEntries] = useState<ConversionEntry[]>([]);
@@ -95,6 +102,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
   const lastReadyFetchDoneRef = useRef(0);
+  const restoredBatchRef = useRef(false);
 
   useEffect(() => {
     if (folderInputRef.current) {
@@ -170,6 +178,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     setBatchError(null);
     setReadyFileIds([]);
     lastReadyFetchDoneRef.current = 0;
+    localStorage.removeItem(ACTIVE_BATCH_KEY);
   }
 
   function toggleSelectAll(checked: boolean) {
@@ -190,10 +199,42 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
         (state, attempt) => setBatchConnState({ state, attempt }),
       );
       setPhase('done');
+      localStorage.removeItem(ACTIVE_BATCH_KEY);
     } catch (err) {
       setBatchError(err instanceof Error ? err.message : String(err));
     }
   }, []);
+
+  // Reconexión tras refresh: si quedó un lote en curso guardado, volver a
+  // escuchar su progreso en vez de obligar a resubir el ZIP.
+  useEffect(() => {
+    if (restoredBatchRef.current) return;
+    restoredBatchRef.current = true;
+    const raw = localStorage.getItem(ACTIVE_BATCH_KEY);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as { batchId: string; total: number; startedAt: number };
+      if (!saved.batchId || Date.now() - saved.startedAt > ACTIVE_BATCH_MAX_AGE_MS) {
+        localStorage.removeItem(ACTIVE_BATCH_KEY);
+        return;
+      }
+      setIsZipMode(true);
+      setPhase('running');
+      setBatchId(saved.batchId);
+      setBatchProgress({
+        status: 'processing',
+        total: saved.total,
+        done: 0,
+        error: 0,
+        converting: 0,
+        pending: saved.total,
+        percentage: 0
+      });
+      void listenToBatch(saved.batchId);
+    } catch {
+      localStorage.removeItem(ACTIVE_BATCH_KEY);
+    }
+  }, [listenToBatch]);
 
   function handleRetryBatchConnection() {
     if (batchId) void listenToBatch(batchId);
@@ -208,6 +249,11 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
       try {
         const res = await startZipConversion(zipFile, templateId);
         setBatchId(res.batchId);
+        localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify({
+          batchId: res.batchId,
+          total: res.totalFiles,
+          startedAt: Date.now()
+        }));
 
         setBatchProgress({
           status: 'processing',
@@ -261,7 +307,11 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   async function handleDownloadReadyFile(jobId: string) {
     try {
       const url = await fetchPdfDownloadUrl(jobId);
-      window.open(url, '_blank');
+      // window.open tras un await ya no cuenta como gesto del usuario y el
+      // popup blocker lo cancela en silencio; navegar en la misma pestaña
+      // dispara la descarga (la signed URL responde con Content-Disposition:
+      // attachment) sin abandonar la SPA.
+      window.location.assign(url);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }

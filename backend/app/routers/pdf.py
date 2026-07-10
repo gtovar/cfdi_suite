@@ -9,6 +9,7 @@ import io
 import zlib
 import datetime
 import tempfile
+import time
 
 # --- AÑADIR ESTAS DOS LÍNEAS AQUÍ ARRIBA ---
 import google.auth
@@ -34,6 +35,12 @@ from ..services.pdf_pipeline import generate
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
 
 router = APIRouter(prefix="/api", tags=["PDF"])
+
+# Techo duro por conexión SSE. Con concurrency=1 cada stream abierto retiene
+# una instancia entera de Cloud Run; el cliente (subscribeWithRetry) se
+# reconecta solo al cortarse, así que esto no interrumpe al usuario — solo
+# evita que un stream retenga la instancia los 1800s del timeout del servicio.
+SSE_MAX_STREAM_SECONDS = 600
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
@@ -290,7 +297,8 @@ async def start_pdf_zip_generation(
 @router.get("/cfdi/pdf/batch/{batch_id}/progress")
 async def batch_progress(batch_id: str):
     async def event_generator():
-        while True:
+        deadline = time.monotonic() + SSE_MAX_STREAM_SECONDS
+        while time.monotonic() < deadline:
             # Si el loop de extracción murió a mitad de camino, no dejamos la barra
             # congelada hasta el timeout del cliente: reportamos el error de inmediato.
             extracting_error = await redis_client.get(f"pdf:extracting_error:{batch_id}")
@@ -431,7 +439,8 @@ async def download_batch_zip(batch_id: str):
 @router.get("/cfdi/pdf/{job_id}/progress")
 async def pdf_progress(job_id: str):
     async def event_generator():
-        while True:
+        deadline = time.monotonic() + SSE_MAX_STREAM_SECONDS
+        while time.monotonic() < deadline:
             status_bytes = await redis_client.get(f"pdf:status:{job_id}")
             status = status_bytes.decode("utf-8") if status_bytes else "pending"
             if status in ["done", "error"]:
