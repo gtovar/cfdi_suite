@@ -84,6 +84,8 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgressPayload | null>(null);
+  const [batchConnState, setBatchConnState] = useState<{ state: 'connected' | 'reconnecting'; attempt: number } | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -149,11 +151,35 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     setZipFile(null);
     setBatchId(null);
     setBatchProgress(null);
+    setBatchConnState(null);
+    setBatchError(null);
   }
 
   function toggleSelectAll(checked: boolean) {
     if (checked) setSelectedRows(new Set(entries.map((e) => e.file.name)));
     else setSelectedRows(new Set());
+  }
+
+  // Escucha la pizarra de Redis a través del Cartero. No lanza: los cortes de
+  // conexión (transitorios o definitivos, tras agotar reintentos) se reportan
+  // en batchError para mostrarse inline, sin alert() bloqueante.
+  const listenToBatch = useCallback(async (id: string) => {
+    setBatchError(null);
+    setBatchConnState(null);
+    try {
+      await waitForBatchJob(
+        id,
+        (progress) => setBatchProgress(progress),
+        (state, attempt) => setBatchConnState({ state, attempt }),
+      );
+      setPhase('done');
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  function handleRetryBatchConnection() {
+    if (batchId) void listenToBatch(batchId);
   }
 
   const startConversion = useCallback(async () => {
@@ -165,7 +191,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
       try {
         const res = await startZipConversion(zipFile, templateId);
         setBatchId(res.batchId);
-        
+
         setBatchProgress({
           status: 'processing',
           total: res.totalFiles,
@@ -176,12 +202,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
           percentage: 0
         });
 
-        // Nos quedamos escuchando la pizarra de Redis a través del Cartero
-        await waitForBatchJob(res.batchId, (progress) => {
-          setBatchProgress(progress);
-        });
-        
-        setPhase('done');
+        await listenToBatch(res.batchId);
       } catch (err) {
         setPhase('idle');
         alert(err instanceof Error ? err.message : String(err));
@@ -382,7 +403,29 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                   <CheckCircle2 size={12} /> Lote completado con éxito
                 </span>
               )}
+              {batchConnState?.state === 'reconnecting' && !batchError && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+                  <Loader2 size={12} className="animate-spin" /> Reconectando… (intento {batchConnState.attempt}/5)
+                </span>
+              )}
             </div>
+
+            {/* Aviso de conexión perdida tras agotar reintentos: el lote sigue vivo en el
+                servidor, solo se perdió la conexión de progreso. Se puede reintentar sin
+                volver a subir el ZIP. */}
+            {batchError && (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <p className="text-xs text-amber-800">
+                  Se perdió la conexión de progreso en tiempo real, pero tu lote sigue procesándose en la nube. {batchError}
+                </p>
+                <button
+                  onClick={handleRetryBatchConnection}
+                  className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                >
+                  Reintentar conexión
+                </button>
+              </div>
+            )}
 
             {/* Barra de progreso unificada */}
             <div className="w-full">

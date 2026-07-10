@@ -28,19 +28,92 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export function waitForPdfJob(jobId: string): Promise<void> {
+// ── SSE con reconexión resiliente ─────────────────────────────────────────
+// EventSource nativo ya reintenta la conexión por sí solo; el bug histórico
+// era que onerror cerraba y fallaba de inmediato, cancelando ese reintento.
+// Este helper retoma el control con backoff exponencial y un tope de intentos
+// consecutivos (que se resetea con cada mensaje exitoso), sin bloquear al
+// usuario con un error ante el primer parpadeo de red.
+
+export type SseConnectionState = 'connected' | 'reconnecting';
+type SseMessageResult = { action: 'continue' } | { action: 'resolve' } | { action: 'reject'; error: string };
+
+interface SseRetryConfig {
+  url: string;
+  overallTimeoutMs: number;
+  maxRetries?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  onMessage: (raw: string) => SseMessageResult;
+  onStatusChange?: (state: SseConnectionState, attempt: number) => void;
+}
+
+function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
+  const { url, overallTimeoutMs, maxRetries = 5, baseDelayMs = 1000, maxDelayMs = 15_000, onMessage, onStatusChange } = config;
+
   return new Promise((resolve, reject) => {
-    const es = new EventSource(`/api/cfdi/pdf/${jobId}/progress`);
-    const tid = setTimeout(() => {
+    let attempt = 0;
+    let es: EventSource;
+    let settled = false;
+
+    const overallTid = setTimeout(() => {
+      settled = true;
+      es?.close();
+      reject(new Error('Tiempo de espera agotado en el navegador'));
+    }, overallTimeoutMs);
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(overallTid);
       es.close();
-      reject(new Error('Tiempo de espera agotado'));
-    }, 180_000);
-    es.onmessage = (ev) => {
-      const d = JSON.parse(ev.data) as { status: string; error?: string };
-      if (d.status === 'done') { clearTimeout(tid); es.close(); resolve(); }
-      if (d.status === 'error') { clearTimeout(tid); es.close(); reject(new Error(d.error || 'Error generando PDF')); }
+      fn();
     };
-    es.onerror = () => { clearTimeout(tid); es.close(); reject(new Error('Conexión perdida')); };
+
+    const connect = () => {
+      es = new EventSource(url);
+
+      es.onmessage = (ev) => {
+        attempt = 0;
+        onStatusChange?.('connected', 0);
+        const result = onMessage(ev.data);
+        if (result.action === 'resolve') finish(resolve);
+        if (result.action === 'reject') finish(() => reject(new Error(result.error)));
+      };
+
+      es.onerror = () => {
+        es.close();
+        if (settled) return;
+        if (attempt >= maxRetries) {
+          finish(() => reject(new Error('La conexión de progreso en tiempo real se interrumpió después de varios intentos')));
+          return;
+        }
+        attempt++;
+        onStatusChange?.('reconnecting', attempt);
+        const delay = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+        setTimeout(connect, delay);
+      };
+    };
+
+    connect();
+  });
+}
+
+export function waitForPdfJob(
+  jobId: string,
+  onStatusChange?: (state: SseConnectionState, attempt: number) => void,
+): Promise<void> {
+  return subscribeWithRetry({
+    url: `/api/cfdi/pdf/${jobId}/progress`,
+    overallTimeoutMs: 180_000,
+    maxRetries: 3,
+    onStatusChange,
+    onMessage: (raw) => {
+      const d = JSON.parse(raw) as { status: string; error?: string };
+      if (d.status === 'done') return { action: 'resolve' };
+      if (d.status === 'error') return { action: 'reject', error: d.error || 'Error generando PDF' };
+      return { action: 'continue' };
+    },
   });
 }
 
@@ -135,38 +208,26 @@ export async function startZipConversion(
 
 
 
-// --- NUEVA FUNCIÓN: ESCUCHAR LA PIZARRA GLOBAL DEL BATCH EN TIEMPO REAL ---
-export function waitForBatchJob(batchId: string, onProgress: (data: BatchProgressPayload) => void): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const es = new EventSource(resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/progress");
-    
-    // 10 minutos de tiempo límite máximo para lotes de miles de archivos
-    const tid = setTimeout(() => {
-      es.close();
-      reject(new Error('Tiempo de espera del lote agotado en el navegador'));
-    }, 600_000);
-
-    es.onmessage = (ev) => {
-      const data = JSON.parse(ev.data) as BatchProgressPayload;
+// --- ESCUCHAR LA PIZARRA GLOBAL DEL BATCH EN TIEMPO REAL (con reconexión) ---
+export function waitForBatchJob(
+  batchId: string,
+  onProgress: (data: BatchProgressPayload) => void,
+  onStatusChange?: (state: SseConnectionState, attempt: number) => void,
+): Promise<void> {
+  return subscribeWithRetry({
+    url: resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/progress",
+    // 45 minutos: con reconexión activa, un lote de miles de archivos puede
+    // legítimamente tardar más de los 10 min que teníamos antes.
+    overallTimeoutMs: 2_700_000,
+    maxRetries: 5,
+    onStatusChange,
+    onMessage: (raw) => {
+      const data = JSON.parse(raw) as BatchProgressPayload;
       onProgress(data);
-      
-      if (data.status === 'done') {
-        clearTimeout(tid);
-        es.close();
-        resolve();
-      }
-      if (data.status === 'error') {
-        clearTimeout(tid);
-        es.close();
-        reject(new Error(data.message || 'Ocurrió un error crítico en el lote'));
-      }
-    };
-
-    es.onerror = () => {
-      clearTimeout(tid);
-      es.close();
-      reject(new Error('La conexión de progreso en tiempo real se interrumpió'));
-    };
+      if (data.status === 'done') return { action: 'resolve' };
+      if (data.status === 'error') return { action: 'reject', error: data.message || 'Ocurrió un error crítico en el lote' };
+      return { action: 'continue' };
+    },
   });
 }
 

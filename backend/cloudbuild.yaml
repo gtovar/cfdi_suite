@@ -20,6 +20,7 @@ steps:
       - --region=us-central1
       - --platform=managed
       - --allow-unauthenticated
+      - --timeout=1800
       - --set-env-vars=ALLOWED_ORIGINS=https://REPLACE_WITH_VERCEL_URL
 
 images:

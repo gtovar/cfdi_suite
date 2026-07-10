@@ -330,7 +330,11 @@ async def batch_progress(batch_id: str):
             if processed >= total:
                 break
             await asyncio.sleep(1)
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/cfdi/pdf/batch/{batch_id}/download")
@@ -379,7 +383,11 @@ async def pdf_progress(job_id: str):
                 break
             yield 'data: {"status": "converting"}\n\n'
             await asyncio.sleep(1)
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @router.get("/cfdi/pdf/{job_id}/download")
 async def download_pdf(job_id: str):
