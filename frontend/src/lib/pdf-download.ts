@@ -231,6 +231,31 @@ export function waitForBatchJob(
   });
 }
 
+// URL de descarga del ZIP consolidado, directa a Cloud Run — bypasea el
+// rewrite de Vercel, que tiene un límite fijo de 120s para destinos
+// externos (insuficiente para lotes grandes).
+export function getBatchDownloadUrl(batchId: string): string {
+  return resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/download";
+}
+
+// IDs de los archivos ya convertidos hasta ahora, para ir llenando la
+// tabla de descargas individuales sin esperar a que todo el lote termine.
+export async function fetchReadyFileIds(batchId: string): Promise<string[]> {
+  const res = await fetch(resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/ready-files");
+  if (!res.ok) return [];
+  const data = await res.json() as { jobIds: string[] };
+  return data.jobIds;
+}
+
+// Signed URL de descarga directa de GCS para un PDF individual — igual que
+// el ZIP consolidado, evita pasar por Vercel/Cloud Run para el archivo en sí.
+export async function fetchPdfDownloadUrl(jobId: string): Promise<string> {
+  const res = await fetch(resolveApiBaseUrl() + "/api/cfdi/pdf/" + jobId + "/download-url");
+  if (!res.ok) throw new Error(`Error ${res.status} al generar el enlace de descarga`);
+  const data = await res.json() as { downloadUrl: string };
+  return data.downloadUrl;
+}
+
 export class Semaphore {
   private _n: number;
   private _q: (() => void)[] = [];

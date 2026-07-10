@@ -18,6 +18,9 @@ import {
   triggerBlobDownload,
   startZipConversion,
   waitForBatchJob,
+  getBatchDownloadUrl,
+  fetchReadyFileIds,
+  fetchPdfDownloadUrl,
   Semaphore,
 } from '../lib/pdf-download';
 
@@ -86,10 +89,12 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const [batchProgress, setBatchProgress] = useState<BatchProgressPayload | null>(null);
   const [batchConnState, setBatchConnState] = useState<{ state: 'connected' | 'reconnecting'; attempt: number } | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
+  const [readyFileIds, setReadyFileIds] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
+  const lastReadyFetchDoneRef = useRef(0);
 
   useEffect(() => {
     if (folderInputRef.current) {
@@ -97,6 +102,16 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
       folderInputRef.current.setAttribute('directory', '');
     }
   }, []);
+
+  // Va llenando la tabla de descargas individuales conforme el contador de
+  // "Listos" sube — solo pide la lista cuando hay archivos nuevos, no en
+  // cada tick del progreso (que llega cada segundo).
+  useEffect(() => {
+    if (!batchId || !batchProgress) return;
+    if (batchProgress.done <= lastReadyFetchDoneRef.current) return;
+    lastReadyFetchDoneRef.current = batchProgress.done;
+    fetchReadyFileIds(batchId).then(setReadyFileIds).catch(() => {});
+  }, [batchId, batchProgress?.done]);
 
   const done = entries.filter((e) => e.state === 'done').length;
   const errors = entries.filter((e) => e.state === 'error').length;
@@ -153,6 +168,8 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     setBatchProgress(null);
     setBatchConnState(null);
     setBatchError(null);
+    setReadyFileIds([]);
+    lastReadyFetchDoneRef.current = 0;
   }
 
   function toggleSelectAll(checked: boolean) {
@@ -236,8 +253,18 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
 
   function handleDownloadBatchZip() {
     if (!batchId) return;
-    // Redirige al navegador directamente a la descarga consolidada limpia generada por la API
-    window.open(`/api/cfdi/pdf/batch/${batchId}/download`, '_blank');
+    // Directo a Cloud Run (bypasea el rewrite de Vercel, que corta a los
+    // 120s — insuficiente para armar un ZIP de cientos/miles de PDFs)
+    window.open(getBatchDownloadUrl(batchId), '_blank');
+  }
+
+  async function handleDownloadReadyFile(jobId: string) {
+    try {
+      const url = await fetchPdfDownloadUrl(jobId);
+      window.open(url, '_blank');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function handleDownloadOne(entry: ConversionEntry) {
@@ -460,6 +487,37 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                 <p className="mt-1 text-lg font-bold text-red-600 tabular-nums">{batchProgress.error}</p>
               </div>
             </div>
+
+            {/* Tabla progresiva: los PDFs ya listos se pueden bajar uno por uno
+                sin esperar a que termine todo el lote */}
+            {readyFileIds.length > 0 && (
+              <div className="overflow-hidden rounded-xl border border-gray-200">
+                <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-3 py-2">
+                  <span className="text-tiny font-semibold uppercase tracking-wider text-gray-500">
+                    PDFs listos para descargar ({readyFileIds.length})
+                  </span>
+                </div>
+                <div className="max-h-64 overflow-auto">
+                  {readyFileIds.map((jobId, i) => (
+                    <div
+                      key={jobId}
+                      className={clsx(
+                        'flex items-center justify-between gap-3 px-3 py-1.5 text-xs',
+                        i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                      )}
+                    >
+                      <span className="truncate font-mono text-gray-600">Factura {i + 1}</span>
+                      <button
+                        onClick={() => handleDownloadReadyFile(jobId)}
+                        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-green-600 hover:bg-green-50"
+                      >
+                        <Download size={11} /> PDF
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Botón único de descarga consolidada */}
             {batchProgress.status === 'done' && (

@@ -67,6 +67,9 @@ class ProcessGcsZipPayload(BaseModel):
     gcsPath: str
     template: Optional[str] = None
 
+class DownloadUrlResponse(BaseModel):
+    downloadUrl: str
+
 
 def _is_valid_xml_entry(file_info: zipfile.ZipInfo) -> bool:
     if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
@@ -352,6 +355,28 @@ async def batch_progress(batch_id: str):
     )
 
 
+@router.get("/cfdi/pdf/batch/{batch_id}/ready-files")
+async def list_ready_files(batch_id: str):
+    """
+    IDs de los archivos ya convertidos (status 'done') hasta ahora — el
+    frontend la usa para ir llenando la tabla de descargas individuales
+    conforme avanza el lote, sin esperar a que todo el batch termine.
+    """
+    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
+    if not registered_raw:
+        return {"jobIds": []}
+
+    job_ids = [rid.decode("utf-8") for rid in registered_raw]
+    keys = [f"pdf:status:{jid}" for jid in job_ids]
+    statuses = await redis_client.mget(keys)
+
+    ready = [
+        jid for jid, status_bytes in zip(job_ids, statuses)
+        if status_bytes and status_bytes.decode("utf-8") == "done"
+    ]
+    return {"jobIds": ready}
+
+
 @router.get("/cfdi/pdf/batch/{batch_id}/download")
 async def download_batch_zip(batch_id: str):
     registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
@@ -359,17 +384,29 @@ async def download_batch_zip(batch_id: str):
         raise HTTPException(status_code=404, detail="El lote especificado no existe o ya expiró.")
 
     job_ids = [rid.decode("utf-8") for rid in registered_raw]
-    zip_buffer = io.BytesIO()
-    
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as z:
-        for jid in job_ids:
-            # Buscamos cada PDF directo en el Bucket
+    # Descargas concurrentes (antes eran secuenciales, una por una) — para
+    # lotes grandes esto es lo que hacía que la respuesta tardara demasiado
+    # en mandar el primer byte.
+    download_semaphore = asyncio.Semaphore(50)
+
+    async def fetch_pdf(jid: str):
+        async with download_semaphore:
             blob = bucket.blob(f"pdfs/{jid}.pdf")
-            if blob.exists():
+            try:
                 pdf_bytes = await asyncio.to_thread(blob.download_as_bytes)
+                return jid, pdf_bytes
+            except Exception:
+                return jid, None
+
+    results = await asyncio.gather(*[fetch_pdf(jid) for jid in job_ids])
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as z:
+        for jid, pdf_bytes in results:
+            if pdf_bytes is not None:
                 z.writestr(f"cfdi_{jid}.pdf", pdf_bytes)
  
     # 1. Regresamos el puntero al inicio del buffer en memoria
@@ -427,39 +464,44 @@ async def download_pdf(job_id: str):
         headers={"Content-Disposition": f'attachment; filename="cfdi_{job_id}.pdf"'}
     )
 
+def _get_signing_credentials():
+    """
+    Credenciales base + email de service account, usados para firmar URLs
+    (subida o descarga) vía la firma remota de IAM en Cloud Run, donde no
+    hay una private key local disponible.
+    """
+    credentials, _ = google.auth.default()
+    auth_request = google.auth.transport.requests.Request()
+    credentials.refresh(auth_request)
+
+    service_account_email = getattr(credentials, 'service_account_email', None)
+    if not service_account_email:
+        try:
+            meta_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
+            req = urllib.request.Request(meta_url, headers={"Metadata-Flavor": "Google"})
+            with urllib.request.urlopen(req, timeout=2) as response:
+                service_account_email = response.read().decode('utf-8').strip()
+        except Exception as e:
+            print(f"Advertencia: No se pudo obtener el email del metadata server: {e}")
+
+    return credentials, service_account_email
+
+
 @router.post("/cfdi/pdf/request-upload", response_model=SignedUrlResponse)
 async def request_upload_url():
     """
-    Genera una URL temporal firmada para que el frontend pueda subir el ZIP pesado 
+    Genera una URL temporal firmada para que el frontend pueda subir el ZIP pesado
     directamente a un Bucket de Google Cloud Storage usando Cloud Run.
     """
     try:
-        # 1. Obtenemos credenciales base
-        credentials, project = google.auth.default()
-        
-        # 2. CRUCIAL: Refrescamos explícitamente para garantizar que tengamos un 'access_token'
-        auth_request = google.auth.transport.requests.Request()
-        credentials.refresh(auth_request)
-        
-        # 3. Extraemos el email
-        service_account_email = getattr(credentials, 'service_account_email', None)
-        if not service_account_email:
-            try:
-                meta_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
-                req = urllib.request.Request(meta_url, headers={"Metadata-Flavor": "Google"})
-                with urllib.request.urlopen(req, timeout=2) as response:
-                    service_account_email = response.read().decode('utf-8').strip()
-            except Exception as e:
-                print(f"Advertencia: No se pudo obtener el email del metadata server: {e}")
-
+        credentials, service_account_email = _get_signing_credentials()
         storage_client = storage.Client(credentials=credentials)
         bucket = storage_client.bucket(BUCKET_NAME)
-        
+
         unique_id = str(uuid.uuid4())
         gcs_path = f"uploads/{unique_id}.zip"
         blob = bucket.blob(gcs_path)
-        
-        # 4. Generamos la URL usando la firma remota de IAM
+
         upload_url = blob.generate_signed_url(
             version="v4",
             expiration=datetime.timedelta(minutes=15),
@@ -468,7 +510,7 @@ async def request_upload_url():
             service_account_email=service_account_email,
             access_token=credentials.token  # <--- ESTO EVITA EL ERROR DE LA PRIVATE KEY
         )
-        
+
         return {
             "uploadUrl": upload_url,
             "gcsPath": gcs_path
@@ -476,6 +518,37 @@ async def request_upload_url():
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error creando la Signed URL: {str(e)}")
+
+
+@router.get("/cfdi/pdf/{job_id}/download-url", response_model=DownloadUrlResponse)
+async def get_pdf_download_url(job_id: str):
+    """
+    Signed URL de lectura para un PDF individual ya listo — el navegador
+    descarga directo de GCS, sin pasar por Cloud Run ni por el rewrite de
+    Vercel (evita el límite de 120s de proxies externos para lotes grandes).
+    """
+    status_bytes = await redis_client.get(f"pdf:status:{job_id}")
+    if not status_bytes or status_bytes.decode("utf-8") != "done":
+        raise HTTPException(status_code=404, detail="El PDF aún no está listo o expiró.")
+
+    try:
+        credentials, service_account_email = _get_signing_credentials()
+        storage_client = storage.Client(credentials=credentials)
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"pdfs/{job_id}.pdf")
+
+        download_url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(minutes=15),
+            method="GET",
+            response_disposition=f'attachment; filename="cfdi_{job_id}.pdf"',
+            service_account_email=service_account_email,
+            access_token=credentials.token,
+        )
+        return {"downloadUrl": download_url}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error creando la Signed URL de descarga: {str(e)}")
 
 
 async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: str):
@@ -550,6 +623,12 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
         await redis_client.delete(f"pdf:extracting:{batch_id}")
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
+        # El ZIP original ya no se necesita para nada más una vez extraído
+        # (con éxito o error) — no esperamos al lifecycle de 1 día del bucket.
+        try:
+            await asyncio.to_thread(blob.delete)
+        except Exception as cleanup_err:
+            print(f"Aviso: no se pudo borrar {gcs_path} de GCS: {cleanup_err}")
 
 @router.post("/cfdi/pdf/start-zip-gcs")
 async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload, background_tasks: BackgroundTasks):
