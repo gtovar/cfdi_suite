@@ -5,21 +5,32 @@
 main
 
 ## Último cambio
-CFDI Suite Fase 2 completada: Consultas SAT vía Diverza.
-- Backend: `routers/sat_enquiry.py` — POST /api/sat/enquiry (individual), POST /api/sat/enquiry/batch
-  (xlsx upload → SSE progreso → job_id), GET /api/sat/enquiry/batch/{job_id}/result (descarga xlsx).
-  Lógica: parsing robusto de respuesta JSON de Diverza, regla "No cancelable estatus", 20 conexiones
-  concurrentes con httpx.Limits. Deps añadidas: httpx, openpyxl, python-multipart.
-- Frontend: `ConsultasSATPage.tsx` (batch: drop xlsx, barra de progreso SSE, descarga),
-  `OperacionesPage.tsx` (card Consultas SAT ahora clickable), `InspectorHeader.tsx` (botón
-  "Consultar SAT" + chip de resultado inline), `useSatEnquiry.ts` (hook), `sat-enquiry-api-client.ts`.
-- Tests: 13 nuevos backend (24 total) + 51 frontend pasan.
+Conversión masiva ZIP→PDF estabilizada (2026-07-10): progreso en tiempo real vía Pusher (Fase C).
+- Diagnóstico con logs: el batch atorado en 98% fue saturación (cola despachaba 100 tareas contra
+  10 instancias × concurrency=1; con maxAttempts=3 y backoff 0.1s las tareas morían en <1s).
+  Cola ajustada: `--max-concurrent-dispatches=8 --max-attempts=10 --min-backoff=5s`.
+- `concurrency=1` es OBLIGATORIO: probado concurrency=5 bajo carga → signal 6 (heap nativo corrupto)
+  reapareció a los ~4 min. Documentado en `backend/cloudbuild.yaml`.
+- Fase C: workers publican avance a Pusher (canal `pdf-batch-{id}`, cada 5 archivos) vía
+  `services/realtime.py` + `_publish_batch_tick`; frontend usa `watchBatchProgress`
+  (snapshot vía nuevo GET /batch/{id}/status + eventos Pusher + reconciliación 30s).
+  SSE conservado como fallback. Ver `docs/progreso-tiempo-real-pusher.md`.
+- Además: techo de 600s a streams SSE, pausa de EventSource con pestaña oculta, batchId persistido
+  en localStorage (sobrevive refresh), fix popup blocker en descargas (`location.assign`),
+  Sentry.init en frontend, `--max-instances=10` alineado entre cloudbuild.yaml y deploy-backend.yml.
 
 ## Próximo paso
-1. Sesión B (pendiente): implementar `cfdi.findings` ricos desde python-satcfdi
-2. CFDI Suite Fase 3: Reprint PDF/XML vía Diverza
+1. Probar Fase C con batch grande (barra vía Pusher hasta 100%, consumo Redis mínimo).
+2. OOM del ZIP consolidado: streaming real en `download_batch_zip` (hoy bufferea ~1,800 PDFs en RAM → 503).
+3. Investigar causa raíz de signal 6 (única salida para subir concurrency).
+4. Arreglar integración git de Vercel (deploys por push fallan en 0ms; usar `vercel deploy --prod` manual).
+5. Progreso de descarga 0→100% (punto 11 de la bitácora).
 
 ## Riesgos abiertos
+- Signal 6 (heap nativo) sin causa raíz — bloquea concurrency>1; NO subir concurrency sin re-probar.
+- `download_batch_zip` truena por OOM con lotes grandes (2Gi de RAM insuficientes).
+- Límites del plan free de Pusher (conexiones/mensajes) sin verificar contra volumen real.
+- Credenciales de Pusher hardcodeadas en `backend/.env` versionado; Redis de pruebas con password expuesta (deliberado, rotar al salir de pruebas).
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos
 - Obligación "Implement a secrets detection strategy" en governance server requiere cierre manual
 - `~/.cfdi-suite/secret.key` es la llave maestra; si se pierde, las credenciales guardadas no son recuperables
