@@ -77,15 +77,13 @@ Detalle de lo implementado:
   `window.open()` después de un `await` — ya no cuenta como gesto del usuario y el popup blocker
   lo cancela en silencio (mismo motivo por el que `handleDownloadReadyFile` ya usaba
   `window.location.assign` en vez de `open`). Corregido antes de probar.
-- Confirmado (Cloud Run prod) que `ALLOWED_ORIGINS` ya incluye `https://cfdiinspector.vercel.app`,
-  así que el nuevo endpoint `/estimated-size` y el `fetch()` directo al ZIP no deberían chocar con
-  CORS en producción — sin verificar aún con un batch real, solo por lectura de config.
-- **No probado**: el flujo completo end-to-end vía UI con un batch real subido a través de Cloud
-  Tasks (requiere infra que no se puede simular en local sin desplegar a canario). Lo que sí se
-  probó: la lógica de Redis (`estimated-size`) vía HTTP real contra el Redis de pruebas, y la
-  lógica de `downloadWithProgress` vía tests unitarios con streams mockeados que replican el
-  comportamiento real de headers (sin `Content-Length` para el ZIP, con `Content-Length` real para
-  el PDF individual vía GCS).
+- `ALLOWED_ORIGINS` (Cloud Run prod) incluye `https://cfdiinspector.vercel.app` — confirmado tanto
+  por lectura de config como, después, por los dos HAR reales (headers `access-control-allow-origin`
+  correctos en ambas descargas de prueba, ver arriba). Sin sorpresas de CORS en producción.
+- El flujo completo end-to-end vía UI con batches reales (Cloud Tasks real, no simulado) SÍ se
+  probó — dos veces, con HAR auditado, ver el bloque de arriba. Antes del primer deploy solo se
+  había probado local/unitario (Redis de pruebas + tests con streams mockeados); la verificación
+  end-to-end con Cloud Tasks real solo era posible una vez desplegado, y ya se hizo.
 
 **Durante este deploy se encontró y corrigió un bug real del pipeline (ver detalle completo en
 "Riesgos abiertos" → Pin de tráfico de Cloud Run).** Resumen: el push del backend reportó
