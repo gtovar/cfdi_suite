@@ -93,11 +93,13 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-1. Cuando se quiera subir `concurrency` por encima de 1: repetir la prueba de carga usando
-   `mil_facturas_prueba.zip` (el mismo ZIP de la prueba que ya pasó el 2026-07-10 — confirmado con
-   el usuario 2026-07-11 que 1,600 de sus 2,000 archivos son XMLs reales de Miniso con miles de
-   conceptos cada uno, no XMLs simples; ver corrección en "Riesgos abiertos" → Signal 6), ahora con
-   `concurrency>1`, antes de tocar `cloudbuild.yaml`/`deploy-backend.yml` de forma permanente.
+1. **La prueba de `concurrency>1` ya se corrió (2026-07-11, canario `cfdi-suite-api-00120-xud`,
+   `concurrency=5`, `mil_facturas_prueba.zip`) y el resultado fue negativo — signal 6 SÍ
+   reapareció, 3 veces. Ver "Riesgos abiertos" → Signal 6 para el detalle completo. NO subir
+   `concurrency` en `cloudbuild.yaml`/`deploy-backend.yml` hasta encontrar y corregir la causa real
+   (el fix de `spawn` no fue suficiente).** Próximo paso real: diagnosticar por qué persiste el
+   crash bajo concurrencia (revisar Sentry del canario, descartar otras libs nativas además de
+   gRPC, evaluar si es contención de recursos entre `ProcessPoolExecutor`s simultáneos).
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
 3. (Sugerido, sin empezar) **Indicador de versión visible en la app** — hoy verificar qué commit
@@ -131,15 +133,25 @@ veces con HAR real, ver "Último cambio" arriba.)
   "exitoso" no parece reflejarse en producción, correr
   `gcloud run services describe cfdi-suite-api --region=us-central1 --format="value(status.traffic)"`
   y confirmar que diga `latestRevision: True` — si no, repetir `--to-latest`.
-- Signal 6: fix aplicado a la causa con evidencia real (gRPC+fork→`spawn`). **Corrección
-  2026-07-11**: se documentó antes que "la rama de >2000 conceptos nunca se activó en la prueba de
-  2,000 XMLs reales" — es falso. Confirmado con el usuario que `mil_facturas_prueba.zip` (el ZIP
-  usado en esa prueba, sin cambios desde entonces) contiene **1,600 de sus 2,000 archivos** como
-  XMLs reales de Miniso con miles de conceptos cada uno (no sintéticos, no una minoría — el 80%
-  del batch). Esa prueba SÍ ejercitó la rama de signal 6 bajo carga real, a `concurrency=1`, y
-  pasó 2000/2000 sin error. Lo único que sigue sin probarse bajo carga real es específicamente
-  `concurrency>1` — no subir concurrency sin correr esa misma prueba (u otra con XMLs complejos
-  reales) a `concurrency>1` primero.
+- **Signal 6: SIGUE SIN RESOLVERSE — confirmado que reaparece bajo `concurrency>1`, probado en
+  canario el 2026-07-11, cero impacto en producción.** El fix de `spawn` (gRPC+fork→spawn) NO es
+  suficiente por sí solo bajo concurrencia real. Prueba: revisión canario `cfdi-suite-api-00120-xud`
+  (tag `canary-c5`, `concurrency=5`, `API_URL` y `ALLOWED_ORIGINS` apuntados a sí misma para no
+  escapar tráfico a producción — producción siguió 100% en `00095-78r` durante toda la prueba, sin
+  tráfico ni tocar `cloudbuild.yaml`/`deploy-backend.yml`), mismo `mil_facturas_prueba.zip` de
+  siempre (1,600/2,000 XMLs reales de Miniso con miles de conceptos). Resultado: **3 crashes reales
+  de "Uncaught signal: 6" / "Container terminated on signal 6"** en los logs de Cloud Run
+  (08:27:47, 08:39:40, 08:41:36 UTC). El batch terminó "limpio" en apariencia (1998/2000, 2 errores,
+  100%) solo porque Cloud Tasks reintentó automáticamente los trabajos que se quedaron a medias
+  cuando la instancia murió — el pipeline es resiliente a nivel de batch, pero el crash en sí sigue
+  ahí. **No subir `concurrency` por encima de 1 en producción — el riesgo está confirmado, no es
+  ya solo hipotético.** Pendiente: diagnosticar por qué `spawn` no bastó (¿otra librería nativa
+  además de gRPC+`CloudTasksClient`? ¿contención de recursos entre `ProcessPoolExecutor`s
+  concurrentes en el mismo proceso?) antes de proponer un fix nuevo.
+  (Contexto previo, sigue vigente: a `concurrency=1` la misma prueba con los mismos XMLs complejos
+  pasó 2000/2000 sin error — ver corrección anterior sobre "nunca se activó en la prueba de 2,000
+  XMLs reales", que sí era falsa. La rama de >2000 conceptos se ejercita bien a `concurrency=1`;
+  el problema es específicamente la combinación con `concurrency>1`.)
 - Límites del plan free de Pusher (conexiones/mensajes) sin verificar contra volumen real.
 - Credenciales de Pusher hardcodeadas en `backend/.env` versionado; Redis de pruebas con password expuesta (deliberado, rotar al salir de pruebas).
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos
