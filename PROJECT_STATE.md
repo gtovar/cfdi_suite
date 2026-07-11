@@ -36,20 +36,39 @@ descargas si se hubiera desplegado sin probar.
 - Vercel: **descartado como problema real** — no había integración git rota, era un `.vercel/`
   local sobrante (ya borrado). El deploy real es 100% GitHub Actions (`deploy-frontend.yml`).
 
-**Nota sobre el pipeline de deploy:** el repo tiene DOS mecanismos de deploy de backend
-(`gcloud builds submit` manual con canary, y `deploy-backend.yml` disparado por cualquier
-`git push` a `main` que toque `backend/**`, sin canario — despliega directo a 100%). Al pushear
-el commit `fc26374` (toca backend Y frontend a la vez) para desplegar el frontend, se disparó
-también un redeploy redundante de backend vía GitHub Actions — mismo código ya verificado, así
-que no representó riesgo, pero generó una revisión (`00094-t9b`) que quedó "Retired" sin servir
-tráfico real (0 requests en sus logs) mientras la revisión ya promovida manualmente (`00113-log`)
-se mantuvo sirviendo 100%. Comportamiento no explicado del todo — vigilar si se repite.
+**Nota sobre el pipeline de deploy — CAUSA RAÍZ ENCONTRADA Y CORREGIDA (2026-07-11):** el repo
+tiene DOS mecanismos de deploy de backend (`gcloud builds submit` manual con canary, y
+`deploy-backend.yml` disparado por cualquier `git push` a `main` que toque `backend/**`, sin
+canario). Lo que en la sesión anterior quedó como "comportamiento no explicado" (revisión
+`00094-t9b` retirada sin servir tráfico) **no era un bug de Cloud Run — era la promoción manual
+de `00113-log`**: `gcloud run services update-traffic --to-revisions=...` fija el tráfico a esa
+revisión **por nombre explícito**, no al alias `LATEST`. Desde ese momento, cada deploy automático
+vía `deploy-backend.yml` construía una revisión nueva pero el `ReplaceService` que emite
+`google-github-actions/deploy-cloudrun@v2` **reenviaba el mismo pin explícito** en vez de moverlo
+a la revisión recién creada (confirmado leyendo el request body real en el audit log de Cloud Run:
+`traffic: [{percent:100, revisionName: "00113-log"}, ...]`). Resultado: **todo push a main que
+tocara backend entre la promoción manual de `00113-log` y el 2026-07-11 creaba una revisión que
+nunca sirvió tráfico real**, aunque el workflow reportara "success".
 
-## Próximo paso
-Los 3 fixes de la sesión anterior ya están en producción. Sigue pendiente (sin empezar):
+Corregido el 2026-07-11 con `gcloud run services update-traffic cfdi-suite-api --region=us-central1
+--to-latest` — el servicio ahora sigue al alias `LATEST` (100% siempre a la revisión más nueva) en
+vez de a un nombre fijo; el tag `canary` se quedó apuntando a `00113-log` sin tráfico, disponible
+para pruebas manuales vía su URL etiquetada. **Mientras el servicio se quede en modo `--to-latest`,
+los pushes futuros a main sí deberían mover tráfico automáticamente** — si alguien vuelve a hacer
+una promoción manual por nombre de revisión, este problema puede repetirse; verificar
+`gcloud run services describe cfdi-suite-api --region=us-central1 --format="value(status.traffic)"`
+después de cualquier promoción manual para confirmar que sigue diciendo `latestRevision: True`.
 
-1. **Progreso de descarga 0→100% — implementado el 2026-07-11, probado localmente, sin
-   deployar todavía (esperando confirmación explícita).** Cambios sin commitear:
+## Último cambio desplegado (completo, no pendiente)
+**Progreso de descarga 0→100% — implementado, probado localmente, commiteado
+   (`1164fe7`) y DESPLEGADO el 2026-07-11.** Backend en Cloud Run `cfdi-suite-api-00095-78r`
+   (sirviendo 100% vía `LATEST`), frontend en Vercel vía `deploy-frontend.yml`. Verificado en
+   producción: `GET /api/cfdi/pdf/batch/<batch-inexistente>/estimated-size` responde
+   `{"estimatedBytes":0,"knownCount":0,"totalCount":0}` (200 OK). **No verificado en producción**:
+   el flujo completo de descarga con un batch real (ZIP grande, PDF individual) — solo se probó
+   local/unitario antes del deploy; sería bueno correr un batch de prueba chico desde la UI real
+   para confirmar que la barra de progreso se ve y se comporta como se espera. Detalle de lo
+   implementado:
    - `backend/app/routers/pdf.py`: `internal_generate_pdf` guarda `pdf:size:{job_id}` (bytes del
      PDF, TTL 86400s, mismo patrón que `pdf:status:{job_id}`) justo tras generarlo. Nuevo endpoint
      `GET /cfdi/pdf/batch/{batch_id}/estimated-size` que suma esos tamaños vía `mget` (mismo patrón
@@ -84,13 +103,23 @@ Los 3 fixes de la sesión anterior ya están en producción. Sigue pendiente (si
      lógica de `downloadWithProgress` vía tests unitarios con streams mockeados que replican el
      comportamiento real de headers (sin `Content-Length` para el ZIP, con `Content-Length` real
      para el PDF individual vía GCS).
-2. Cuando se quiera subir `concurrency` por encima de 1: volver a correr una prueba de carga real
+
+## Próximo paso
+1. Cuando se quiera subir `concurrency` por encima de 1: volver a correr una prueba de carga real
    (XMLs con >2000 conceptos incluidos, para ejercitar la rama de signal 6 que la prueba de 2,000
    XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.
-3. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
+2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
+3. (Sugerido, sin empezar) Correr un batch de prueba chico desde la UI real de producción para
+   confirmar visualmente que la barra de progreso de descarga se comporta como se espera (ver nota
+   arriba sobre lo no verificado en producción).
 
 ## Riesgos abiertos
+- **Pin de tráfico de Cloud Run**: una promoción manual por nombre de revisión (`--to-revisions=`)
+  rompe el auto-deploy de `deploy-backend.yml` en silencio (crea revisiones que nunca sirven
+  tráfico, el workflow igual reporta "success") — ver nota completa arriba. El servicio quedó en
+  modo `--to-latest` el 2026-07-11; verificar que se mantenga así tras cualquier promoción manual
+  futura.
 - Signal 6: fix aplicado a la causa con evidencia real (gRPC+fork) y verificado funcionalmente en
   local y en canario para el camino normal, pero la condición exacta de producción (gRPC channel
   vivo + >2000 conceptos) NO se ha reproducido bajo carga real con concurrency>1 — no subir
