@@ -5,8 +5,23 @@
 main
 
 ## Último cambio
-**Signal 6: causa real encontrada y corregida — verificado dos veces en canario, código listo
-pero SIN commitear ni desplegar a producción todavía (2026-07-11).**
+**Signal 6: causa real encontrada y corregida — verificado dos veces en canario, commiteado
+(`e1d8238`), pusheado, y CONFIRMADO EN PRODUCCIÓN (revisión `cfdi-suite-api-00100-qmr`,
+`concurrency=1` sin cambiar, 2026-07-11).**
+
+**Incidente durante el despliegue — el pin de tráfico volvió a pasar, esta vez autoinfligido**: el
+push activó `deploy-backend.yml` y GitHub Actions reportó "success", pero el tráfico se quedó
+100% en la revisión vieja (`00095-78r`, sin el fix) — mis propios deploys manuales del canario
+(`gcloud run deploy --tag=canary-c5 --no-traffic`, usados para las pruebas) dejaron el servicio
+con el tráfico fijado por nombre de revisión en vez de seguir `LATEST`, exactamente el mismo
+patrón de bug ya documentado abajo (Riesgos abiertos → Pin de tráfico), solo que esta vez lo causé
+yo con los canarios, no una promoción manual del dashboard. Corregido con
+`gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest` (confirmado
+por el usuario aparte, como acción de producción). Verificado después: `commit-sha: e1d8238...`,
+`concurrency: 1`, servicio saludable (`/docs` 200). **Regla reforzada**: cualquier `gcloud run
+deploy` con `--tag`/`--no-traffic` (incluyendo para canarios de prueba) puede repinnear el
+tráfico — correr `--to-latest` después de terminar de usar un canario, no solo tras promociones
+manuales por nombre.
 
 - Confirmado primero que el riesgo era real: revisión canario `cfdi-suite-api-00120-xud`
   (`concurrency=5`, sin tráfico de producción) con `mil_facturas_prueba.zip` (1,600/2,000 XMLs
@@ -42,12 +57,10 @@ pero SIN commitear ni desplegar a producción todavía (2026-07-11).**
   `concurrency=1`, todo el tiempo. Ambos canarios usaron `API_URL` y `ALLOWED_ORIGINS` apuntados a
   sí mismos para que ni el tráfico de Cloud Tasks ni las pruebas desde `localhost:3000` tocaran
   producción.
-- **Pendiente, sin decidir todavía**: el código vive solo en el working tree (`backend/app/routers/
-  pdf.py`, `backend/app/services/canvas_service.py`, `backend/app/services/pdf_pipeline.py`), sin
-  commit ni push. Falta decidir si se commitea/pushea (con `concurrency=1` en `cloudbuild.yaml`/
-  `deploy-backend.yml` sin cambiar, el deploy automático no subiría concurrency por sí solo) y,
-  por separado, si/cuándo subir `concurrency` en producción — ambas son acciones de producción que
-  requieren confirmación explícita aparte.
+- **Pendiente, sin decidir todavía**: el fix ya está en producción, pero `concurrency` sigue en 1
+  (sin cambiar). Falta decidir a qué valor subirlo — la recomendación es `5` exacto, porque es el
+  único valor probado dos veces en canario; `10` o más no tiene evidencia real detrás y necesitaría
+  su propia ronda de canario antes de asumir que funciona igual de bien.
 
 ## Historial (progreso de descarga 0→100%, ya en producción)
 **Implementado, desplegado el 2026-07-11 (`1164fe7`), y VERIFICADO con datos reales de producción
@@ -138,12 +151,10 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-1. **El fix de signal 6 ya está verificado dos veces en canario (ver "Último cambio") pero sigue
-   sin commitear, sin pushear, y sin desplegar a producción.** Decisiones pendientes, cada una
-   requiere confirmación explícita por separado: (a) ¿commitear y pushear el código? (con
-   `cloudbuild.yaml`/`deploy-backend.yml` sin tocar, seguiría desplegando a `concurrency=1`, así
-   que el push por sí solo no cambia el comportamiento de producción); (b) ¿cuándo y a qué valor
-   subir `concurrency` en producción, una vez el código con el fix ya esté desplegado?
+1. **El fix de signal 6 ya está en producción (commit `e1d8238`, revisión `00100-qmr`, ver
+   "Último cambio").** Solo falta subir `concurrency` — recomendado `5` exacto (único valor
+   probado dos veces en canario); requiere confirmación explícita aparte antes de tocar
+   `cloudbuild.yaml`/`deploy-backend.yml` y desplegar.
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
 3. (Sugerido, sin empezar) **Indicador de versión visible en la app** — hoy verificar qué commit
@@ -181,15 +192,15 @@ veces con HAR real, ver "Último cambio" arriba.)
   "exitoso" no parece reflejarse en producción, correr
   `gcloud run services describe cfdi-suite-api --region=us-central1 --format="value(status.traffic)"`
   y confirmar que diga `latestRevision: True` — si no, repetir `--to-latest`.
-- **Signal 6: causa real encontrada, fix verificado dos veces en canario — pendiente de
-  commitear/pushear/desplegar a producción (ver "Último cambio" para el detalle completo).**
-  Resumen: `mp_context="spawn"` (fix anterior) no bastaba porque solo aislaba la tabla de
-  conceptos cuando el XML tenía >2000 conceptos — WeasyPrint (header) y pypdf (merge) seguían
-  corriendo siempre en el proceso compartido de la petición. Confirmado con canario real: código
-  viejo (`00120-xud`) crasheó 3 veces bajo `concurrency=5` con `mil_facturas_prueba.zip`; código
-  con el fix (`00121-kiy`), mismo ZIP, mismo `concurrency=5`, **2000/2000 sin error, cero
-  crashes**. Producción no se tocó en ninguna prueba, sigue en `concurrency=1`. **No subir
-  `concurrency` en producción hasta que el código con el fix esté desplegado ahí.**
+- **Signal 6: fix verificado dos veces en canario y CONFIRMADO EN PRODUCCIÓN (`00100-qmr`,
+  commit `e1d8238`, 2026-07-11) — ver "Último cambio" para el detalle completo.** Resumen:
+  `mp_context="spawn"` (fix anterior) no bastaba porque solo aislaba la tabla de conceptos cuando
+  el XML tenía >2000 conceptos — WeasyPrint (header) y pypdf (merge) seguían corriendo siempre en
+  el proceso compartido de la petición. Confirmado con canario real: código viejo (`00120-xud`)
+  crasheó 3 veces bajo `concurrency=5` con `mil_facturas_prueba.zip`; código con el fix
+  (`00121-kiy`), mismo ZIP, mismo `concurrency=5`, **2000/2000 sin error, cero crashes**. El fix
+  ya está en producción, pero `concurrency` sigue en 1 (sin cambiar) — subirlo es la única parte
+  que falta, y solo `5` tiene evidencia real detrás.
 - Límites del plan free de Pusher (conexiones/mensajes) sin verificar contra volumen real.
 - Credenciales de Pusher hardcodeadas en `backend/.env` versionado; Redis de pruebas con password expuesta (deliberado, rotar al salir de pruebas).
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos
