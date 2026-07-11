@@ -101,7 +101,6 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
-  const lastReadyFetchDoneRef = useRef(0);
   const restoredBatchRef = useRef(false);
 
   useEffect(() => {
@@ -110,16 +109,6 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
       folderInputRef.current.setAttribute('directory', '');
     }
   }, []);
-
-  // Va llenando la tabla de descargas individuales conforme el contador de
-  // "Listos" sube — solo pide la lista cuando hay archivos nuevos, no en
-  // cada tick del progreso (que llega cada segundo).
-  useEffect(() => {
-    if (!batchId || !batchProgress) return;
-    if (batchProgress.done <= lastReadyFetchDoneRef.current) return;
-    lastReadyFetchDoneRef.current = batchProgress.done;
-    fetchReadyFileIds(batchId).then(setReadyFileIds).catch(() => {});
-  }, [batchId, batchProgress?.done]);
 
   const done = entries.filter((e) => e.state === 'done').length;
   const errors = entries.filter((e) => e.state === 'error').length;
@@ -177,7 +166,6 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     setBatchConnState(null);
     setBatchError(null);
     setReadyFileIds([]);
-    lastReadyFetchDoneRef.current = 0;
     localStorage.removeItem(ACTIVE_BATCH_KEY);
   }
 
@@ -189,13 +177,31 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   // Escucha el progreso vía Pusher (snapshot inicial + eventos en vivo +
   // reconciliación cada 30s). No lanza: los cortes de conexión se reportan
   // en batchError para mostrarse inline, sin alert() bloqueante.
+  //
+  // Los IDs listos para descarga individual viajan dentro de cada tick
+  // (progress.readyIds) en vez de pedirse aparte — antes esto disparaba un
+  // GET /ready-files por tick (O(n) sobre todo el batch en Redis, ~371
+  // llamadas en un lote de 2,000). Al terminar se reconcilia una vez con
+  // fetchReadyFileIds por si algún tick con readyIds no llegó a publicarse.
   const listenToBatch = useCallback(async (id: string) => {
     setBatchError(null);
     setBatchConnState(null);
     try {
       await watchBatchProgress(
         id,
-        (progress) => setBatchProgress(progress),
+        (progress) => {
+          setBatchProgress(progress);
+          if (progress.readyIds?.length) {
+            setReadyFileIds((prev) => {
+              const seen = new Set(prev);
+              const additions = progress.readyIds!.filter((jid) => !seen.has(jid));
+              return additions.length ? [...prev, ...additions] : prev;
+            });
+          }
+          if (progress.status === 'done') {
+            fetchReadyFileIds(id).then(setReadyFileIds).catch(() => {});
+          }
+        },
         (state, attempt) => setBatchConnState({ state, attempt }),
       );
       setPhase('done');
@@ -230,6 +236,9 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
         pending: saved.total,
         percentage: 0
       });
+      // Hidratación única: cualquier archivo terminado antes de que el
+      // listener de Pusher esté conectado no se pierde.
+      fetchReadyFileIds(saved.batchId).then(setReadyFileIds).catch(() => {});
       void listenToBatch(saved.batchId);
     } catch {
       localStorage.removeItem(ACTIVE_BATCH_KEY);

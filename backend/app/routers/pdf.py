@@ -116,6 +116,12 @@ async def _publish_batch_tick(batch_id: str, *, definitive_error: bool = False):
     if processed < total and processed % PUBLISH_EVERY_N_JOBS != 0 and not definitive_error:
         return
 
+    # Job IDs recién terminados desde el último tick, para que el frontend
+    # llene la tabla de descargas individuales sin volver a pedir /ready-files
+    # (que antes se llamaba en cada tick e iba O(n) sobre todo el batch).
+    ready_ids_raw = await redis_client.lpop(f"pdf:ready_recent:{batch_id}", 200)
+    ready_ids = [rid.decode("utf-8") for rid in ready_ids_raw] if ready_ids_raw else []
+
     payload = {
         "status": "done" if processed >= total else "processing",
         "total": total,
@@ -124,6 +130,7 @@ async def _publish_batch_tick(batch_id: str, *, definitive_error: bool = False):
         "converting": 0,
         "pending": max(total - processed, 0),
         "percentage": int((processed / total) * 100),
+        "readyIds": ready_ids,
     }
     await asyncio.to_thread(publish_batch_progress, batch_id, payload)
 
@@ -188,6 +195,8 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         print(f"PDF {payload.job_id} guardado con éxito.")
         if payload.batch_id:
             try:
+                await redis_client.rpush(f"pdf:ready_recent:{payload.batch_id}", payload.job_id)
+                await redis_client.expire(f"pdf:ready_recent:{payload.batch_id}", 3600)
                 await _publish_batch_tick(payload.batch_id)
             except Exception as tick_err:
                 print(f"Aviso: tick de progreso no publicado para {payload.batch_id}: {tick_err}")

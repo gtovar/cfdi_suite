@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 from concurrent.futures import ProcessPoolExecutor
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, get_context
 
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib import colors as rl_colors
@@ -692,7 +692,15 @@ def render_conceptos(
     chunks = [rows[i:i + _CHUNK_SIZE] for i in range(0, len(rows), _CHUNK_SIZE)]
     starts = [i * _CHUNK_SIZE for i in range(len(chunks))]
 
-    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+    # mp_context="spawn" explícito: el default de Linux es "fork", que copia
+    # el proceso completo tal cual está en ese instante — incluyendo el canal
+    # de gRPC ya abierto de CloudTasksClient (task_dispatcher.py). gRPC no
+    # soporta fork() con un canal vivo; es una causa documentada de
+    # corrupción nativa (visto en Sentry: TSI_DATA_CORRUPTED en
+    # google.api_core.grpc_helpers) y de aborts de heap (signal 6). Las
+    # funciones ya eran spawn-safe (están en el módulo, picklables) — solo
+    # faltaba forzar el modo.
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=get_context("spawn")) as ex:
         futures = [ex.submit(_render_first_chunk, chunks[0], cfdi_data, skip_header_card, header_reserve, render_config)]
         for chunk, start in zip(chunks[1:-1], starts[1:-1]):
             futures.append(ex.submit(_render_chunk, chunk, start, render_config))

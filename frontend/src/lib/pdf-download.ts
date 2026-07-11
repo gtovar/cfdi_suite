@@ -19,6 +19,9 @@ export interface BatchProgressPayload {
   pending: number;
   percentage: number;
   message?: string;
+  // Job IDs terminados desde el tick anterior — evita que el frontend tenga
+  // que volver a pedir /ready-files (O(n) sobre todo el batch) en cada tick.
+  readyIds?: string[];
 }
 
 export function triggerBlobDownload(blob: Blob, filename: string): void {
