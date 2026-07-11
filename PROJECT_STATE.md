@@ -47,10 +47,26 @@ se mantuvo sirviendo 100%. Comportamiento no explicado del todo — vigilar si s
 
 ## Próximo paso
 Los 3 fixes de la sesión anterior ya están en producción. Sigue pendiente (sin empezar):
-1. Progreso de descarga 0→100% (punto 11 de la bitácora).
+
+1. **Progreso de descarga 0→100%.** Origen: bitácora de sesión del 2026-07-10 (artifact
+   `claude.ai/code/artifact/ee641292-593b-4f89-874e-4a394ca37b76`, 11 puntos — los otros 10 ya se
+   verificaron resueltos el 2026-07-11 releyendo el código, así que esta referencia ya no hace
+   falta mantenerla viva). El problema exacto, confirmado leyendo el código actual: tanto
+   `handleDownloadBatchZip` como `handleDownloadReadyFile` en `ConversionMasivaPage.tsx` disparan
+   la descarga con `window.open`/`window.location.assign` a una URL directa — eso delega el 100%
+   del progreso al navegador nativo, sin ningún hook hacia la app. No hay barra, spinner ni
+   porcentaje mientras se descarga un ZIP grande o un PDF individual. La *subida* del ZIP sí tiene
+   esto resuelto (`XMLHttpRequest` + `xhr.upload.onprogress`) — es el mismo patrón, pero para
+   descarga: reemplazar la navegación directa por `fetch` + `ReadableStream`/`response.body.getReader()`
+   leyendo `Content-Length` para calcular el porcentaje, y usar `triggerBlobDownload` (ya existe en
+   `pdf-download.ts`) para entregar el blob al terminar. Ver si aplica igual a ZIP consolidado
+   (streaming, tamaño total conocido por `Content-Length`) y a PDF individual (mismo patrón, blob
+   más chico).
 2. Cuando se quiera subir `concurrency` por encima de 1: volver a correr una prueba de carga real
    (XMLs con >2000 conceptos incluidos, para ejercitar la rama de signal 6 que la prueba de 2,000
    XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.
+3. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
+   pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
 
 ## Riesgos abiertos
 - Signal 6: fix aplicado a la causa con evidencia real (gRPC+fork) y verificado funcionalmente en
