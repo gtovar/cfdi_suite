@@ -141,6 +141,35 @@ veces con HAR real, ver "Último cambio" arriba.)
 - Token personal de Sentry generado en una sesión anterior quedó expuesto en el chat — recomendado revocarlo desde Sentry (Settings → Developer Settings → Personal Tokens) una vez cerrado el diagnóstico de signal 6.
 
 ## Historial reciente (ya en producción, para referencia)
+
+**0. Arquitectura Fase C — progreso en tiempo real vía Pusher (commits `8dc4a6e`, `24cfef6`,
+2026-07-10 15:07-15:29). Esta entrada se había perdido de este documento en una reescritura
+posterior (`6a46c81`) y se restauró tras auditar el historial de commits — todo lo siguiente
+sigue vigente en el código y la infra, reverificado en vivo:**
+- Diagnóstico con logs del batch que se atoraba en 98%: saturación de cola (100 tareas despachadas
+  contra 10 instancias × `concurrency=1`; con `maxAttempts=3` y backoff de 0.1s las tareas morían
+  en <1s). Cola de Cloud Tasks (`pdf-generator-queue`) ajustada a
+  `maxConcurrentDispatches=8, maxAttempts=10, minBackoff=5s` — confirmado en vivo con
+  `gcloud tasks queues describe`, sigue exacto.
+- `concurrency=1` es obligatorio: `concurrency=5` bajo carga reprodujo signal 6 (heap nativo
+  corrupto) a los ~4 min. Documentado en `backend/cloudbuild.yaml` y `deploy-backend.yml`
+  (`--max-instances=10` alineado entre ambos).
+- Workers publican avance a Pusher (canal `pdf-batch-{batch_id}`, cada 5 archivos):
+  `_publish_batch_tick` (`backend/app/routers/pdf.py`) cuenta el progreso con `INCR` atómico y
+  llama a `publish_batch_progress` (`backend/app/services/realtime.py`), que dispara el evento a
+  Pusher. Frontend usa `watchBatchProgress` (`frontend/src/lib/pdf-download.ts`): snapshot vía
+  `GET /api/cfdi/pdf/batch/{id}/status` + eventos Pusher + reconciliación cada 30s. SSE se
+  conserva como fallback. Detalle de arquitectura en `docs/progreso-tiempo-real-pusher.md`.
+- Techo de 600s a streams SSE (`SSE_MAX_STREAM_SECONDS` en `backend/app/routers/pdf.py`), y
+  pausa de `EventSource` cuando la pestaña queda oculta (`visibilitychange` en `pdf-download.ts`)
+  — evita quemar conexiones con pestañas olvidadas abiertas.
+- **`batchId` persistido en `localStorage` (`cfdi-active-batch`, tope 45 min,
+  `ConversionMasivaPage.tsx`): si el usuario recarga la página a medio batch, el frontend detecta
+  el lote en curso y reconecta a su progreso vía Pusher en vez de obligarlo a resubir el ZIP.**
+- Fix de popup blocker en descargas: `window.location.assign` en vez de `window.open` (los
+  navegadores cancelan `open()` en silencio si no sigue directo a un gesto del usuario).
+- `Sentry.init` en frontend (`frontend/src/main.tsx`), con el DSN del backend como fallback.
+
 Prueba de carga de Fase C con 2,000 XMLs PASÓ (2026-07-10, concurrency=1: 2000/2000 sin error,
 cero signal 6/429/500). A partir de ahí, tres fixes escritos y desplegados antes del cambio de
 arriba:
