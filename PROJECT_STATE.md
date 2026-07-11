@@ -20,18 +20,24 @@ con datos reales de producción (batch de 150 PDFs, HAR completo auditado).** Ba
 - `pdf:size:{job_id}` se registró para los 150/150 PDFs del batch (`knownCount == totalCount` en la
   respuesta real de `estimated-size`) — confirma que el guardado en `internal_generate_pdf`
   funciona al 100%, no solo en el caso feliz probado en local.
-- **Bug real encontrado y corregido tras la auditoría — commiteado (`a028b02`) y DESPLEGADO el
-  2026-07-11 (solo frontend vía `deploy-frontend.yml`, no tocó backend)**: el ZIP se estimó en
-  93.3MB pero el ZIP comprimido real pesó 62.3MB (los PDFs ya traen su propia compresión interna,
-  así que el DEFLATE del ZIP les saca menos jugo del asumido) — la barra de progreso nunca llegaba
-  a mostrar 100%, se quedaba en ~67% y el botón desaparecía de golpe en cuanto el navegador
-  terminaba de recibir el stream. Corregido: al terminar con éxito (ZIP o PDF individual), se
-  fuerza `loaded = total` y se mantiene visible ~400-500ms antes de que el botón vuelva a su estado
-  normal, para que el usuario sí vea el 100% en vez de un corte abrupto. Cambio en
-  `frontend/src/components/ConversionMasivaPage.tsx` únicamente. **No re-verificado en producción
-  con un batch real tras este último fix** (sí se verificó sintaxis + los 5 tests unitarios de
-  `pdf-download.test.ts`, que no cubren esta pantalla específica) — si se quiere cerrar el círculo,
-  falta un último vistazo visual rápido a que la barra ahora sí llegue a 100%.
+- **Bug real encontrado y corregido tras la auditoría — commiteado (`a028b02`), DESPLEGADO el
+  2026-07-11 (solo frontend vía `deploy-frontend.yml`, no tocó backend) y RE-VERIFICADO con un
+  segundo HAR real tras el fix**: el ZIP se estimó en 93.3MB pero el ZIP comprimido real pesó
+  62.3MB (los PDFs ya traen su propia compresión interna, así que el DEFLATE del ZIP les saca menos
+  jugo del asumido) — la barra de progreso nunca llegaba a mostrar 100%, se quedaba en ~67% y el
+  botón desaparecía de golpe en cuanto el navegador terminaba de recibir el stream. Corregido: al
+  terminar con éxito (ZIP o PDF individual), se fuerza `loaded = total` y se mantiene visible
+  ~400-500ms antes de que el botón vuelva a su estado normal. Cambio en
+  `frontend/src/components/ConversionMasivaPage.tsx` únicamente.
+
+  **Segunda auditoría post-fix (2026-07-11, batch de 20 archivos, HAR + bundle `index-DdZN1BCM.js`
+  confirmado como el deploy nuevo)**: dos descargas completas del ZIP separadas por ~10.4s (clics
+  deliberados, no doble-disparo), cero errores HTTP en toda la sesión. El ratio estimado/real se
+  repitió casi idéntico al primer batch (11.79MB estimado vs 7.86MB real = 67%, contra 93.3MB vs
+  62.3MB = 67% del batch anterior) — confirma que el hueco de compresión es un patrón consistente,
+  no una casualidad de un batch en particular, así que el fix aplica de forma general y no es un
+  parche para un caso aislado. Con esto la feature completa (barra 0→100% para ZIP y PDF individual)
+  queda verificada con datos reales, no solo con impresión visual del usuario.
 - El PDF individual sí llega exacto a 100% de forma natural (`Content-Length` real de GCS, sin
   estimación de por medio) — el ajuste ahí es solo para que la transición al estado final se vea
   igual de consistente, no porque tuviera el mismo bug.
@@ -85,10 +91,9 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
    XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
-3. (Sugerido, sin empezar) Verificar visualmente en producción que la barra de descarga del ZIP
-   ahora sí llega a 100% antes de desaparecer (fix `a028b02`) — la auditoría del HAR anterior ya
-   confirmó que el flujo funciona correctamente end-to-end, solo falta confirmar el ajuste visual
-   del salto a 100%.
+
+(El progreso de descarga 0→100% ya no tiene pendientes — implementado, desplegado y verificado dos
+veces con HAR real, ver "Último cambio" arriba.)
 
 ## Riesgos abiertos
 - **Pin de tráfico de Cloud Run (causa raíz encontrada y corregida 2026-07-11)**: promover tráfico
