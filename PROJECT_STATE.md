@@ -6,50 +6,57 @@ main
 
 ## Último cambio
 Prueba de carga de Fase C con 2,000 XMLs PASÓ (2026-07-10, concurrency=1: 2000/2000 sin error,
-cero signal 6/429/500). A partir de ahí, tres fixes escritos; **fix 1 de 3 ya desplegado y
-promovido a 100% en producción**, los otros dos siguen en el working tree sin commitear:
+cero signal 6/429/500). A partir de ahí, tres fixes escritos — **los 3 ya están desplegados y
+promovidos a 100% en producción** (backend + frontend):
 
-**Desplegado (commit `81b3b84`, revisión Cloud Run `cfdi-suite-api-00111-huy`, 100% tráfico):**
-- `backend/app/routers/pdf.py` → `download_batch_zip` reescrito con streaming real (antes
-  bufferaba TODO el lote 2 veces en RAM → OOM/503 con lotes grandes, confirmado en la prueba de
-  2,000 XMLs). Verificado local (2,000 PDFs reales, ~800MB, RSS pico ~115MB) y en canario contra
-  GCS/Redis reales antes de promover. La verificación local encontró y corrigió un bug real de la
-  primera versión del fix: `asyncio.create_task(asyncio.gather(...))` lanza `TypeError` porque
-  `gather()` devuelve un Future, no una corrutina — habría roto el 100% de las descargas si se
-  hubiera desplegado sin probar.
+**1. Commit `81b3b84`, revisión Cloud Run `cfdi-suite-api-00111-huy`:**
+`download_batch_zip` reescrito con streaming real (antes bufferaba TODO el lote 2 veces en RAM →
+OOM/503 con lotes grandes). Verificado local (2,000 PDFs reales, ~800MB, RSS pico ~115MB) y en
+canario contra GCS/Redis reales antes de promover. La verificación local encontró y corrigió un
+bug real de la primera versión del fix: `asyncio.create_task(asyncio.gather(...))` lanza
+`TypeError` porque `gather()` devuelve un Future, no una corrutina — habría roto el 100% de las
+descargas si se hubiera desplegado sin probar.
 
-**Pendientes (sin commitear, working tree):**
-- `backend/app/routers/pdf.py` (resto) — IDs de PDFs listos viajan dentro del tick de Pusher
-  (`readyIds`) en vez de que el frontend pida `/ready-files` en cada tick (antes: 371 llamadas
-  O(n) sobre Redis en 18 min → ahora ~2).
-- `backend/app/services/canvas_service.py` — causa raíz de signal 6 encontrada (evento real en
-  Sentry: `TSI_DATA_CORRUPTED` en gRPC) y fix aplicado: `ProcessPoolExecutor` ahora fuerza
-  `mp_context="spawn"` en vez del `fork` por default de Linux, que copiaba el canal gRPC ya
-  abierto de `CloudTasksClient` — gRPC no soporta fork con un canal vivo. Probado funcionalmente
-  (2,500 filas sintéticas, PDF válido de 46 páginas), pero la rama que lo dispara (CFDI con >2000
-  conceptos) nunca se activó en la prueba de 2,000 XMLs reales — puede no ser la única causa.
-- `frontend/src/lib/pdf-download.ts` y `frontend/src/components/ConversionMasivaPage.tsx` —
-  contraparte del fix de `readyIds`.
+**2. Commit `fc26374`, revisión Cloud Run `cfdi-suite-api-00113-log` + Vercel (deploy frontend
+2026-07-11 03:29 UTC):**
+- `pdf.py`: IDs de PDFs listos viajan dentro del tick de Pusher (`readyIds`) en vez de que el
+  frontend pida `/ready-files` en cada tick (antes: 371 llamadas O(n) sobre Redis en 18 min).
+  Verificado end-to-end contra el contenedor canario real (llamada directa a
+  `/api/internal/generate-pdf` simulando Cloud Tasks): el rpush respeta el umbral de publicación
+  y `_publish_batch_tick` drena `ready_recent` correctamente al completar el batch.
+- `canvas_service.py`: `ProcessPoolExecutor` fuerza `mp_context="spawn"` en vez de `fork` (que
+  copiaba el canal gRPC ya abierto de `CloudTasksClient` — causa raíz confirmada en Sentry,
+  `TSI_DATA_CORRUPTED`). Verificado localmente con 2,500 filas sintéticas bajo spawn (PDF válido
+  de 46 páginas, sin `BrokenProcessPool`). **No se pudo reproducir en canario la condición exacta
+  de producción** (canal gRPC ya abierto + >2000 conceptos en el mismo proceso) porque Cloud
+  Tasks siempre apunta a la URL principal, no a la etiquetada `canary` — sigue como riesgo
+  abierto hasta que se pruebe bajo carga real con concurrency>1.
+- Frontend (`pdf-download.ts`, `ConversionMasivaPage.tsx`): consumen `readyIds` del tick en vez
+  de pedir `/ready-files`, con una reconciliación única al terminar o restaurar batch.
 - Vercel: **descartado como problema real** — no había integración git rota, era un `.vercel/`
-  local sobrante en la raíz del repo (ya borrado, cero impacto en producción). El deploy real
-  sigue siendo 100% GitHub Actions (`deploy-frontend.yml`), que ya funcionaba bien.
+  local sobrante (ya borrado). El deploy real es 100% GitHub Actions (`deploy-frontend.yml`).
+
+**Nota sobre el pipeline de deploy:** el repo tiene DOS mecanismos de deploy de backend
+(`gcloud builds submit` manual con canary, y `deploy-backend.yml` disparado por cualquier
+`git push` a `main` que toque `backend/**`, sin canario — despliega directo a 100%). Al pushear
+el commit `fc26374` (toca backend Y frontend a la vez) para desplegar el frontend, se disparó
+también un redeploy redundante de backend vía GitHub Actions — mismo código ya verificado, así
+que no representó riesgo, pero generó una revisión (`00094-t9b`) que quedó "Retired" sin servir
+tráfico real (0 requests en sus logs) mientras la revisión ya promovida manualmente (`00113-log`)
+se mantuvo sirviendo 100%. Comportamiento no explicado del todo — vigilar si se repite.
 
 ## Próximo paso
-Desplegar los 2 fixes restantes, con verificación entre cada uno — pedir confirmación explícita
-antes de cada deploy real:
-1. ~~Probar `download_batch_zip` localmente contra GCS real antes de desplegar.~~ Hecho.
-2. ~~Deploy aislado del fix del ZIP → canary → verificar descarga real → promover.~~ Hecho
-   (commit `81b3b84`, revisión `00111-huy`, 100% tráfico).
-3. Deploy aislado de `readyIds`/Pusher + signal 6 (van juntos porque ambos tocan `pdf.py` y
-   `canvas_service.py`) → canary → batch de prueba → confirmar en logs que `/ready-files` casi no
-   se llama y que no hay signal 6.
-4. Progreso de descarga 0→100% (punto 11 de la bitácora, sigue sin tocarse).
+Los 3 fixes de la sesión anterior ya están en producción. Sigue pendiente (sin empezar):
+1. Progreso de descarga 0→100% (punto 11 de la bitácora).
+2. Cuando se quiera subir `concurrency` por encima de 1: volver a correr una prueba de carga real
+   (XMLs con >2000 conceptos incluidos, para ejercitar la rama de signal 6 que la prueba de 2,000
+   XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.
 
 ## Riesgos abiertos
-- Signal 6: fix aplicado a la causa con evidencia real (gRPC+fork), pero NO se ha re-probado bajo
-  carga real con concurrency>1 — no subir concurrency sin verificar primero con el fix desplegado.
-- readyIds y signal 6 aún no están desplegados — el estado en producción para esos dos sigue
-  siendo el de antes (`ready-files` O(n) por tick, signal 6 sin mitigar).
+- Signal 6: fix aplicado a la causa con evidencia real (gRPC+fork) y verificado funcionalmente en
+  local y en canario para el camino normal, pero la condición exacta de producción (gRPC channel
+  vivo + >2000 conceptos) NO se ha reproducido bajo carga real con concurrency>1 — no subir
+  concurrency sin verificar primero.
 - Límites del plan free de Pusher (conexiones/mensajes) sin verificar contra volumen real.
 - Credenciales de Pusher hardcodeadas en `backend/.env` versionado; Redis de pruebas con password expuesta (deliberado, rotar al salir de pruebas).
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos
