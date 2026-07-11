@@ -41,6 +41,15 @@ con datos reales de producción (batch de 150 PDFs, HAR completo auditado).** Ba
 - El PDF individual sí llega exacto a 100% de forma natural (`Content-Length` real de GCS, sin
   estimación de por medio) — el ajuste ahí es solo para que la transición al estado final se vea
   igual de consistente, no porque tuviera el mismo bug.
+- **CONFIRMADO — feature cerrada, sin pendientes.** El usuario preguntó cómo verificar por su
+  cuenta (sin depender de que Claude lea el hash del bundle en consola) qué versión está probando.
+  Respuesta que queda como referencia: frontend → pestaña "Deployments" en vercel.com, el marcado
+  "Production" muestra el commit SHA exacto; backend →
+  `gcloud run revisions describe <revisión-activa> --region=us-central1 --format="value(metadata.labels.'commit-sha')"`
+  (la revisión activa se ve con `gcloud run services describe cfdi-suite-api --region=us-central1
+  --format="table(status.traffic[0].revisionName, status.traffic[0].percent)"`). Confirmado así que
+  la revisión `00095-78r` (100% del tráfico) tiene `commit-sha: 1164fe74e98db84bd88832eb7f1770e444b713ab`,
+  exactamente el commit de la feature.
 
 Detalle de lo implementado:
 - `backend/app/routers/pdf.py`: `internal_generate_pdf` guarda `pdf:size:{job_id}` (bytes del PDF,
@@ -91,6 +100,13 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
    XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
+3. (Sugerido, sin empezar) **Indicador de versión visible en la app** — hoy verificar qué commit
+   está sirviendo producción requiere `gcloud`/Vercel dashboard (ver comandos exactos en "Último
+   cambio" arriba). El usuario preguntó cómo confirmarlo sin depender de que Claude lea el hash del
+   bundle en la consola del navegador; decidió dejarlo pendiente por ahora. Si se retoma: backend
+   `/api/version` devolviendo `commit-sha` (ya viaja como label de Cloud Run, ver
+   `deploy-backend.yml`) + mostrarlo en el frontend (footer o similar, usando
+   `VERCEL_GIT_COMMIT_SHA` que Vercel expone automáticamente en el build).
 
 (El progreso de descarga 0→100% ya no tiene pendientes — implementado, desplegado y verificado dos
 veces con HAR real, ver "Último cambio" arriba.)
