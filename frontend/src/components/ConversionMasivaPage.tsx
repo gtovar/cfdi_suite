@@ -21,6 +21,9 @@ import {
   getBatchDownloadUrl,
   fetchReadyFileIds,
   fetchPdfDownloadUrl,
+  fetchZipEstimatedSize,
+  downloadWithProgress,
+  ZIP_PROGRESS_SIZE_LIMIT_BYTES,
   Semaphore,
 } from '../lib/pdf-download';
 
@@ -97,6 +100,12 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const [batchConnState, setBatchConnState] = useState<{ state: 'connected' | 'reconnecting'; attempt: number } | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
   const [readyFileIds, setReadyFileIds] = useState<string[]>([]);
+
+  // Progreso de descarga (0-100%) del ZIP consolidado y de PDFs individuales.
+  // null = sin descarga en curso; percentage null = tamaño desconocido (no
+  // debería pasar salvo fallback, en cuyo caso ni se llega a usar este estado).
+  const [zipDownloadProgress, setZipDownloadProgress] = useState<{ loaded: number; total: number | null } | null>(null);
+  const [fileDownloadProgress, setFileDownloadProgress] = useState<Record<string, { loaded: number; total: number | null }>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -306,23 +315,55 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     if (!cancelledRef.current) setPhase('done');
   }, [entries, isZipMode, zipFile, templateId]);
 
-  function handleDownloadBatchZip() {
+  async function handleDownloadBatchZip() {
     if (!batchId) return;
-    // Directo a Cloud Run (bypasea el rewrite de Vercel, que corta a los
-    // 120s — insuficiente para armar un ZIP de cientos/miles de PDFs)
-    window.open(getBatchDownloadUrl(batchId), '_blank');
+    const downloadUrl = getBatchDownloadUrl(batchId);
+
+    // El ZIP se arma al vuelo en el backend (streaming) y no tiene
+    // Content-Length real, así que usamos la suma de tamaños originales de
+    // los PDFs como estimado. Si es desconocido o el lote es muy grande,
+    // fetch+ReadableStream retendría el archivo completo en memoria del
+    // navegador antes de poder guardarlo — mejor la descarga nativa sin
+    // barra de progreso que arriesgar tronar la pestaña.
+    const estimate = await fetchZipEstimatedSize(batchId);
+    const knownTotal = estimate?.knownCount ? estimate.estimatedBytes : null;
+    if (knownTotal === null || knownTotal > ZIP_PROGRESS_SIZE_LIMIT_BYTES) {
+      // window.open tras un await ya no cuenta como gesto del usuario y el
+      // popup blocker lo cancela en silencio (mismo motivo que
+      // handleDownloadReadyFile usa window.location.assign en vez de open).
+      window.location.assign(downloadUrl);
+      return;
+    }
+
+    setZipDownloadProgress({ loaded: 0, total: knownTotal });
+    try {
+      const blob = await downloadWithProgress(downloadUrl, knownTotal, (loaded, total) => {
+        setZipDownloadProgress({ loaded, total });
+      });
+      triggerBlobDownload(blob, `resultado_pdfs_${batchId}.zip`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setZipDownloadProgress(null);
+    }
   }
 
   async function handleDownloadReadyFile(jobId: string) {
+    setFileDownloadProgress((prev) => ({ ...prev, [jobId]: { loaded: 0, total: null } }));
     try {
       const url = await fetchPdfDownloadUrl(jobId);
-      // window.open tras un await ya no cuenta como gesto del usuario y el
-      // popup blocker lo cancela en silencio; navegar en la misma pestaña
-      // dispara la descarga (la signed URL responde con Content-Disposition:
-      // attachment) sin abandonar la SPA.
-      window.location.assign(url);
+      const blob = await downloadWithProgress(url, null, (loaded, total) => {
+        setFileDownloadProgress((prev) => ({ ...prev, [jobId]: { loaded, total } }));
+      });
+      triggerBlobDownload(blob, `cfdi_${jobId}.pdf`);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFileDownloadProgress((prev) => {
+        const next = { ...prev };
+        delete next[jobId];
+        return next;
+      });
     }
   }
 
@@ -557,35 +598,75 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                   </span>
                 </div>
                 <div className="max-h-64 overflow-auto">
-                  {readyFileIds.map((jobId, i) => (
-                    <div
-                      key={jobId}
-                      className={clsx(
-                        'flex items-center justify-between gap-3 px-3 py-1.5 text-xs',
-                        i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
-                      )}
-                    >
-                      <span className="truncate font-mono text-gray-600">Factura {i + 1}</span>
-                      <button
-                        onClick={() => handleDownloadReadyFile(jobId)}
-                        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-green-600 hover:bg-green-50"
+                  {readyFileIds.map((jobId, i) => {
+                    const dl = fileDownloadProgress[jobId];
+                    const pct = dl?.total ? Math.min(99, Math.round((dl.loaded / dl.total) * 100)) : null;
+                    return (
+                      <div
+                        key={jobId}
+                        className={clsx(
+                          'flex items-center justify-between gap-3 px-3 py-1.5 text-xs',
+                          i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                        )}
                       >
-                        <Download size={11} /> PDF
-                      </button>
-                    </div>
-                  ))}
+                        <span className="truncate font-mono text-gray-600">Factura {i + 1}</span>
+                        <button
+                          onClick={() => handleDownloadReadyFile(jobId)}
+                          disabled={!!dl}
+                          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-green-600 hover:bg-green-50 disabled:opacity-60"
+                        >
+                          {dl ? (
+                            <>
+                              <Loader2 size={11} className="animate-spin" />
+                              {pct !== null ? `${pct}%` : formatBytes(dl.loaded)}
+                            </>
+                          ) : (
+                            <>
+                              <Download size={11} /> PDF
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
-            {/* Botón único de descarga consolidada */}
+            {/* Botón único de descarga consolidada, o su barra de progreso
+                mientras fetch + ReadableStream trae el ZIP */}
             {batchProgress.status === 'done' && (
-              <button
-                onClick={handleDownloadBatchZip}
-                className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-700 shadow-sm"
-              >
-                <Download size={16} /> Descargar paquete de PDFs final (.ZIP)
-              </button>
+              zipDownloadProgress ? (
+                <div className="mt-2 w-full rounded-xl border border-green-200 bg-green-50 px-4 py-3">
+                  <div className="mb-2 flex items-center justify-between text-xs font-medium text-green-800">
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 size={13} className="animate-spin" /> Descargando ZIP…
+                    </span>
+                    <span className="tabular-nums">
+                      {zipDownloadProgress.total
+                        ? `${Math.min(99, Math.round((zipDownloadProgress.loaded / zipDownloadProgress.total) * 100))}%`
+                        : formatBytes(zipDownloadProgress.loaded)}
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-green-100">
+                    <div
+                      className="h-full bg-green-600 transition-all duration-300 rounded-full"
+                      style={{
+                        width: zipDownloadProgress.total
+                          ? `${Math.min(99, Math.round((zipDownloadProgress.loaded / zipDownloadProgress.total) * 100))}%`
+                          : '100%',
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={handleDownloadBatchZip}
+                  className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-700 shadow-sm"
+                >
+                  <Download size={16} /> Descargar paquete de PDFs final (.ZIP)
+                </button>
+              )
             )}
           </div>
         )}

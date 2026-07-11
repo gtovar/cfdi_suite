@@ -180,8 +180,12 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(f"pdfs/{payload.job_id}.pdf")
         await asyncio.to_thread(blob.upload_from_string, pdf_bytes, content_type="application/pdf")
-        
+
         await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=86400)
+        # Tamaño en bytes, guardado aquí (ya lo tenemos en memoria) para que la
+        # descarga del ZIP consolidado pueda estimar el progreso sin tener que
+        # volver a golpear GCS por metadata de cada PDF del lote.
+        await redis_client.set(f"pdf:size:{payload.job_id}", str(len(pdf_bytes)).encode(), ex=86400)
         await redis_client.delete(f"pdf:xml:{payload.job_id}")
         
         # 3️⃣ NUEVO: Borramos el XML temporal de GCS para no dejar basura
@@ -456,6 +460,32 @@ async def list_ready_files(batch_id: str):
         if status_bytes and status_bytes.decode("utf-8") == "done"
     ]
     return {"jobIds": ready}
+
+
+@router.get("/cfdi/pdf/batch/{batch_id}/estimated-size")
+async def batch_estimated_size(batch_id: str):
+    """
+    Suma los tamaños (bytes originales, no comprimidos) de los PDFs ya
+    generados del lote — el frontend la usa para decidir si puede mostrar
+    una barra de progreso real al descargar el ZIP (fetch + ReadableStream,
+    que retiene el archivo completo en memoria) o si el lote es demasiado
+    grande y conviene la descarga nativa del navegador sin progreso.
+    El ZIP comprime, así que el tamaño final real será algo menor a esta suma.
+    """
+    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
+    if not registered_raw:
+        return {"estimatedBytes": 0, "knownCount": 0, "totalCount": 0}
+
+    job_ids = [rid.decode("utf-8") for rid in registered_raw]
+    keys = [f"pdf:size:{jid}" for jid in job_ids]
+    sizes_raw = await redis_client.mget(keys)
+
+    known_sizes = [int(s) for s in sizes_raw if s]
+    return {
+        "estimatedBytes": sum(known_sizes),
+        "knownCount": len(known_sizes),
+        "totalCount": len(job_ids),
+    }
 
 
 @router.get("/cfdi/pdf/batch/{batch_id}/download")

@@ -48,20 +48,42 @@ se mantuvo sirviendo 100%. Comportamiento no explicado del todo — vigilar si s
 ## Próximo paso
 Los 3 fixes de la sesión anterior ya están en producción. Sigue pendiente (sin empezar):
 
-1. **Progreso de descarga 0→100%.** Origen: bitácora de sesión del 2026-07-10 (artifact
-   `claude.ai/code/artifact/ee641292-593b-4f89-874e-4a394ca37b76`, 11 puntos — los otros 10 ya se
-   verificaron resueltos el 2026-07-11 releyendo el código, así que esta referencia ya no hace
-   falta mantenerla viva). El problema exacto, confirmado leyendo el código actual: tanto
-   `handleDownloadBatchZip` como `handleDownloadReadyFile` en `ConversionMasivaPage.tsx` disparan
-   la descarga con `window.open`/`window.location.assign` a una URL directa — eso delega el 100%
-   del progreso al navegador nativo, sin ningún hook hacia la app. No hay barra, spinner ni
-   porcentaje mientras se descarga un ZIP grande o un PDF individual. La *subida* del ZIP sí tiene
-   esto resuelto (`XMLHttpRequest` + `xhr.upload.onprogress`) — es el mismo patrón, pero para
-   descarga: reemplazar la navegación directa por `fetch` + `ReadableStream`/`response.body.getReader()`
-   leyendo `Content-Length` para calcular el porcentaje, y usar `triggerBlobDownload` (ya existe en
-   `pdf-download.ts`) para entregar el blob al terminar. Ver si aplica igual a ZIP consolidado
-   (streaming, tamaño total conocido por `Content-Length`) y a PDF individual (mismo patrón, blob
-   más chico).
+1. **Progreso de descarga 0→100% — implementado el 2026-07-11, probado localmente, sin
+   deployar todavía (esperando confirmación explícita).** Cambios sin commitear:
+   - `backend/app/routers/pdf.py`: `internal_generate_pdf` guarda `pdf:size:{job_id}` (bytes del
+     PDF, TTL 86400s, mismo patrón que `pdf:status:{job_id}`) justo tras generarlo. Nuevo endpoint
+     `GET /cfdi/pdf/batch/{batch_id}/estimated-size` que suma esos tamaños vía `mget` (mismo patrón
+     que `list_ready_files`) — necesario porque **la suposición original de esta nota estaba mal**:
+     `download_batch_zip` es un `StreamingResponse` que arma el ZIP al vuelo, así que nunca tiene
+     `Content-Length` real (el tamaño final no se conoce hasta terminar de comprimir el último PDF).
+     Verificado con HTTP real contra el Redis de pruebas (`estimated-size` devuelve la suma correcta,
+     ignorando jobs sin tamaño registrado).
+   - `frontend/src/lib/pdf-download.ts`: `downloadWithProgress(url, knownTotal, onProgress)` — fetch
+     + `ReadableStream`/`getReader()`, usa `Content-Length` si existe o el `knownTotal` externo si no
+     (caso del ZIP). `fetchZipEstimatedSize(batchId)` pega al endpoint nuevo. Cubierto por
+     `pdf-download.test.ts` (nuevo, 5 tests, mockeando `fetch`/`ReadableStream`).
+   - `frontend/src/components/ConversionMasivaPage.tsx`: `handleDownloadReadyFile` usa
+     `downloadWithProgress` siempre (el PDF individual es una signed URL de GCS que sí trae
+     `Content-Length` real — confirmado que el bucket ya tiene CORS `origin: "*"` para GET).
+     `handleDownloadBatchZip` primero pide el tamaño estimado; si se desconoce (batches con PDFs
+     generados antes de este deploy, sin `pdf:size`) o supera `ZIP_PROGRESS_SIZE_LIMIT_BYTES` (500MB),
+     cae a la navegación directa de siempre (sin barra) — decisión explícita del usuario, porque
+     fetch+ReadableStream retiene el ZIP completo en memoria del navegador antes de poder guardarlo
+     (a diferencia de `window.open`, que deja al navegador nativo ir escribiendo a disco), y un lote
+     muy grande podría tronar la pestaña.
+   - Bug encontrado y corregido durante la verificación: la primera versión del fallback usaba
+     `window.open()` después de un `await` — ya no cuenta como gesto del usuario y el popup blocker
+     lo cancela en silencio (mismo motivo por el que `handleDownloadReadyFile` ya usaba
+     `window.location.assign` en vez de `open`). Corregido antes de probar.
+   - Confirmado (Cloud Run prod) que `ALLOWED_ORIGINS` ya incluye `https://cfdiinspector.vercel.app`,
+     así que el nuevo endpoint `/estimated-size` y el `fetch()` directo al ZIP no deberían chocar con
+     CORS en producción — sin verificar aún en canario real, solo por lectura de config.
+   - **No probado**: el flujo completo end-to-end vía UI con un batch real subido a través de Cloud
+     Tasks (requiere infra que no se puede simular en local sin desplegar a canario). Lo que sí se
+     probó: la lógica de Redis (`estimated-size`) vía HTTP real contra el Redis de pruebas, y la
+     lógica de `downloadWithProgress` vía tests unitarios con streams mockeados que replican el
+     comportamiento real de headers (sin `Content-Length` para el ZIP, con `Content-Length` real
+     para el PDF individual vía GCS).
 2. Cuando se quiera subir `concurrency` por encima de 1: volver a correr una prueba de carga real
    (XMLs con >2000 conceptos incluidos, para ejercitar la rama de signal 6 que la prueba de 2,000
    XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.

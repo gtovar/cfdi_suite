@@ -350,6 +350,66 @@ export async function fetchPdfDownloadUrl(jobId: string): Promise<string> {
   return data.downloadUrl;
 }
 
+// Suma de tamaños (bytes originales) de los PDFs ya generados del lote —
+// el ZIP se arma al vuelo en el backend (streaming, sin Content-Length real
+// posible), así que esto es lo más cercano a un tamaño total conocido de
+// antemano para poder mostrar una barra de progreso real.
+export async function fetchZipEstimatedSize(batchId: string): Promise<{ estimatedBytes: number; knownCount: number; totalCount: number } | null> {
+  try {
+    const res = await fetch(resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/estimated-size");
+    if (!res.ok) return null;
+    return await res.json() as { estimatedBytes: number; knownCount: number; totalCount: number };
+  } catch {
+    return null;
+  }
+}
+
+// Por encima de este tamaño (estimado), la descarga con fetch + ReadableStream
+// se descarta: retiene el archivo completo en memoria del navegador antes de
+// poder guardarlo (a diferencia de window.open, que deja al navegador nativo
+// ir escribiendo a disco), y un lote muy grande podría tronar la pestaña.
+export const ZIP_PROGRESS_SIZE_LIMIT_BYTES = 500 * 1024 * 1024;
+
+// Descarga con progreso real vía fetch + ReadableStream, leyendo los chunks
+// conforme llegan. `knownTotal` permite pasar un tamaño estimado externo
+// (caso del ZIP, cuyo Content-Length no existe porque se arma al vuelo);
+// si no se pasa, se usa el Content-Length de la respuesta (caso de los PDFs
+// individuales, que sí lo tienen porque GCS sirve un objeto ya existente).
+export async function downloadWithProgress(
+  url: string,
+  knownTotal: number | null,
+  onProgress: (loaded: number, total: number | null) => void,
+): Promise<Blob> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Error ${res.status} al descargar`);
+
+  const contentLength = res.headers.get('Content-Length');
+  const total = knownTotal ?? (contentLength ? parseInt(contentLength, 10) : null);
+  const contentType = res.headers.get('Content-Type') || 'application/octet-stream';
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    // Navegador sin soporte de streaming en fetch: sin progreso incremental,
+    // pero la descarga en sí sigue funcionando igual.
+    const blob = await res.blob();
+    onProgress(blob.size, total ?? blob.size);
+    return blob;
+  }
+
+  const chunks: BlobPart[] = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      loaded += value.byteLength;
+      onProgress(loaded, total);
+    }
+  }
+  return new Blob(chunks, { type: contentType });
+}
+
 export class Semaphore {
   private _n: number;
   private _q: (() => void)[] = [];
