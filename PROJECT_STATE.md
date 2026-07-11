@@ -93,9 +93,11 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-1. Cuando se quiera subir `concurrency` por encima de 1: volver a correr una prueba de carga real
-   (XMLs con >2000 conceptos incluidos, para ejercitar la rama de signal 6 que la prueba de 2,000
-   XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.
+1. Cuando se quiera subir `concurrency` por encima de 1: repetir la prueba de carga usando
+   `mil_facturas_prueba.zip` (el mismo ZIP de la prueba que ya pasó el 2026-07-10 — confirmado con
+   el usuario 2026-07-11 que 1,600 de sus 2,000 archivos son XMLs reales de Miniso con miles de
+   conceptos cada uno, no XMLs simples; ver corrección en "Riesgos abiertos" → Signal 6), ahora con
+   `concurrency>1`, antes de tocar `cloudbuild.yaml`/`deploy-backend.yml` de forma permanente.
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
 3. (Sugerido, sin empezar) **Indicador de versión visible en la app** — hoy verificar qué commit
@@ -129,10 +131,15 @@ veces con HAR real, ver "Último cambio" arriba.)
   "exitoso" no parece reflejarse en producción, correr
   `gcloud run services describe cfdi-suite-api --region=us-central1 --format="value(status.traffic)"`
   y confirmar que diga `latestRevision: True` — si no, repetir `--to-latest`.
-- Signal 6: fix aplicado a la causa con evidencia real (gRPC+fork) y verificado funcionalmente en
-  local y en canario para el camino normal, pero la condición exacta de producción (gRPC channel
-  vivo + >2000 conceptos) NO se ha reproducido bajo carga real con concurrency>1 — no subir
-  concurrency sin verificar primero.
+- Signal 6: fix aplicado a la causa con evidencia real (gRPC+fork→`spawn`). **Corrección
+  2026-07-11**: se documentó antes que "la rama de >2000 conceptos nunca se activó en la prueba de
+  2,000 XMLs reales" — es falso. Confirmado con el usuario que `mil_facturas_prueba.zip` (el ZIP
+  usado en esa prueba, sin cambios desde entonces) contiene **1,600 de sus 2,000 archivos** como
+  XMLs reales de Miniso con miles de conceptos cada uno (no sintéticos, no una minoría — el 80%
+  del batch). Esa prueba SÍ ejercitó la rama de signal 6 bajo carga real, a `concurrency=1`, y
+  pasó 2000/2000 sin error. Lo único que sigue sin probarse bajo carga real es específicamente
+  `concurrency>1` — no subir concurrency sin correr esa misma prueba (u otra con XMLs complejos
+  reales) a `concurrency>1` primero.
 - Límites del plan free de Pusher (conexiones/mensajes) sin verificar contra volumen real.
 - Credenciales de Pusher hardcodeadas en `backend/.env` versionado; Redis de pruebas con password expuesta (deliberado, rotar al salir de pruebas).
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos
@@ -194,8 +201,11 @@ descargas si se hubiera desplegado sin probar.
   `TSI_DATA_CORRUPTED`). Verificado localmente con 2,500 filas sintéticas bajo spawn (PDF válido
   de 46 páginas, sin `BrokenProcessPool`). No se pudo reproducir en canario la condición exacta de
   producción (canal gRPC ya abierto + >2000 conceptos en el mismo proceso) porque Cloud Tasks
-  siempre apunta a la URL principal, no a la etiquetada `canary` — sigue como riesgo abierto (ver
-  arriba) hasta que se pruebe bajo carga real con concurrency>1.
+  siempre apunta a la URL principal, no a la etiquetada `canary`. **Nota 2026-07-11**: esto seguía
+  siendo cierto para la prueba en canario específica, pero la prueba de carga real de 2,000 XMLs
+  (no canario, tráfico principal) sí incluyó la condición completa vía `mil_facturas_prueba.zip`
+  — ver corrección en "Riesgos abiertos" → Signal 6. Sigue como riesgo abierto únicamente para
+  `concurrency>1`.
 - Frontend (`pdf-download.ts`, `ConversionMasivaPage.tsx`): consumen `readyIds` del tick en vez
   de pedir `/ready-files`, con una reconciliación única al terminar o restaurar batch.
 - Vercel: descartado como problema real — no había integración git rota, era un `.vercel/` local
