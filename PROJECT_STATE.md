@@ -176,6 +176,11 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
    borrado por un primer intento exitoso (`free() ` no, este es distinto — 404 "No such object")
    sigue sin corregirse; no afecta el resultado del batch (Cloud Tasks lo absorbe), solo genera
    ruido en Sentry. Ver detalle en el historial de la sesión del 2026-07-11 si se retoma.
+5. **No es un pendiente de ejecución, es exploración abierta**: `docs/investigacion-escalamiento-
+   masivo.md` — plática iniciada 2026-07-11 sobre si la arquitectura actual aguantaría volúmenes
+   masivos (30,000+ PDFs/min), con números reales de costo (Cloud Run vs. Compute Engine/spot vs.
+   Cloud Batch) e hipótesis sin confirmar (perfilar `generate()`, aclarar si el volumen sería pico
+   o sostenido). Sin código tocado, sin decisión tomada — solo para retomar la conversación.
 
 (El progreso de descarga 0→100% ya no tiene pendientes — implementado, desplegado y verificado dos
 veces con HAR real, ver "Último cambio" arriba.)
