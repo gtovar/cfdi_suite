@@ -20,15 +20,18 @@ con datos reales de producción (batch de 150 PDFs, HAR completo auditado).** Ba
 - `pdf:size:{job_id}` se registró para los 150/150 PDFs del batch (`knownCount == totalCount` en la
   respuesta real de `estimated-size`) — confirma que el guardado en `internal_generate_pdf`
   funciona al 100%, no solo en el caso feliz probado en local.
-- **Bug real encontrado y corregido tras la auditoría**: el ZIP se estimó en 93.3MB pero el ZIP
-  comprimido real pesó 62.3MB (los PDFs ya traen su propia compresión interna, así que el DEFLATE
-  del ZIP les saca menos jugo del asumido) — la barra de progreso nunca llegaba a mostrar 100%, se
-  quedaba en ~67% y el botón desaparecía de golpe en cuanto el navegador terminaba de recibir el
-  stream. Corregido: al terminar con éxito (ZIP o PDF individual), se fuerza `loaded = total` y se
-  mantiene visible ~400-500ms antes de que el botón vuelva a su estado normal, para que el usuario
-  sí vea el 100% en vez de un corte abrupto. Cambio en `frontend/src/components/
-  ConversionMasivaPage.tsx` únicamente (no toca backend) — pendiente de commit/push/deploy, esperando
-  confirmación explícita del usuario antes de cada paso.
+- **Bug real encontrado y corregido tras la auditoría — commiteado (`a028b02`) y DESPLEGADO el
+  2026-07-11 (solo frontend vía `deploy-frontend.yml`, no tocó backend)**: el ZIP se estimó en
+  93.3MB pero el ZIP comprimido real pesó 62.3MB (los PDFs ya traen su propia compresión interna,
+  así que el DEFLATE del ZIP les saca menos jugo del asumido) — la barra de progreso nunca llegaba
+  a mostrar 100%, se quedaba en ~67% y el botón desaparecía de golpe en cuanto el navegador
+  terminaba de recibir el stream. Corregido: al terminar con éxito (ZIP o PDF individual), se
+  fuerza `loaded = total` y se mantiene visible ~400-500ms antes de que el botón vuelva a su estado
+  normal, para que el usuario sí vea el 100% en vez de un corte abrupto. Cambio en
+  `frontend/src/components/ConversionMasivaPage.tsx` únicamente. **No re-verificado en producción
+  con un batch real tras este último fix** (sí se verificó sintaxis + los 5 tests unitarios de
+  `pdf-download.test.ts`, que no cubren esta pantalla específica) — si se quiere cerrar el círculo,
+  falta un último vistazo visual rápido a que la barra ahora sí llegue a 100%.
 - El PDF individual sí llega exacto a 100% de forma natural (`Content-Length` real de GCS, sin
   estimación de por medio) — el ajuste ahí es solo para que la transición al estado final se vea
   igual de consistente, no porque tuviera el mismo bug.
@@ -82,9 +85,10 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
    XMLs nunca activó) antes de tocar `cloudbuild.yaml`/`deploy-backend.yml`.
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
-3. (Sugerido, sin empezar) Correr un batch de prueba chico desde la UI real de producción para
-   confirmar visualmente que la barra de progreso de descarga se comporta como se espera — es lo
-   único del punto anterior que no se verificó en producción real, solo local/unitario.
+3. (Sugerido, sin empezar) Verificar visualmente en producción que la barra de descarga del ZIP
+   ahora sí llega a 100% antes de desaparecer (fix `a028b02`) — la auditoría del HAR anterior ya
+   confirmó que el flujo funciona correctamente end-to-end, solo falta confirmar el ajuste visual
+   del salto a 100%.
 
 ## Riesgos abiertos
 - **Pin de tráfico de Cloud Run (causa raíz encontrada y corregida 2026-07-11)**: promover tráfico
