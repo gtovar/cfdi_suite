@@ -5,9 +5,15 @@
 main
 
 ## Último cambio
-**Signal 6: causa real encontrada y corregida — verificado dos veces en canario, commiteado
-(`e1d8238`), pusheado, y CONFIRMADO EN PRODUCCIÓN (revisión `cfdi-suite-api-00100-qmr`,
-`concurrency=1` sin cambiar, 2026-07-11).**
+**Signal 6: RESUELTO DE PUNTA A PUNTA — fix en producción (`e1d8238`) y `concurrency=5` YA
+DESPLEGADO Y VERIFICADO en producción (commit `31c6836`, revisión `cfdi-suite-api-00101-tbk`,
+2026-07-11). Sin pendientes.**
+
+**Verificación final del deploy de `concurrency=5`**: tras el push, `gcloud run services
+describe ... status.traffic` confirmó `latestRevision: true`, 100% en `00101-tbk`, `commit-sha:
+31c683676b1ad384d3189ccc14b883b25800158d`, `containerConcurrency: 5`, health check `/docs` → 200.
+Esta vez el deploy automático SÍ movió el tráfico correctamente (no hubo canarios manuales de por
+medio entre este push y la verificación).
 
 **Incidente durante el despliegue — el pin de tráfico volvió a pasar, esta vez autoinfligido**: el
 push activó `deploy-backend.yml` y GitHub Actions reportó "success", pero el tráfico se quedó
@@ -57,10 +63,13 @@ manuales por nombre.
   `concurrency=1`, todo el tiempo. Ambos canarios usaron `API_URL` y `ALLOWED_ORIGINS` apuntados a
   sí mismos para que ni el tráfico de Cloud Tasks ni las pruebas desde `localhost:3000` tocaran
   producción.
-- **Pendiente, sin decidir todavía**: el fix ya está en producción, pero `concurrency` sigue en 1
-  (sin cambiar). Falta decidir a qué valor subirlo — la recomendación es `5` exacto, porque es el
-  único valor probado dos veces en canario; `10` o más no tiene evidencia real detrás y necesitaría
-  su propia ronda de canario antes de asumir que funciona igual de bien.
+- **`concurrency=5` ya está en producción, confirmado.** Si más adelante se quiere subir a `10` o
+  más, eso necesita su propia ronda de canario — `5` es el único valor con evidencia real detrás,
+  no asumir que un número mayor se comporta igual sin probarlo.
+- **Limpieza pendiente, sin urgencia**: quedan dos revisiones canario con tags activos sin tráfico
+  (`canary` → `00113-log`, `canary-c5` → `00121-kiy`) y un servidor local en `localhost:3000`
+  (`frontend/.env.canary.local`, gitignored) apuntando al canario — ninguno afecta producción,
+  pero se pueden borrar/parar cuando ya no se necesiten para más pruebas.
 
 ## Historial (progreso de descarga 0→100%, ya en producción)
 **Implementado, desplegado el 2026-07-11 (`1164fe7`), y VERIFICADO con datos reales de producción
@@ -151,10 +160,9 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-1. **El fix de signal 6 ya está en producción (commit `e1d8238`, revisión `00100-qmr`, ver
-   "Último cambio").** Solo falta subir `concurrency` — recomendado `5` exacto (único valor
-   probado dos veces en canario); requiere confirmación explícita aparte antes de tocar
-   `cloudbuild.yaml`/`deploy-backend.yml` y desplegar.
+1. **Signal 6 cerrado — sin pendientes.** Fix y `concurrency=5` confirmados en producción (ver
+   "Último cambio"). Si se quiere subir a `10`+ en el futuro, correr su propia ronda de canario
+   primero (no asumir que se comporta igual que `5`).
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
 3. (Sugerido, sin empezar) **Indicador de versión visible en la app** — hoy verificar qué commit
@@ -192,15 +200,15 @@ veces con HAR real, ver "Último cambio" arriba.)
   "exitoso" no parece reflejarse en producción, correr
   `gcloud run services describe cfdi-suite-api --region=us-central1 --format="value(status.traffic)"`
   y confirmar que diga `latestRevision: True` — si no, repetir `--to-latest`.
-- **Signal 6: fix verificado dos veces en canario y CONFIRMADO EN PRODUCCIÓN (`00100-qmr`,
-  commit `e1d8238`, 2026-07-11) — ver "Último cambio" para el detalle completo.** Resumen:
-  `mp_context="spawn"` (fix anterior) no bastaba porque solo aislaba la tabla de conceptos cuando
-  el XML tenía >2000 conceptos — WeasyPrint (header) y pypdf (merge) seguían corriendo siempre en
-  el proceso compartido de la petición. Confirmado con canario real: código viejo (`00120-xud`)
-  crasheó 3 veces bajo `concurrency=5` con `mil_facturas_prueba.zip`; código con el fix
-  (`00121-kiy`), mismo ZIP, mismo `concurrency=5`, **2000/2000 sin error, cero crashes**. El fix
-  ya está en producción, pero `concurrency` sigue en 1 (sin cambiar) — subirlo es la única parte
-  que falta, y solo `5` tiene evidencia real detrás.
+- ~~Signal 6~~ — **RESUELTO 2026-07-11, ya no es un riesgo abierto.** Fix (`e1d8238`) +
+  `concurrency=5` (`31c6836`) confirmados en producción (revisión `00101-tbk`). Causa real:
+  `mp_context="spawn"` (fix anterior) solo aislaba la tabla de conceptos cuando el XML tenía
+  >2000 conceptos — WeasyPrint (header) y pypdf (merge) seguían corriendo siempre en el proceso
+  compartido de la petición. Verificado con canario real, comparación directa: código viejo
+  crasheó 3 veces bajo `concurrency=5` con `mil_facturas_prueba.zip`; código con el fix, mismo
+  ZIP, mismo `concurrency=5`, 2000/2000 sin error. Ver "Último cambio" para el detalle completo.
+  Si se sube a `concurrency>5` en el futuro, correr su propia ronda de canario — `5` es el único
+  valor probado.
 - Límites del plan free de Pusher (conexiones/mensajes) sin verificar contra volumen real.
 - Credenciales de Pusher hardcodeadas en `backend/.env` versionado; Redis de pruebas con password expuesta (deliberado, rotar al salir de pruebas).
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos
