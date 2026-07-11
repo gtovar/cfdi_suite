@@ -341,6 +341,13 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
         setZipDownloadProgress({ loaded, total });
       });
       triggerBlobDownload(blob, `resultado_pdfs_${batchId}.zip`);
+      // El ZIP comprime los PDFs (que a su vez ya vienen algo comprimidos),
+      // así que los bytes reales transferidos casi siempre quedan por debajo
+      // del estimado (visto en producción: estimado 93MB, ZIP real 62MB) —
+      // sin este paso la barra nunca llega a mostrar 100%, se queda a medias
+      // y el botón desaparece de golpe en cuanto se cierra el stream.
+      setZipDownloadProgress({ loaded: knownTotal, total: knownTotal });
+      await new Promise((r) => setTimeout(r, 500));
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     } finally {
@@ -356,6 +363,8 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
         setFileDownloadProgress((prev) => ({ ...prev, [jobId]: { loaded, total } }));
       });
       triggerBlobDownload(blob, `cfdi_${jobId}.pdf`);
+      setFileDownloadProgress((prev) => ({ ...prev, [jobId]: { loaded: blob.size, total: blob.size } }));
+      await new Promise((r) => setTimeout(r, 400));
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     } finally {
@@ -600,7 +609,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                 <div className="max-h-64 overflow-auto">
                   {readyFileIds.map((jobId, i) => {
                     const dl = fileDownloadProgress[jobId];
-                    const pct = dl?.total ? Math.min(99, Math.round((dl.loaded / dl.total) * 100)) : null;
+                    const pct = dl?.total ? Math.min(100, Math.round((dl.loaded / dl.total) * 100)) : null;
                     return (
                       <div
                         key={jobId}
@@ -644,7 +653,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                     </span>
                     <span className="tabular-nums">
                       {zipDownloadProgress.total
-                        ? `${Math.min(99, Math.round((zipDownloadProgress.loaded / zipDownloadProgress.total) * 100))}%`
+                        ? `${Math.min(100, Math.round((zipDownloadProgress.loaded / zipDownloadProgress.total) * 100))}%`
                         : formatBytes(zipDownloadProgress.loaded)}
                     </span>
                   </div>
@@ -653,7 +662,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
                       className="h-full bg-green-600 transition-all duration-300 rounded-full"
                       style={{
                         width: zipDownloadProgress.total
-                          ? `${Math.min(99, Math.round((zipDownloadProgress.loaded / zipDownloadProgress.total) * 100))}%`
+                          ? `${Math.min(100, Math.round((zipDownloadProgress.loaded / zipDownloadProgress.total) * 100))}%`
                           : '100%',
                       }}
                     />

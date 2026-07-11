@@ -5,14 +5,33 @@
 main
 
 ## Último cambio
-**Progreso de descarga 0→100% — implementado, probado localmente, commiteado (`1164fe7`) y
-DESPLEGADO el 2026-07-11.** Backend en Cloud Run `cfdi-suite-api-00095-78r` (sirviendo 100% vía
-`LATEST`), frontend en Vercel vía `deploy-frontend.yml`. Verificado en producción:
-`GET /api/cfdi/pdf/batch/<batch-inexistente>/estimated-size` responde
-`{"estimatedBytes":0,"knownCount":0,"totalCount":0}` (200 OK). **No verificado en producción**: el
-flujo completo de descarga con un batch real (ZIP grande, PDF individual) — solo se probó
-local/unitario antes del deploy; sería bueno correr un batch de prueba chico desde la UI real para
-confirmar que la barra de progreso se ve y se comporta como se espera (ver "Próximo paso" #3).
+**Progreso de descarga 0→100% — implementado, desplegado el 2026-07-11 (`1164fe7`), y VERIFICADO
+con datos reales de producción (batch de 150 PDFs, HAR completo auditado).** Backend en Cloud Run
+`cfdi-suite-api-00095-78r` (sirviendo 100% vía `LATEST`), frontend en Vercel.
+
+**Auditoría del HAR real (batch de 150 archivos) — confirmado con datos, no solo impresión visual:**
+- 8 peticiones limpias para el flujo real (`request-upload` → `start-zip-gcs` → 2×`download-url` →
+  `estimated-size` → `download`), todas 200, CORS correcto en ambas (Cloud Run: `Access-Control-
+  Allow-Origin: https://cfdiinspector.vercel.app`; GCS: `*`). Los ~372 `/ready-files` que se veían
+  sospechosos en el HAR NO son de esta prueba — son restos de una sesión de DevTools con "Preserve
+  log" activado desde una prueba de horas antes (la de 2,000 XMLs de la sesión pasada); confirmado
+  por los timestamps (cluster viejo entre 21:41-21:59 UTC del día anterior, prueba real a las
+  05:10-05:12 UTC).
+- `pdf:size:{job_id}` se registró para los 150/150 PDFs del batch (`knownCount == totalCount` en la
+  respuesta real de `estimated-size`) — confirma que el guardado en `internal_generate_pdf`
+  funciona al 100%, no solo en el caso feliz probado en local.
+- **Bug real encontrado y corregido tras la auditoría**: el ZIP se estimó en 93.3MB pero el ZIP
+  comprimido real pesó 62.3MB (los PDFs ya traen su propia compresión interna, así que el DEFLATE
+  del ZIP les saca menos jugo del asumido) — la barra de progreso nunca llegaba a mostrar 100%, se
+  quedaba en ~67% y el botón desaparecía de golpe en cuanto el navegador terminaba de recibir el
+  stream. Corregido: al terminar con éxito (ZIP o PDF individual), se fuerza `loaded = total` y se
+  mantiene visible ~400-500ms antes de que el botón vuelva a su estado normal, para que el usuario
+  sí vea el 100% en vez de un corte abrupto. Cambio en `frontend/src/components/
+  ConversionMasivaPage.tsx` únicamente (no toca backend) — pendiente de commit/push/deploy, esperando
+  confirmación explícita del usuario antes de cada paso.
+- El PDF individual sí llega exacto a 100% de forma natural (`Content-Length` real de GCS, sin
+  estimación de por medio) — el ajuste ahí es solo para que la transición al estado final se vea
+  igual de consistente, no porque tuviera el mismo bug.
 
 Detalle de lo implementado:
 - `backend/app/routers/pdf.py`: `internal_generate_pdf` guarda `pdf:size:{job_id}` (bytes del PDF,
