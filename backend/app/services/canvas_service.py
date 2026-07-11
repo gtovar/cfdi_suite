@@ -2,13 +2,13 @@
 canvas_service.py — Motor rl_canvas page-streaming para conceptos y footer.
 
 Arquitectura: escribe páginas directo al stream PDF sin árbol en memoria (O(N)).
-Para N > 2000 usa multiprocessing (spawn-safe: funciones en módulo propio).
+Para N > 2000 divide en chunks (mismas funciones, spawn-safe si algo externo
+las llama vía multiprocessing) — el aislamiento por proceso ahora vive un
+nivel arriba, en pdf_pipeline._POOL, que aísla el documento completo.
 """
 from __future__ import annotations
 
 import io
-from concurrent.futures import ProcessPoolExecutor
-from multiprocessing import cpu_count, get_context
 
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib import colors as rl_colors
@@ -40,7 +40,6 @@ C_GREEN_BG   = rl_colors.HexColor("#F0FFF4")
 C_GREEN_BORDER = rl_colors.HexColor("#9AE6B4")
 C_GREEN_TEXT = rl_colors.HexColor("#276749")
 
-_WORKERS    = min(8, cpu_count())
 _CHUNK_SIZE = 1000
 
 _IMP_MAP      = {"001": "ISR", "002": "IVA", "003": "IEPS"}
@@ -688,25 +687,27 @@ def render_conceptos(
             render_config=render_config,
         )
 
-    n_workers = min(workers or _WORKERS, _WORKERS)
     chunks = [rows[i:i + _CHUNK_SIZE] for i in range(0, len(rows), _CHUNK_SIZE)]
     starts = [i * _CHUNK_SIZE for i in range(len(chunks))]
 
-    # mp_context="spawn" explícito: el default de Linux es "fork", que copia
-    # el proceso completo tal cual está en ese instante — incluyendo el canal
-    # de gRPC ya abierto de CloudTasksClient (task_dispatcher.py). gRPC no
-    # soporta fork() con un canal vivo; es una causa documentada de
-    # corrupción nativa (visto en Sentry: TSI_DATA_CORRUPTED en
-    # google.api_core.grpc_helpers) y de aborts de heap (signal 6). Las
-    # funciones ya eran spawn-safe (están en el módulo, picklables) — solo
-    # faltaba forzar el modo.
-    with ProcessPoolExecutor(max_workers=n_workers, mp_context=get_context("spawn")) as ex:
-        futures = [ex.submit(_render_first_chunk, chunks[0], cfdi_data, skip_header_card, header_reserve, render_config)]
-        for chunk, start in zip(chunks[1:-1], starts[1:-1]):
-            futures.append(ex.submit(_render_chunk, chunk, start, render_config))
-        if len(chunks) > 1:
-            futures.append(ex.submit(_render_last_chunk, chunks[-1], starts[-1], cfdi_data, render_config))
-        pdfs = [f.result() for f in futures]
+    # 2026-07-11: ya NO se crea un ProcessPoolExecutor aquí. Desde que
+    # pdf_pipeline.generate() completo corre aislado en su propio proceso
+    # (ver pdf_pipeline._POOL / pdf.py internal_generate_pdf), esta función
+    # ya se ejecuta DENTRO de un worker — anidar otro pool de procesos ahí
+    # es frágil (workers no siempre pueden tener hijos) y ya no hace falta
+    # para el problema que resolvía originalmente (gRPC+fork, ver historia
+    # de este archivo): ese proceso ya está aislado del principal.
+    # Costo real de este cambio: un solo documento con miles de conceptos
+    # ya no reparte sus propios chunks entre varios núcleos — los renderiza
+    # uno tras otro dentro de su worker. Los documentos grandes tardan más
+    # individualmente; el throughput del batch completo no baja igual,
+    # porque varios documentos distintos siguen renderizándose en paralelo
+    # entre sí (cada uno en su propio worker del pool persistente).
+    pdfs = [_render_first_chunk(chunks[0], cfdi_data, skip_header_card, header_reserve, render_config)]
+    for chunk, start in zip(chunks[1:-1], starts[1:-1]):
+        pdfs.append(_render_chunk(chunk, start, render_config))
+    if len(chunks) > 1:
+        pdfs.append(_render_last_chunk(chunks[-1], starts[-1], cfdi_data, render_config))
 
     return _merge_pdfs(pdfs)
 

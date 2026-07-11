@@ -31,7 +31,7 @@ tracer = trace.get_tracer(__name__)
 
 import redis.asyncio as aioredis
 
-from ..services.pdf_pipeline import generate
+from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
 from ..services.realtime import publish_batch_progress
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
 
@@ -173,7 +173,16 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
             return Response(status_code=204)
 
         with tracer.start_as_current_span("generacion_pdf_intensiva"):
-            pdf_bytes = generate(xml_bytes, payload.template_id, payload.html_shell)
+            # Aislado en su propio proceso (PDF_PROCESS_POOL, spawn) — no
+            # llamado directo aquí. Bajo concurrency>1, WeasyPrint/reportlab/
+            # lxml de dos peticiones simultáneas compartiendo este proceso
+            # corrompían heap nativo (signal 6, ver PROJECT_STATE.md). Con
+            # run_in_executor tampoco se bloquea el event loop mientras el
+            # worker renderiza — antes generate() corría síncrono aquí mismo.
+            loop = asyncio.get_running_loop()
+            pdf_bytes = await loop.run_in_executor(
+                PDF_PROCESS_POOL, generate, xml_bytes, payload.template_id, payload.html_shell
+            )
         
         # Guardado final del PDF
         storage_client = storage.Client()

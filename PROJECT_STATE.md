@@ -5,9 +5,54 @@
 main
 
 ## Último cambio
-**Progreso de descarga 0→100% — implementado, desplegado el 2026-07-11 (`1164fe7`), y VERIFICADO
-con datos reales de producción (batch de 150 PDFs, HAR completo auditado).** Backend en Cloud Run
-`cfdi-suite-api-00095-78r` (sirviendo 100% vía `LATEST`), frontend en Vercel.
+**Signal 6: causa real encontrada y corregida — verificado dos veces en canario, código listo
+pero SIN commitear ni desplegar a producción todavía (2026-07-11).**
+
+- Confirmado primero que el riesgo era real: revisión canario `cfdi-suite-api-00120-xud`
+  (`concurrency=5`, sin tráfico de producción) con `mil_facturas_prueba.zip` (1,600/2,000 XMLs
+  reales de Miniso con miles de conceptos) produjo **3 crashes reales** — `free(): invalid next
+  size (fast)` (corrupción de heap real de glibc) seguido de `Uncaught signal: 6` / `Container
+  terminated on signal 6` en los logs de Cloud Run.
+- **Causa real**: el fix anterior (`mp_context="spawn"` en `canvas_service.py`) solo aislaba el
+  render de la tabla de conceptos, y solo cuando el XML tiene >2000 conceptos. Pero `generate()`
+  (`pdf_pipeline.py`) también renderiza el header con **WeasyPrint** y hace el merge final con
+  **pypdf** — estos pasos corrían SIEMPRE en el proceso compartido de la petición HTTP, sin
+  aislar, sin importar la complejidad del XML. Bajo `concurrency>1`, dos peticiones con trabajo
+  nativo (WeasyPrint/reportlab/lxml) en vuelo al mismo tiempo, en el mismo proceso, corrompían el
+  heap compartido.
+- **Fix**: pool de procesos persistente (`PDF_PROCESS_POOL` en `backend/app/services/
+  pdf_pipeline.py`, `spawn`, creado una vez, no por petición) que aísla el `generate()` COMPLETO
+  (header + tabla + merge) de cada PDF en su propio proceso — no solo el caso >2000 conceptos.
+  `internal_generate_pdf` (`pdf.py`) ahora somete el trabajo vía `loop.run_in_executor(...)` en
+  vez de llamarlo síncrono in-process (de paso corrige que antes bloqueaba el event loop mientras
+  duraba el render). El `ProcessPoolExecutor` anidado que existía dentro de `render_conceptos`
+  para >2000 conceptos se eliminó (procesos hijos de un worker no siempre pueden tener sus propios
+  hijos) — esos documentos ahora renderizan sus chunks secuencialmente dentro de su worker
+  asignado, en vez de repartirlos entre varios núcleos.
+- **Costo medido localmente** (XML real de Miniso, 2.17MB): worker "frío" (primera petición,
+  paga arrancar Python + reimportar WeasyPrint/reportlab) ≈5.1s; mismo worker ya "caliente"
+  ≈1.7s. El pool es persistente, así que solo los primeros `_WORKERS` jobs de una instancia recién
+  levantada pagan el costo completo — el resto usa workers ya calientes. XML simple (4.4KB):
+  ≈1.4s en frío. No medido aún bajo carga sostenida en producción real.
+- **Verificado dos veces en canario, mismo ZIP, mismo `concurrency=5`, comparación directa**:
+  - Revisión `00120-xud` (código viejo): 1998/2000, 2 errores, **3 crashes de signal 6**.
+  - Revisión `00121-kiy` (código con el fix): **2000/2000, 0 errores, cero signal 6**, 7
+    instancias distintas atendieron tráfico real concurrente (confirmado en logs).
+- Producción **nunca se tocó** durante ninguna de las dos pruebas — siguió 100% en `00095-78r`,
+  `concurrency=1`, todo el tiempo. Ambos canarios usaron `API_URL` y `ALLOWED_ORIGINS` apuntados a
+  sí mismos para que ni el tráfico de Cloud Tasks ni las pruebas desde `localhost:3000` tocaran
+  producción.
+- **Pendiente, sin decidir todavía**: el código vive solo en el working tree (`backend/app/routers/
+  pdf.py`, `backend/app/services/canvas_service.py`, `backend/app/services/pdf_pipeline.py`), sin
+  commit ni push. Falta decidir si se commitea/pushea (con `concurrency=1` en `cloudbuild.yaml`/
+  `deploy-backend.yml` sin cambiar, el deploy automático no subiría concurrency por sí solo) y,
+  por separado, si/cuándo subir `concurrency` en producción — ambas son acciones de producción que
+  requieren confirmación explícita aparte.
+
+## Historial (progreso de descarga 0→100%, ya en producción)
+**Implementado, desplegado el 2026-07-11 (`1164fe7`), y VERIFICADO con datos reales de producción
+(batch de 150 PDFs, HAR completo auditado).** Backend en Cloud Run `cfdi-suite-api-00095-78r`
+(sirviendo 100% vía `LATEST`), frontend en Vercel.
 
 **Auditoría del HAR real (batch de 150 archivos) — confirmado con datos, no solo impresión visual:**
 - 8 peticiones limpias para el flujo real (`request-upload` → `start-zip-gcs` → 2×`download-url` →
@@ -93,13 +138,12 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-1. **La prueba de `concurrency>1` ya se corrió (2026-07-11, canario `cfdi-suite-api-00120-xud`,
-   `concurrency=5`, `mil_facturas_prueba.zip`) y el resultado fue negativo — signal 6 SÍ
-   reapareció, 3 veces. Ver "Riesgos abiertos" → Signal 6 para el detalle completo. NO subir
-   `concurrency` en `cloudbuild.yaml`/`deploy-backend.yml` hasta encontrar y corregir la causa real
-   (el fix de `spawn` no fue suficiente).** Próximo paso real: diagnosticar por qué persiste el
-   crash bajo concurrencia (revisar Sentry del canario, descartar otras libs nativas además de
-   gRPC, evaluar si es contención de recursos entre `ProcessPoolExecutor`s simultáneos).
+1. **El fix de signal 6 ya está verificado dos veces en canario (ver "Último cambio") pero sigue
+   sin commitear, sin pushear, y sin desplegar a producción.** Decisiones pendientes, cada una
+   requiere confirmación explícita por separado: (a) ¿commitear y pushear el código? (con
+   `cloudbuild.yaml`/`deploy-backend.yml` sin tocar, seguiría desplegando a `concurrency=1`, así
+   que el push por sí solo no cambia el comportamiento de producción); (b) ¿cuándo y a qué valor
+   subir `concurrency` en producción, una vez el código con el fix ya esté desplegado?
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
 3. (Sugerido, sin empezar) **Indicador de versión visible en la app** — hoy verificar qué commit
@@ -109,6 +153,10 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
    `/api/version` devolviendo `commit-sha` (ya viaja como label de Cloud Run, ver
    `deploy-backend.yml`) + mostrarlo en el frontend (footer o similar, usando
    `VERCEL_GIT_COMMIT_SHA` que Vercel expone automáticamente en el build).
+4. (Menor, no bloquea) El bug cosmético de `internal_extract_zip` reintentando contra un ZIP ya
+   borrado por un primer intento exitoso (`free() ` no, este es distinto — 404 "No such object")
+   sigue sin corregirse; no afecta el resultado del batch (Cloud Tasks lo absorbe), solo genera
+   ruido en Sentry. Ver detalle en el historial de la sesión del 2026-07-11 si se retoma.
 
 (El progreso de descarga 0→100% ya no tiene pendientes — implementado, desplegado y verificado dos
 veces con HAR real, ver "Último cambio" arriba.)
@@ -133,25 +181,15 @@ veces con HAR real, ver "Último cambio" arriba.)
   "exitoso" no parece reflejarse en producción, correr
   `gcloud run services describe cfdi-suite-api --region=us-central1 --format="value(status.traffic)"`
   y confirmar que diga `latestRevision: True` — si no, repetir `--to-latest`.
-- **Signal 6: SIGUE SIN RESOLVERSE — confirmado que reaparece bajo `concurrency>1`, probado en
-  canario el 2026-07-11, cero impacto en producción.** El fix de `spawn` (gRPC+fork→spawn) NO es
-  suficiente por sí solo bajo concurrencia real. Prueba: revisión canario `cfdi-suite-api-00120-xud`
-  (tag `canary-c5`, `concurrency=5`, `API_URL` y `ALLOWED_ORIGINS` apuntados a sí misma para no
-  escapar tráfico a producción — producción siguió 100% en `00095-78r` durante toda la prueba, sin
-  tráfico ni tocar `cloudbuild.yaml`/`deploy-backend.yml`), mismo `mil_facturas_prueba.zip` de
-  siempre (1,600/2,000 XMLs reales de Miniso con miles de conceptos). Resultado: **3 crashes reales
-  de "Uncaught signal: 6" / "Container terminated on signal 6"** en los logs de Cloud Run
-  (08:27:47, 08:39:40, 08:41:36 UTC). El batch terminó "limpio" en apariencia (1998/2000, 2 errores,
-  100%) solo porque Cloud Tasks reintentó automáticamente los trabajos que se quedaron a medias
-  cuando la instancia murió — el pipeline es resiliente a nivel de batch, pero el crash en sí sigue
-  ahí. **No subir `concurrency` por encima de 1 en producción — el riesgo está confirmado, no es
-  ya solo hipotético.** Pendiente: diagnosticar por qué `spawn` no bastó (¿otra librería nativa
-  además de gRPC+`CloudTasksClient`? ¿contención de recursos entre `ProcessPoolExecutor`s
-  concurrentes en el mismo proceso?) antes de proponer un fix nuevo.
-  (Contexto previo, sigue vigente: a `concurrency=1` la misma prueba con los mismos XMLs complejos
-  pasó 2000/2000 sin error — ver corrección anterior sobre "nunca se activó en la prueba de 2,000
-  XMLs reales", que sí era falsa. La rama de >2000 conceptos se ejercita bien a `concurrency=1`;
-  el problema es específicamente la combinación con `concurrency>1`.)
+- **Signal 6: causa real encontrada, fix verificado dos veces en canario — pendiente de
+  commitear/pushear/desplegar a producción (ver "Último cambio" para el detalle completo).**
+  Resumen: `mp_context="spawn"` (fix anterior) no bastaba porque solo aislaba la tabla de
+  conceptos cuando el XML tenía >2000 conceptos — WeasyPrint (header) y pypdf (merge) seguían
+  corriendo siempre en el proceso compartido de la petición. Confirmado con canario real: código
+  viejo (`00120-xud`) crasheó 3 veces bajo `concurrency=5` con `mil_facturas_prueba.zip`; código
+  con el fix (`00121-kiy`), mismo ZIP, mismo `concurrency=5`, **2000/2000 sin error, cero
+  crashes**. Producción no se tocó en ninguna prueba, sigue en `concurrency=1`. **No subir
+  `concurrency` en producción hasta que el código con el fix esté desplegado ahí.**
 - Límites del plan free de Pusher (conexiones/mensajes) sin verificar contra volumen real.
 - Credenciales de Pusher hardcodeadas en `backend/.env` versionado; Redis de pruebas con password expuesta (deliberado, rotar al salir de pruebas).
 - `.secrets.baseline` debe actualizarse si se añaden nuevos archivos con valores de alta entropía legítimos

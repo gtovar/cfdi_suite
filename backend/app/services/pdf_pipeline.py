@@ -11,11 +11,29 @@ Flujo:
 from __future__ import annotations
 
 import io
-from multiprocessing import cpu_count
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import cpu_count, get_context
 
 from pypdf import PdfReader, PdfWriter
 
 from .canvas_service import parse_xml_to_rows, render_conceptos
+
+# Pool de procesos persistente para aislar CADA generate() en su propio
+# proceso (spawn) — no solo el de gRPC+fork (>2000 conceptos, ya resuelto
+# en canvas_service). Encontrado 2026-07-11: bajo concurrency>1 real
+# (canario, XMLs de Miniso reales), WeasyPrint/reportlab/lxml compartiendo
+# el mismo proceso entre peticiones simultáneas corrompía heap nativo
+# ("free(): invalid next size (fast)" en logs, seguido de signal 6) —
+# WeasyPrint en particular corre SIEMPRE en el proceso que llama a
+# generate(), sin importar cuántos conceptos tenga el XML, así que nunca
+# estaba cubierto por el fix anterior.
+# Persistente (no "with ProcessPoolExecutor(...) as ex" por llamada) para
+# no pagar el costo de arrancar Python + reimportar WeasyPrint/reportlab en
+# cada PDF — los workers quedan "calientes" tras las primeras peticiones.
+PDF_PROCESS_POOL = ProcessPoolExecutor(
+    max_workers=min(8, cpu_count()),
+    mp_context=get_context("spawn"),
+)
 
 
 def _stamp_and_merge(header_pdf: bytes, body_pdf: bytes, header_reserve: float) -> bytes:
