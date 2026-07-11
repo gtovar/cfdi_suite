@@ -459,39 +459,67 @@ async def download_batch_zip(batch_id: str):
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
 
-    # Descargas concurrentes (antes eran secuenciales, una por una) — para
-    # lotes grandes esto es lo que hacía que la respuesta tardara demasiado
-    # en mandar el primer byte.
-    download_semaphore = asyncio.Semaphore(50)
+    # ZIP en streaming real: nunca tenemos más de `prefetch` PDFs en RAM a la
+    # vez (antes: asyncio.gather bajaba los ~2,000 PDFs completos a memoria y
+    # LUEGO armaba un segundo buffer con el ZIP completo -> OOM con 2Gi en
+    # lotes grandes). zipfile.ZipFile soporta escribir a un stream no-seekable
+    # de forma nativa (usa data descriptors), así que basta con drenar el
+    # buffer de salida cada vez que se cierra una entrada.
+    class _GrowingStream(io.RawIOBase):
+        def __init__(self):
+            self._buf = bytearray()
 
-    async def fetch_pdf(jid: str):
-        async with download_semaphore:
-            blob = bucket.blob(f"pdfs/{jid}.pdf")
-            try:
-                pdf_bytes = await asyncio.to_thread(blob.download_as_bytes)
-                return jid, pdf_bytes
-            except Exception:
-                return jid, None
+        def writable(self):
+            return True
 
-    results = await asyncio.gather(*[fetch_pdf(jid) for jid in job_ids])
+        def write(self, b):
+            self._buf += b
+            return len(b)
 
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as z:
-        for jid, pdf_bytes in results:
-            if pdf_bytes is not None:
-                z.writestr(f"cfdi_{jid}.pdf", pdf_bytes)
- 
-    # 1. Regresamos el puntero al inicio del buffer en memoria
-    zip_buffer.seek(0)
-    
-    # 2. SOLUCIÓN: Agregamos 'async def' para que sea un iterador asíncrono nativo
-    async def stream_chunks():
-        while chunk := zip_buffer.read(64 * 1024):
+        def drain(self) -> bytes:
+            chunk = bytes(self._buf)
+            self._buf.clear()
+            return chunk
+
+    async def stream_zip():
+        stream = _GrowingStream()
+        zf = zipfile.ZipFile(stream, mode="w", compression=zipfile.ZIP_DEFLATED)
+
+        prefetch = 8
+        queue: asyncio.Queue = asyncio.Queue(maxsize=prefetch)
+        fetch_semaphore = asyncio.Semaphore(prefetch)
+
+        async def fetch_one(jid: str):
+            async with fetch_semaphore:
+                blob = bucket.blob(f"pdfs/{jid}.pdf")
+                try:
+                    pdf_bytes = await asyncio.to_thread(blob.download_as_bytes)
+                except Exception:
+                    pdf_bytes = None
+                await queue.put((jid, pdf_bytes))
+
+        async def fetch_all():
+            await asyncio.gather(*[fetch_one(jid) for jid in job_ids])
+
+        producer_task = asyncio.create_task(fetch_all())
+        try:
+            for _ in range(len(job_ids)):
+                jid, pdf_bytes = await queue.get()
+                if pdf_bytes is not None:
+                    zf.writestr(f"cfdi_{jid}.pdf", pdf_bytes)
+                    chunk = stream.drain()
+                    if chunk:
+                        yield chunk
+        finally:
+            await producer_task
+
+        zf.close()
+        chunk = stream.drain()
+        if chunk:
             yield chunk
 
-    # 3. Le pasamos el generador asíncrono al StreamingResponse
     return StreamingResponse(
-        stream_chunks(),
+        stream_zip(),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'}
     )
