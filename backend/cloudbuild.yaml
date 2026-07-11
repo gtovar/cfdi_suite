@@ -21,15 +21,16 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --timeout=1800
-      # Mitigación de crashes por corrupción de heap nativo (signal 6,
-      # "corrupted size vs. prev_size in fastbins") bajo alta concurrencia —
-      # ver plan de estabilidad. Evita que un mismo proceso maneje varias
-      # peticiones en simultáneo mientras se investiga la causa raíz.
-      # NO subir de 1: probado el 2026-07-10 con concurrency=5 — el crash de
-      # heap nativo (signal 6) reapareció tras ~4 min de carga real (~420 PDFs)
-      # y tumbó la instancia con trabajo en curso. Hasta no identificar la
-      # librería nativa culpable, 1 es obligatorio.
-      - --concurrency=1
+      # Causa real de signal 6 encontrada y corregida 2026-07-11: generate()
+      # (header WeasyPrint + tabla reportlab + merge pypdf) ahora corre
+      # aislado por proceso vía PDF_PROCESS_POOL (pdf_pipeline.py), no
+      # compartiendo proceso entre peticiones simultáneas. Verificado dos
+      # veces en canario con mil_facturas_prueba.zip (1,600/2,000 XMLs
+      # reales de Miniso): código viejo crasheó 3 veces con concurrency=5;
+      # código con el fix, 2000/2000 sin error, cero crashes. Ver
+      # PROJECT_STATE.md para el detalle completo. 5 es el único valor
+      # probado — no subir más sin repetir la prueba de canario primero.
+      - --concurrency=5
       # Mantener en paridad con .github/workflows/deploy-backend.yml — los dos
       # pipelines despliegan el mismo servicio y divergir aquí ya causó
       # incidentes (caso --set-env-vars).
