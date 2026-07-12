@@ -17,6 +17,7 @@ import google.auth.transport.requests
 # ----------------------------------------
 
 from google.cloud import storage
+from google.cloud.storage import transfer_manager
 
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
@@ -725,27 +726,60 @@ async def internal_extract_zip(payload: ExtractZipPayload, request: Request):
     if "x-cloudtasks-queuename" not in request.headers:
         raise HTTPException(status_code=403, detail="Acceso denegado. Solo Cloud Tasks.")
 
-    await process_zip_in_background(payload.gcs_path, payload.batch_id, payload.template_id)
-    return {"status": "success"}
+    ran = await process_zip_in_background(payload.gcs_path, payload.batch_id, payload.template_id)
+    return {"status": "success" if ran else "skipped_already_in_progress"}
 
 
-async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: str):
+# Techo generoso vs. el peor caso medido en producción hasta hoy (13-17 min,
+# ver docs/propuesta-arquitectura-batch.md) -- da margen a que la extracción
+# tarde más sin que el lock expire antes de que termine sola.
+EXTRACTION_LOCK_TTL_SECONDS = 1800
+
+
+async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: str) -> bool:
     """
     Descarga el ZIP a disco (no a RAM), lo lee y manda los XMLs a GCS
     temporal y los estados mínimos a Redis. Invocada desde internal_extract_zip.
+
+    Devuelve True si esta invocación corrió de verdad, False si se omitió por
+    encontrar una extracción ya en curso para el mismo batch_id.
     """
+    # Lock de idempotencia -- encontrado 2026-07-12 auditando logs reales de
+    # Cloud Run: una extracción que tarda más que el dispatch deadline de
+    # Cloud Tasks (~10 min) dispara un reintento MIENTRAS la primera sigue
+    # corriendo, duplicando la descarga del ZIP completo y la subida de cada
+    # XML en la misma instancia al mismo tiempo (confirmado con
+    # `gcloud logging read`: dos requests con el mismo instanceId,
+    # traslapados). El SET NX es atómico -- solo una invocación gana el lock;
+    # cualquier reintento que llegue mientras el original sigue vivo se
+    # aborta de inmediato en vez de repetir el trabajo completo.
+    lock_key = f"pdf:extracting_lock:{batch_id}"
+    acquired = await redis_client.set(lock_key, "1", nx=True, ex=EXTRACTION_LOCK_TTL_SECONDS)
+    if not acquired:
+        print(f"[process_zip_in_background] Extracción ya en curso para batch {batch_id} "
+              f"(probable reintento de Cloud Tasks) -- se omite para no duplicar el trabajo.")
+        return False
+
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(gcs_path)
-    
-    # Descargamos a un archivo temporal en disco, liberando la RAM. Esto puede
-    # tardar segundos para ZIPs grandes — correrlo en un hilo evita bloquear el
-    # event loop (y con él, el polling de progreso de este u otros batches en
-    # la misma instancia).
+
+    # Descargamos a un archivo temporal en disco. NOTA (corregido 2026-07-12,
+    # ver PROJECT_STATE.md): el filesystem local de Cloud Run, sin volumen
+    # montado, es tmpfs respaldado por RAM -- esto sigue consumiendo el mismo
+    # presupuesto de memoria del contenedor, no un disco aparte. Igual vale la
+    # pena escribirlo a archivo en vez de tenerlo como bytes de Python: evita
+    # duplicar copias en el heap del proceso. Correrlo en un hilo evita
+    # bloquear el event loop mientras dura.
+    download_start = time.perf_counter()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
         temp_filename = tmp.name
     await asyncio.to_thread(blob.download_to_filename, temp_filename)
+    print(f"[process_zip_in_background] {batch_id}: descarga del ZIP tomó "
+          f"{time.perf_counter() - download_start:.1f}s")
 
+    extraction_start = time.perf_counter()
+    total_upload_seconds = 0.0
     try:
         with zipfile.ZipFile(temp_filename, "r") as z:
             xml_entries = [fi for fi in z.infolist() if _is_valid_xml_entry(fi)]
@@ -765,6 +799,14 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
 
             chunk = []
             CHUNK_SIZE = 20
+            # Nº de hilos para transfer_manager -- valor que ganó en las
+            # pruebas locales (Mac y Docker con --cpus=2 --memory=2g, imitando
+            # la instancia real) sobre max_workers=8, ver
+            # docs/propuesta-arquitectura-batch.md. transfer_manager dimensiona
+            # su propio pool de conexiones acorde a max_workers, a diferencia
+            # del intento anterior con asyncio.gather que compartía el pool
+            # default (pool_maxsize=10) sin coordinarlo con el nº de hilos.
+            UPLOAD_MAX_WORKERS = 16
 
             # Aviso de progreso de EXTRACCIÓN vía Pusher (no solo el polling de
             # 30s a /status) -- throttled cada 5 chunks (100 XMLs), mismo
@@ -804,15 +846,45 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                 except Exception as pusher_err:
                     print(f"Aviso: tick de extracción no publicado para {batch_id}: {pusher_err}")
 
-                # b) Storage: el archivo pesado
-                for jid, xml_data in current_chunk:
-                    blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
-                    await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
+                # b) Storage: el archivo pesado -- en paralelo vía
+                #    transfer_manager (medido 2026-07-12: ~4-8x más rápido que
+                #    secuencial, tanto en Mac como en Docker con --cpus=2
+                #    imitando la instancia real, ver docs/propuesta-
+                #    arquitectura-batch.md). Reemplaza el intento anterior con
+                #    asyncio.gather (revertido en 07b3ddd) -- esta vez
+                #    protegido por el lock de idempotencia de arriba, así que
+                #    un reintento de Cloud Tasks no puede volver a duplicar el
+                #    trabajo y contaminar la medición como pasó la vez pasada.
+                nonlocal total_upload_seconds
+                upload_start = time.perf_counter()
+                pairs = [
+                    (io.BytesIO(xml_data), bucket.blob(f"xml_temp/{jid}.xml"))
+                    for jid, xml_data in current_chunk
+                ]
+                upload_results = await asyncio.to_thread(
+                    transfer_manager.upload_many,
+                    pairs,
+                    worker_type=transfer_manager.THREAD,
+                    max_workers=UPLOAD_MAX_WORKERS,
+                    upload_kwargs={"content_type": "application/xml"},
+                    raise_exception=False,
+                )
+                total_upload_seconds += time.perf_counter() - upload_start
+                failed_jids: set[str] = set()
+                for (jid, _), result in zip(current_chunk, upload_results):
+                    if isinstance(result, Exception):
+                        print(f"Error subiendo XML {jid} a GCS: {result}")
+                        failed_jids.add(jid)
+                        await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
 
                 # c) Cloud Tasks: encolamos (solo camino normal — el Job de
                 #    shards procesa su manifiesto directo, sin pasar por Tasks)
+                #    -- salvo los que ya fallaron al subir, no existe XML que
+                #    generar para esos.
                 if not use_batch_job:
                     for jid, _ in current_chunk:
+                        if jid in failed_jids:
+                            continue
                         try:
                             await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
                         except Exception as ex:
@@ -856,7 +928,11 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
         print(f"Error crítico procesando ZIP en background: {e}")
         await redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600)
     finally:
+        print(f"[process_zip_in_background] {batch_id}: extracción+subida (sin contar descarga) "
+              f"tomó {time.perf_counter() - extraction_start:.1f}s, de los cuales "
+              f"{total_upload_seconds:.1f}s fueron subidas a GCS (transfer_manager)")
         await redis_client.delete(f"pdf:extracting:{batch_id}")
+        await redis_client.delete(lock_key)
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
         # El ZIP original ya no se necesita para nada más una vez extraído
@@ -865,6 +941,8 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             await asyncio.to_thread(blob.delete)
         except Exception as cleanup_err:
             print(f"Aviso: no se pudo borrar {gcs_path} de GCS: {cleanup_err}")
+
+    return True
 
 @router.post("/cfdi/pdf/start-zip-gcs")
 async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):

@@ -352,6 +352,30 @@ class BatchMetadataTtlTests(unittest.TestCase):
             unittest.mock.ANY, b"error", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
         )
 
+    def test_process_zip_in_background_skips_when_lock_already_held(self) -> None:
+        """Encontrado 2026-07-12 auditando logs reales de Cloud Run: una
+        extracción que tarda más que el dispatch deadline de Cloud Tasks
+        (~10 min) dispara un reintento MIENTRAS la primera sigue corriendo,
+        duplicando descarga+subida en la misma instancia al mismo tiempo. El
+        lock de idempotencia (`pdf:extracting_lock:{batch_id}`, SET NX) debe
+        hacer que ese reintento se aborte de inmediato, sin tocar GCS."""
+        mock_storage_client = MagicMock()
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+        ):
+            mock_redis.set = AsyncMock(return_value=False)  # SET NX no adquirido
+
+            ran = _run(pdf_router.process_zip_in_background("uploads/some.zip", "batch-lock", "default"))
+
+        self.assertFalse(ran)
+        mock_redis.set.assert_awaited_once_with(
+            "pdf:extracting_lock:batch-lock", "1", nx=True, ex=pdf_router.EXTRACTION_LOCK_TTL_SECONDS
+        )
+        # No debe haber tocado GCS en absoluto si el lock no se adquirió.
+        mock_storage_client.bucket.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

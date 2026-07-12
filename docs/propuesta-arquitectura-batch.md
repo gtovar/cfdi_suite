@@ -1436,6 +1436,72 @@ una sorpresa.
 1. **Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job**
    (la idea corregida de arriba) — con más cuidado que el intento de hoy,
    probablemente en otra sesión.
+
+### CORRECCIÓN (2026-07-12, sesión posterior): la medición de "1.7x más lento" está contaminada — no se sabe todavía si el fix era malo
+
+**No se borra lo de arriba — se deja para que quede constancia de qué se
+midió y por qué se creyó que probaba algo que en realidad no probaba.**
+Auditando los logs reales de Cloud Run (`gcloud logging read` sobre
+`cfdi-suite-api`, ventana 11:05-11:55 UTC del mismo día) para la petición
+que reportó los 813s, aparecieron dos cosas que nadie había visto:
+
+- El primer request (`POST /api/internal/extract-zip`, 11:15:43 UTC) corrió
+  **solo**, con latencia real de 813.04s (confirmado por Cloud Run mismo,
+  no estimado) — terminó ~11:29:16. Un **segundo** request a la misma ruta
+  llegó a las 11:25:48 — **10 minutos 5 segundos después del primero**, casi
+  exactamente el dispatch deadline default de Cloud Tasks (~10 min). Ambos
+  corrieron en la **misma instancia** (mismo `instanceId`), traslapados en
+  los últimos ~3.5 minutos del primero. Después llegaron 6 reintentos más,
+  todos fallando rápido (200-1500ms) con `404 No such object` — el ZIP
+  original ya se había borrado en el `finally` de una ejecución anterior.
+  Esto confirma con evidencia real un bug que ya estaba anotado como
+  "cosmético, solo ruido en Sentry" en `PROJECT_STATE.md`: **una extracción
+  que tarda más que el dispatch deadline se duplica a sí misma** — Cloud
+  Tasks reintenta mientras la primera sigue viva, sin saberlo.
+- **Esto es una consecuencia de que ya iba tarde, no la causa.** El primer
+  request llevaba corriendo solo desde 11:15:43 con rumbo a 813s — el
+  traslape con el segundo intento solo empeoró los últimos ~3.5 minutos, no
+  explica por qué ya iba lento desde el principio.
+- **Se intentó reproducir localmente (Mac sin límite, Docker con
+  `--cpus=2 --memory=2g` imitando la instancia real, y ese mismo contenedor
+  con carga de CPU concurrente simulando otra petición) — las tres pruebas
+  coincidieron entre sí (paralelo 4-8x más rápido que secuencial) y
+  **ninguna reprodujo la lentitud real de producción**. Dos huecos
+  conocidos en esas pruebas: (a) nunca se replicó el nivel real de
+  concurrencia de producción — el pool default de `asyncio.to_thread` se
+  dimensiona con `os.cpu_count()`, que en Cloud Run reporta los núcleos de
+  la máquina física anfitriona (~32), no el límite de 2 vCPU del
+  contenedor — muy distinto a los ~8-12 hilos que se lograron replicar
+  local; (b) las pruebas solo midieron el sub-paso de subida a GCS, no
+  `process_zip_in_background` completo (descarga del ZIP, pipelines de
+  Redis, avisos a Pusher).
+
+**Veredicto honesto: no está probado que paralelizar las subidas sea malo
+en producción, ni que sea bueno.** La cifra de "1.7x más lento" que motivó
+la reversión viene de una sola medición contaminada por un bug de
+duplicación real que nadie conocía en ese momento. Lo único que se corrigió
+con evidencia sólida, independiente de si algún día se reintenta
+paralelizar:
+
+**Arreglado (código listo, tests pasan, NO desplegado todavía — pendiente
+confirmación explícita antes de tocar GCP):** `process_zip_in_background`
+(`backend/app/routers/pdf.py`) ahora toma un lock de idempotencia en Redis
+(`pdf:extracting_lock:{batch_id}`, `SET NX EX 1800`) antes de tocar GCS. Si
+un reintento de Cloud Tasks llega mientras el original sigue vivo, se aborta
+de inmediato (devuelve `skipped_already_in_progress`) en vez de repetir la
+descarga del ZIP completo y la subida de cada XML. También se agregó
+instrumentación mínima (tiempo de descarga del ZIP vs. tiempo de
+extracción+subida, por separado, en los logs) para que la próxima medición
+en producción — de la estrategia que sea — no dependa de un solo número de
+latencia total sin desglosar. 209/209 tests pasan (`test_pdf_batch_ttl.py`,
+nuevo caso: `test_process_zip_in_background_skips_when_lock_already_held`).
+
+**Pendiente real para saber si paralelizar ayuda:** un canario instrumentado
+en Cloud Run real, ahora protegido por el lock (para que un reintento no
+vuelva a contaminar la medición), que registre el desglose de tiempos por
+sub-paso. Sin eso, seguir corriendo variantes locales no va a cerrar la
+brecha — las tres pruebas locales ya estuvieron de acuerdo entre sí y en
+desacuerdo con producción.
 2. Todos los pendientes de la sección anterior (paso c) de Cloud Tasks,
    escalamiento del volumen, escenario de muchos batches simultáneos,
    Secret Manager, PoC de Capa 2) siguen abiertos, sin cambios por esto.

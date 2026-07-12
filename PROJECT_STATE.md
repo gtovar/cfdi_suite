@@ -5,8 +5,97 @@
 main
 
 ## Último cambio
-**Plan de recuperación de PDFs de batches (`docs/plan-recuperacion-batches-pdf.md`) — Fases 1-5
-COMPLETAS Y DESPLEGADAS EN PRODUCCIÓN, 2026-07-12. Sin pendientes de código ni de deploy.**
+**Auditoría de la regresión de GCS del 12 de julio: la medición de "1.7x más lento" estaba
+contaminada por un bug real de duplicación (nuevo), y ese bug ya se corrigió en código —
+CONSTRUIDO, TESTS PASANDO, NO DESPLEGADO. Pendiente de confirmación antes de tocar GCP.**
+
+- Auditando `gcloud logging read` sobre `cfdi-suite-api` en la ventana real de la prueba
+  (11:05-11:55 UTC, 2026-07-12) se encontró: la extracción que dio 813s corrió sola durante los
+  primeros ~10 minutos, y un segundo intento de Cloud Tasks llegó 10m05s después — casi
+  exactamente el dispatch deadline default — mientras el primero seguía vivo, duplicando
+  descarga+subida en la misma instancia. Esto confirma con evidencia real un bug que ya estaba
+  anotado como "cosmético, solo ruido en Sentry" (ver Riesgos abiertos / historial): **no era
+  cosmético, causaba trabajo duplicado real.**
+- El traslape es consecuencia de que la extracción ya iba tarde, no la causa — el misterio de por
+  qué el primer intento, corriendo solo, ya iba camino a 813s sigue sin resolverse. Se intentó
+  reproducir local (Mac, Docker con `--cpus=2 --memory=2g`, y ese mismo contenedor con carga de
+  CPU concurrente simulando otra petición) — las tres pruebas coincidieron entre sí (paralelo
+  4-8x más rápido) y ninguna reprodujo la lentitud real de producción. Detalle completo, incluida
+  la corrección honesta de que "paralelizar es malo" nunca quedó probado:
+  `docs/propuesta-arquitectura-batch.md`, sección "CORRECCIÓN (2026-07-12, sesión posterior)".
+- **Fix real, con evidencia, ya en código:** `process_zip_in_background` (`backend/app/routers/
+  pdf.py`) ahora toma un lock de idempotencia en Redis (`pdf:extracting_lock:{batch_id}`, `SET NX
+  EX 1800`) antes de tocar GCS — un reintento que llega mientras el original sigue vivo se aborta
+  de inmediato en vez de duplicar el trabajo. Se agregó instrumentación mínima (tiempo de
+  descarga del ZIP vs. tiempo de extracción+subida, por separado, en logs) para que la próxima
+  medición no dependa de un solo número sin desglosar. 209/209 tests pasan (nuevo:
+  `test_process_zip_in_background_skips_when_lock_already_held`). **No desplegado** — antes de
+  tocar GCP se pide confirmación explícita, como siempre.
+- Pendiente real para saber si paralelizar las subidas ayuda de verdad: un canario instrumentado
+  en Cloud Run, ahora protegido por este lock, que registre el desglose de tiempos por sub-paso —
+  seguir probando local no va a cerrar la brecha (ver detalle en el doc).
+
+## Capa 1 (Cloud Run Job de shards) — CONSTRUIDA, DESPLEGADA Y ACTIVA EN PRODUCCIÓN
+**Permanente desde 2026-07-12. El cuello de botella real que queda no es el procesamiento, es la
+extracción del ZIP — ver "Último cambio" arriba para el hallazgo más reciente sobre eso.**
+
+- `BATCH_JOB_ENABLED=true`, `BATCH_JOB_THRESHOLD=1` en producción — confirmado en vivo con
+  `gcloud run services describe`. Es decisión **permanente**, no de prueba (confirmada por
+  Gilberto): cualquier ZIP subido usa el Job nuevo (`cfdi-batch-shard`), no Cloud Tasks. Razón,
+  tras correr `decision-expander`: se enruta por **forma** del trabajo, no por tamaño — un ZIP
+  subido ya es "tipo Job" por definición (viene de `start-zip-gcs`), un XML suelto sigue siendo
+  Cloud Tasks (`/cfdi/pdf/start`). No hace falta adivinar un umbral.
+- **Comparación real medida** (no proyectada), mismo ZIP real (`mil_facturas_prueba.zip`, 367MB,
+  2000 XMLs reales de Miniso), cronómetro real en los dos caminos, revisiones aisladas sin tráfico
+  de producción de por medio:
+
+  | | Extracción | Procesamiento | Total |
+  |---|---:|---:|---:|
+  | Camino nuevo (Job) | 7m58s | 8m43s | 16m41s |
+  | Camino viejo (Cloud Tasks) | 6m13s | 19m58s | 26m11s |
+
+  0 errores en ambos. El procesamiento sí mejoró **~2.3x** (consistente con
+  `maxConcurrentDispatches=8` topando el camino viejo, mientras el Job corrió 20 tareas en
+  paralelo real para este batch). **La extracción del ZIP es código idéntico en ambos caminos y
+  NO mejoró — domina 6-8 de los 16-26 minutos totales.** Ninguna capa de
+  `docs/propuesta-arquitectura-batch.md` (Job, motor compilado, vectorización) toca ese paso; el
+  estimado original de "~30-40s para 15,000 XMLs" salió falso por un factor de ~13x, en parte por
+  no haber contado la extracción como variable aparte.
+- **Se intentó arreglar la extracción y salió mal en producción — lección importante.**
+  Paralelizar las subidas de XML a GCS dentro de `flush_chunk` (`asyncio.gather` en vez de
+  secuencial, commit `04db8cf`) perfiló 4.1x más rápido en local con un ZIP de 100 XMLs
+  (62.3s→15.1s). Desplegado y medido con el ZIP real de 2000: **1.7x MÁS LENTO (813s vs 478s)**,
+  no más rápido — contradice el perfilado local. Revertido el mismo día (`07b3ddd`, documentado en
+  `133e35e`). Causa exacta no confirmada (sospecha: contención en el pool de conexiones a GCS o
+  límite de red de la instancia bajo carga real, nunca medido). **No reintentar este approach sin
+  evidencia nueva** — el perfilado local con un ZIP chico no predijo el comportamiento a escala.
+- **Durante ese mismo diagnóstico se confirmó: el filesystem local de Cloud Run es RAM, no disco
+  real.** `gcloud run services describe` no muestra ningún volumen montado — sin eso, `/tmp` (y
+  cualquier `NamedTemporaryFile`) es tmpfs respaldado por la misma memoria del contenedor (2GiB),
+  no un disco aparte. Por eso se descartó la alternativa "cada tarea del Job lee el ZIP completo
+  directamente desde GCS": recrearía el mismo riesgo de OOM que ya hubo con `download_batch_zip`.
+  Idea corregida (lectura por rangos/`Range` de GCS, sin bajar el ZIP completo) queda anotada, no
+  construida.
+- Fix menor, ya desplegado (`b097833`): la barra de progreso durante la fase de EXTRACCIÓN (antes
+  de que empiece a convertir) mostraba 0% fijo — ahora muestra avance real vía Pusher (throttled
+  cada 5 chunks / 100 XMLs, mismo criterio que el resto del sistema).
+- Bugs reales encontrados y corregidos en vivo durante el despliegue de la Capa 1: (1) faltaban
+  credenciales de Pusher en el Job — `infra/deploy-batch-shard-job.sh` nunca las incluyó, así que
+  el batch se procesaba bien pero la pantalla se quedaba en 0% en silencio (`get_pusher()` se apaga
+  sin tronar si faltan credenciales); corregido con `gcloud run jobs update
+  --update-env-vars=PUSHER_...` a mitad de la corrida. (2) El mismo bug de pin de tráfico de
+  siempre (ver "Riesgos abiertos") volvió a pasar por una tercera vez, esta vez por un tag de
+  canario de estas pruebas (`test-old-path`) — corregido con `--to-latest`, verificado.
+- Detalle completo (Rondas 0/0.5/1 de decisión, perfilado de `generate()`, el fix de
+  `FontConfiguration` de WeasyPrint ya en producción — ~26-35% menos tiempo por PDF — y los números
+  que se probaron falsos antes de medir con datos reales): `docs/propuesta-arquitectura-batch.md`.
+
+Ver "Próximo paso" para lo que sigue pendiente (extracción del ZIP a escala, decisiones de negocio
+sobre Capa 2/typst).
+
+## Plan de recuperación de PDFs de batches (cerrado, historial)
+**Fases 1-5 COMPLETAS Y DESPLEGADAS EN PRODUCCIÓN, 2026-07-12 (previo a la Capa 1 de arriba). Sin
+pendientes de código ni de deploy.**
 
 - Backend (Fases 1+2): deploy manual inicial commit `dd6c8ad` (revisión `00102-sfs`), luego
   re-desplegado automáticamente por `deploy-backend.yml` en el push de las Fases 3+4 (mismo
@@ -254,15 +343,29 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
    `/api/version` devolviendo `commit-sha` (ya viaja como label de Cloud Run, ver
    `deploy-backend.yml`) + mostrarlo en el frontend (footer o similar, usando
    `VERCEL_GIT_COMMIT_SHA` que Vercel expone automáticamente en el build).
-4. (Menor, no bloquea) El bug cosmético de `internal_extract_zip` reintentando contra un ZIP ya
-   borrado por un primer intento exitoso (`free() ` no, este es distinto — 404 "No such object")
-   sigue sin corregirse; no afecta el resultado del batch (Cloud Tasks lo absorbe), solo genera
-   ruido en Sentry. Ver detalle en el historial de la sesión del 2026-07-11 si se retoma.
-5. **No es un pendiente de ejecución, es exploración abierta**: `docs/investigacion-escalamiento-
-   masivo.md` — plática iniciada 2026-07-11 sobre si la arquitectura actual aguantaría volúmenes
-   masivos (30,000+ PDFs/min), con números reales de costo (Cloud Run vs. Compute Engine/spot vs.
-   Cloud Batch) e hipótesis sin confirmar (perfilar `generate()`, aclarar si el volumen sería pico
-   o sostenido). Sin código tocado, sin decisión tomada — solo para retomar la conversación.
+4. **YA NO es "menor, solo ruido en Sentry" — era síntoma de duplicación real de trabajo, ya
+   corregido en código (ver "Último cambio" arriba).** Lo que se pensaba cosmético (`internal_
+   extract_zip` reintentando contra un ZIP ya borrado, 404 "No such object") resultó ser el rastro
+   de que Cloud Tasks duplica una extracción lenta mientras la original sigue viva. Fix con lock de
+   idempotencia listo y con tests, pendiente de desplegar (confirmación explícita antes de tocar
+   GCP).
+5. **Escalamiento masivo — ya NO es exploración sin decisión, ver "Último cambio" arriba.** La
+   Capa 1 (Cloud Run Job de shards) se construyó, desplegó y quedó permanente en producción
+   (`BATCH_JOB_ENABLED=true`, `THRESHOLD=1`). La pregunta "¿pico o sostenido?" que este documento
+   planteaba originalmente quedó superada por un criterio mejor (documentado en
+   `docs/propuesta-arquitectura-batch.md`, sección "Recomendación de esta ronda — CORREGIDA"):
+   construir ahora cuesta lo mismo que construir después y cuesta $0 en reposo, así que no hacía
+   falta esperar a resolver esa pregunta. Lo que sí sigue genuinamente pendiente:
+   - **Cuello de botella de extracción del ZIP a escala** — mide 6-8 min para 2000 XMLs, no lo
+     toca la Capa 1, un intento de arreglo (paralelizar subidas a GCS) salió 1.7x más lento en
+     producción y se revirtió. Idea corregida (lectura por rangos de GCS) anotada, no construida.
+     No se ha medido a escala de 15,000+ XMLs.
+   - **Ronda 2 (Capa 2, motor tipográfico compilado tipo typst)**: viable técnicamente (veredicto
+     de Ronda 0, incluye SAT/Anexo 20), pero pospuesta a propósito — no hay volumen real hoy que la
+     justifique frente al costo de mantener un motor nuevo en Rust. Decisión de negocio, no técnica.
+   - **Cuota real de paralelismo de Cloud Run Jobs en este proyecto**: ~150-200 tareas simultáneas
+     confirmadas vía `gcloud beta quotas info describe` (sin solicitar aumento) — suficiente para
+     cualquier batch visto hasta ahora, con headroom.
 
 (El progreso de descarga 0→100% ya no tiene pendientes — implementado, desplegado y verificado dos
 veces con HAR real, ver "Último cambio" arriba.)
@@ -287,6 +390,28 @@ veces con HAR real, ver "Último cambio" arriba.)
   "exitoso" no parece reflejarse en producción, correr
   `gcloud run services describe cfdi-suite-api --region=us-central1 --format="value(status.traffic)"`
   y confirmar que diga `latestRevision: True` — si no, repetir `--to-latest`.
+  **Pasó una tercera vez** durante las pruebas de la Capa 1 (2026-07-12), esta vez por el tag
+  `test-old-path` usado para la comparación medida — mismo fix, ya corregido y verificado.
+- **Paralelizar I/O que perfila rápido en local puede salir más lento en producción — pero la
+  medición original de "1.7x más lento" resultó contaminada, no concluyente (actualizado
+  2026-07-12).** Paralelizar las subidas de XML a GCS durante la extracción del ZIP perfiló 4.1x
+  más rápido en local con 100 XMLs — desplegado y medido con el ZIP real de 2000 en producción,
+  salió 1.7x más lento, y se revirtió (`07b3ddd`/`133e35e`). Auditando los logs reales de Cloud
+  Run después se encontró que esa medición coincidió con un reintento real de Cloud Tasks
+  duplicando la extracción a medio camino (ver "Último cambio" — el bug de idempotencia, ya
+  corregido). **No está probado que paralelizar sea malo en producción** — tres intentos de
+  reproducir la lentitud localmente (Mac, Docker con `--cpus=2`, y con carga de CPU concurrente
+  simulada) coincidieron entre sí (paralelo 4-8x más rápido) y ninguno reprodujo el resultado real.
+  Regla que sí queda en pie: cualquier medición de este pipeline en producción necesita el lock de
+  idempotencia activo primero (para no repetir esta contaminación) y, si es posible, desglose de
+  tiempo por sub-paso, no solo latencia total — un solo número no distingue "es lento" de "se
+  duplicó y por eso parece lento".
+- **El filesystem local de Cloud Run (`/tmp`, cualquier `NamedTemporaryFile`) es RAM, no disco
+  real — confirmado 2026-07-12.** Sin un volumen montado explícito (este servicio no tiene
+  ninguno, verificado con `gcloud run services describe`), escribir a "disco" consume el mismo
+  presupuesto de memoria del contenedor. Relevante para cualquier diseño futuro donde un worker
+  (Job o instancia) descargue un ZIP completo a archivo temporal — a partir de cierto tamaño es el
+  mismo riesgo de OOM que ya causó el rediseño de `download_batch_zip` a streaming.
 - ~~Signal 6~~ — **RESUELTO 2026-07-11, ya no es un riesgo abierto.** Fix (`e1d8238`) +
   `concurrency=5` (`31c6836`) confirmados en producción (revisión `00101-tbk`). Causa real:
   `mp_context="spawn"` (fix anterior) solo aislaba la tabla de conceptos cuando el XML tenía
