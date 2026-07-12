@@ -7,7 +7,7 @@
 El flujo de conversión masiva (subir ZIP → N Cloud Tasks convierten XMLs → descargar PDFs) necesita mostrar una barra de progreso. La primera implementación usaba **SSE (Server-Sent Events) con polling interno a Redis**, y tenía dos costos estructurales medidos en producción:
 
 1. **Cada espectador ocupaba una instancia entera de Cloud Run.** El servicio corre con `concurrency=1` (obligatorio: un bug de corrupción de heap nativo — signal 6 — reaparece con concurrency>1; verificado empíricamente el 2026-07-10 con concurrency=5, crash a los ~4 min de carga). Un stream SSE es una request HTTP que vive 15+ minutos → 1 espectador = 1 de las 10 instancias máximas bloqueada sin hacer trabajo real. En la prueba del batch de 2,000 XMLs esto produjo 462 errores 429 "no available instance", ~40 tareas descartadas por reintentos agotados (batch atorado en 98%), y descargas muertas (el 429 del balanceador no lleva headers CORS, el navegador lo reporta como error CORS).
-2. **Cada espectador quemaba Redis.** El generador SSE consultaba Redis cada segundo (~4-5 comandos: GET×2 + SMEMBERS + MGET) → ~4,000 comandos por batch por espectador, contra un límite de Upstash free tier de 500k/mes.
+2. **Cada espectador quemaba Redis.** El generador SSE consultaba Redis cada segundo (~4-5 comandos: GET×2 + SMEMBERS + MGET) → ~4,000 comandos por batch por espectador, contra un límite de Upstash free tier de 500k/mes (`db_request_limit`, confirmado 2026-07-11 vía Management API — no eran 10,000/día como decía por error un comentario en `pdf.py`, esa cifra es en realidad `db_max_commands_per_second`, un límite de tasa distinto).
 
 Ninguno de los dos costos escala: 500 usuarios mirando barras = 500 instancias + ~2,250 comandos Redis/segundo.
 

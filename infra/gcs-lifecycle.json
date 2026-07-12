@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "bucket": "cfdi-suite-uploads-706861124428",
+    "captured_at": "2026-07-11",
+    "captured_with": "gsutil lifecycle get gs://cfdi-suite-uploads-706861124428",
+    "note": "Versionado tras Fase 1 del plan de recuperación de PDFs de batches (docs/plan-recuperacion-batches-pdf.md). Confirma que la regla de lifecycle de 1 día aplica por igual a las tres carpetas — dejó de ser infraestructura fantasma inferida solo de un comentario en pdf.py."
+  },
+  "rule": [
+    {
+      "action": { "type": "Delete" },
+      "condition": { "age": 1, "matchesPrefix": ["uploads/"] }
+    },
+    {
+      "action": { "type": "Delete" },
+      "condition": { "age": 1, "matchesPrefix": ["xml_temp/"] }
+    },
+    {
+      "action": { "type": "Delete" },
+      "condition": { "age": 1, "matchesPrefix": ["pdfs/"] }
+    }
+  ]
+}

@@ -48,6 +48,13 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
 
+# TTL de las claves de metadata de un batch en Redis (batch_ids, extracting_total,
+# ready_recent, done_count, error_count). Debe ser >= al lifecycle real de GCS
+# sobre pdfs/uploads/xml_temp (1 día, ver infra/gcs-lifecycle.json) para que
+# _batch_progress_snapshot pueda seguir resolviendo un batch terminado mientras
+# sus PDFs todavía existen en Storage.
+BATCH_METADATA_TTL_SECONDS = 86400
+
 redis_client = aioredis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
@@ -103,7 +110,7 @@ async def _publish_batch_tick(batch_id: str, *, definitive_error: bool = False):
     """
     counter = "error_count" if definitive_error else "done_count"
     await redis_client.incr(f"pdf:{counter}:{batch_id}")
-    await redis_client.expire(f"pdf:{counter}:{batch_id}", 3600)
+    await redis_client.expire(f"pdf:{counter}:{batch_id}", BATCH_METADATA_TTL_SECONDS)
 
     total_bytes = await redis_client.get(f"pdf:extracting_total:{batch_id}")
     total = int(total_bytes) if total_bytes else 0
@@ -209,7 +216,7 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         if payload.batch_id:
             try:
                 await redis_client.rpush(f"pdf:ready_recent:{payload.batch_id}", payload.job_id)
-                await redis_client.expire(f"pdf:ready_recent:{payload.batch_id}", 3600)
+                await redis_client.expire(f"pdf:ready_recent:{payload.batch_id}", BATCH_METADATA_TTL_SECONDS)
                 await _publish_batch_tick(payload.batch_id)
             except Exception as tick_err:
                 print(f"Aviso: tick de progreso no publicado para {payload.batch_id}: {tick_err}")
@@ -302,16 +309,22 @@ async def start_pdf_zip_generation(
     mb_reales = total_bytes_descomprimidos / (1024 * 1024)
     total_comandos_pipeline = len(job_ids) * 2 # 2 comandos (SET xml y SET status) por cada archivo
 
-    # Constantes oficiales de tu plan de Upstash para pintar la comparativa
-    UPSTASH_STORAGE_MAX_MB = 256         # Capacidad total del Tanque
-    UPSTASH_REQUEST_MAX_MB = 50          # Capacidad máxima del Embudo por petición
-    UPSTASH_DAILY_COMMANDS_LIMIT = "10,000 (Plan Free) / ilimitados (Plan Paid)"
+    # Constantes oficiales de tu plan de Upstash para pintar la comparativa.
+    # Confirmadas 2026-07-11 contra la Management API de Upstash
+    # (GET https://api.upstash.com/v2/redis/databases), no estimadas:
+    # db_disk_threshold=268435456B (256MB), db_max_request_size=10485760B (10MB),
+    # db_request_limit=500000 (comandos/mes, Plan Free). El valor previo de
+    # "10,000" confundía db_max_commands_per_second (límite de tasa) con un
+    # presupuesto diario/mensual — no existe tal límite diario en este plan.
+    UPSTASH_STORAGE_MAX_MB = 256          # Capacidad total del Tanque
+    UPSTASH_REQUEST_MAX_MB = 10           # Capacidad máxima del Embudo por petición
+    UPSTASH_MONTHLY_COMMANDS_LIMIT = "500,000 (Plan Free)"
 
     print("\n" + "="*80)
     print("🔍 [AUDITORÍA DE INFRAESTRUCTURA - TRANSMISIÓN DE DATOS]")
     print(f"📦 EL TANQUE (Almacenamiento): {mb_reales:.2f} MB ocupados de {UPSTASH_STORAGE_MAX_MB} MB disponibles en tu capacidad total.")
     print(f"⚠️ EL EMBUDO (Payload Size):  {mb_reales:.2f} MB enviados de {UPSTASH_REQUEST_MAX_MB} MB máximos permitidos en una sola petición.")
-    print(f"🔀 COMANDOS EN PIPELINE:     Total de comandos de escritura en el Pipeline: {total_comandos_pipeline} de {UPSTASH_DAILY_COMMANDS_LIMIT}.")
+    print(f"🔀 COMANDOS EN PIPELINE:     Total de comandos de escritura en el Pipeline: {total_comandos_pipeline} de {UPSTASH_MONTHLY_COMMANDS_LIMIT}.")
     print("="*80 + "\n")
 
     # El bloque que va justo abajo de los prints de auditoría en pdf.py
@@ -341,9 +354,9 @@ async def start_pdf_zip_generation(
         )
 
     just_ids = [item[0] for item in job_ids]
-    await redis_client.set(f"pdf:extracting_total:{batch_id}", len(just_ids), ex=3600)
+    await redis_client.set(f"pdf:extracting_total:{batch_id}", len(just_ids), ex=BATCH_METADATA_TTL_SECONDS)
     await redis_client.sadd(f"pdf:batch_ids:{batch_id}", *just_ids)
-    await redis_client.expire(f"pdf:batch_ids:{batch_id}", 3600)
+    await redis_client.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
 
     network_semaphore = asyncio.Semaphore(50)
 
@@ -604,7 +617,7 @@ async def download_pdf(job_id: str):
     
     if not blob.exists():
          raise HTTPException(status_code=404, detail="El archivo PDF no se encontró en Storage.")
-         
+
     pdf_bytes = await asyncio.to_thread(blob.download_as_bytes)
 
     return Response(
@@ -737,7 +750,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             xml_entries = [fi for fi in z.infolist() if _is_valid_xml_entry(fi)]
             # Total real conocido de inmediato: el frontend deja de ver 0% fijo
             # desde los primeros segundos, en vez de hasta que todo el ZIP termine.
-            await redis_client.set(f"pdf:extracting_total:{batch_id}", len(xml_entries), ex=3600)
+            await redis_client.set(f"pdf:extracting_total:{batch_id}", len(xml_entries), ex=BATCH_METADATA_TTL_SECONDS)
 
             chunk = []
             CHUNK_SIZE = 20
@@ -750,7 +763,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                     for jid, _ in current_chunk:
                         pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
                     pipe.sadd(f"pdf:batch_ids:{batch_id}", *[jid for jid, _ in current_chunk])
-                    pipe.expire(f"pdf:batch_ids:{batch_id}", 3600)
+                    pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
                     await pipe.execute()
 
                 # b) Storage: el archivo pesado
