@@ -1244,33 +1244,61 @@ acotado al Job), y la revisión de producción actual con el código nuevo.
   correctas (incluyendo Pusher, ya corregido), y sin recursos de prueba
   sobrantes.
 
+### Umbral final, cerrado (12 de julio de 2026)
+
+Se hizo la prueba pendiente: un ZIP real chico (20 XMLs) subido de punta a
+punta por el sitio web, con el fix de Pusher ya puesto — el frontend sí
+mostró progreso en vivo esta vez, confirmando que el bug anterior quedó
+resuelto.
+
+**Resultado, y por qué complica la recomendación anterior:** el batch
+completo tardó 270 segundos (4 minutos 30) — 4s de extracción, 266s de
+procesamiento para solo 20 XMLs (13.3s/XML). Comparado contra la prueba de
+2000 XMLs (5.2s/XML en esa), el costo fijo de arranque en frío del Job pesa
+mucho más, proporcionalmente, en un batch chico — confirmando el riesgo que
+ya había señalado el `decision-expander`: para batches chicos, el camino
+viejo (con workers ya calientes) muy probablemente sea más rápido en
+términos absolutos.
+
+**Se evaluó fijar el umbral en `100`** (no un número adivinado — coincide
+exactamente con `BATCH_JOB_SHARD_SIZE`, el punto estructural donde un batch
+ya necesita más de una tarea para procesarse, que es cuando la Capa 1 gana
+de verdad). **Decisión final de Gilberto: se queda en `1`.** Razón, y es una
+razón de producto, no técnica: la comunicación al usuario ya va a distinguir
+los dos casos por diseño — "el ZIP es para subir muchas facturas de golpe;
+si son pocas, se suben sueltas" (el endpoint `/cfdi/pdf/start`, que ya existe
+y no pasa por ninguno de los dos caminos de batch). Bajo esa guía de
+producto, el caso "ZIP chico" no debería ocurrir seguido en uso real —
+resolver su latencia con un umbral no es necesario si el producto ya dirige
+a los usuarios hacia el camino correcto por diseño, no por inferencia
+automática de tamaño.
+
+**Confirmado en producción:** `BATCH_JOB_ENABLED=true`,
+`BATCH_JOB_THRESHOLD=1` — sin cambios, ya estaba así. Esta es ahora la
+decisión permanente, no un artefacto de la fase de pruebas.
+
 ### Pendientes reales, actualizados
 
-1. **Prueba pendiente antes de fijar el umbral como decisión permanente**
-   (no como artefacto de pruebas): subir un ZIP real chico (5-10 XMLs) de
-   punta a punta por el sitio web y medir contra el camino viejo — el
-   decision-expander de arriba lo señaló como el paso que falta antes de
-   cerrar esta decisión con justificación de forma, no de tamaño adivinado.
-2. **Investigar el cuello de botella de extracción del ZIP** — nuevo,
+1. **Investigar el cuello de botella de extracción del ZIP** — nuevo,
    descubierto en esta sesión, no estaba en el radar de ninguna ronda
    anterior. Candidato natural para el próximo perfilado: separar cuánto de
    esos 6-8 minutos es descarga del ZIP a disco, cuánto es lectura/parseo del
    ZIP, y cuánto son las subidas individuales a GCS — el mismo tipo de
    perfilado que ya se hizo para `generate()`, aplicado ahora a
    `process_zip_in_background`.
-3. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
+2. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
    — probarlo con un ZIP más grande (ideal: el escenario real de 15,000) para
    saber si el "~1 hora" es una sobreestimación o el piso real.
-4. **El escenario de negocio de "muchos batches chicos simultáneos"**
+3. **El escenario de negocio de "muchos batches chicos simultáneos"**
    (1000 usuarios × 50 facturas) no se ha probado — todo lo medido hasta
    ahora es "un batch grande a la vez". Es un problema de escalamiento
    distinto (throughput agregado del Job bajo muchas ejecuciones
    concurrentes), no cubierto por ninguna prueba de esta sesión.
-5. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
+4. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
    fase de pruebas) — migrar a Secret Manager antes de que esto deje de ser
    un entorno de prueba, tal como ya está anotado para el Redis de
    Upstash en la memoria del proyecto.
-6. **Capa 2 (typst) sigue sin PoC** — Ronda 0.5 recomendó una prueba local
+5. **Capa 2 (typst) sigue sin PoC** — Ronda 0.5 recomendó una prueba local
    gratuita antes de comprometerse; nunca se hizo. Sigue pendiente, sin
    urgencia nueva desde que la Capa 1 sola ya entregó una mejora real
    medida.
