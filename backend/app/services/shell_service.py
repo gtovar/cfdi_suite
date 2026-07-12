@@ -6,15 +6,33 @@ Se genera una vez por versión de template y se cachea en backend/shells/.
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from weasyprint import HTML
+from weasyprint.text.fonts import FontConfiguration
 
 SHELLS_DIR = Path(__file__).resolve().parents[2] / "shells"
 SHELLS_DIR.mkdir(exist_ok=True)
 
 HTML_TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates" / "html"
 HTML_TEMPLATES_DIR.mkdir(exist_ok=True)
+
+# FontConfiguration() escanea TODO el inventario de fuentes del sistema
+# (fontconfig.FcInitLoadConfigAndFonts) en cada instanciación — costoso
+# (~30% del tiempo de un render de header) e independiente de los datos de
+# la factura o de si el HTML declara @font-face. Un config por hilo (perfilado
+# 2026-07 en docs/propuesta-arquitectura-batch.md) evita rehacer ese escaneo en
+# cada factura, sin compartir el mismo objeto entre hilos concurrentes.
+_font_config_local = threading.local()
+
+
+def _get_font_config() -> FontConfiguration:
+    config = getattr(_font_config_local, "config", None)
+    if config is None:
+        config = FontConfiguration()
+        _font_config_local.config = config
+    return config
 
 
 # ── Template HTML base para el header ─────────────────────────────────────────
@@ -229,14 +247,14 @@ def _fill_placeholders(html: str, cfdi_data: dict, design_config: dict | None = 
 
 
 def render_shell(html_template: str, cfdi_data: dict, design_config: dict | None = None) -> bytes:
-    """Renderiza el header HTML con datos reales del CFDI. Sin caché (cada factura tiene datos únicos)."""
+    """Renderiza el header HTML con datos reales del CFDI. Sin caché de PDF (cada factura tiene datos únicos)."""
     filled = _fill_placeholders(html_template, cfdi_data, design_config)
-    return HTML(string=filled, base_url=None).write_pdf()
+    return HTML(string=filled, base_url=None).write_pdf(font_config=_get_font_config())
 
 
 def render_shell_preview(html: str) -> bytes:
-    """WeasyPrint en memoria, sin cache. Usado para live preview en el diseñador."""
-    return HTML(string=html, base_url=None).write_pdf()
+    """WeasyPrint en memoria, sin cache de PDF. Usado para live preview en el diseñador."""
+    return HTML(string=html, base_url=None).write_pdf(font_config=_get_font_config())
 
 
 def get_or_create_shell(template_id: str, html_template: str, cfdi_data: dict) -> bytes:
