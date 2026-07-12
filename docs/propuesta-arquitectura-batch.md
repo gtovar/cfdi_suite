@@ -1162,25 +1162,95 @@ esta propuesta se diseñó para resolver. **No se ha medido a esa escala
 todavía** — esto queda anotado como pregunta abierta, no como hecho, pero es
 una pregunta que ninguna ronda anterior había hecho.
 
+### Decision-expander sobre el enrutamiento: ¿el "if" por tamaño es práctica real, o lo inventamos?
+
+Después de la comparación real, Gilberto preguntó algo más de fondo antes de
+seguir ajustando el umbral: ¿estamos inventando una práctica propia, o esto
+ya lo resuelve la industria de otra forma? Se corrió `decision-expander`
+sobre esa pregunta específica. Conclusión, resumida (ver el resultado
+completo en la conversación de esa sesión, no reproducido aquí por
+extensión):
+
+- **La práctica establecida de GCP y AWS no es "enrutar por tamaño" — es
+  enrutar por FORMA del trabajo.** Un servicio *request/response* (Cloud
+  Run services + Cloud Tasks) es para peticiones interactivas; un *Job*
+  (Cloud Run Jobs) es para trabajo acotado que corre hasta terminar sin
+  respuesta síncrona. Un ZIP subido, sea de 2 o de 15,000 XMLs, **ya es por
+  su forma un trabajo de tipo Job** — no hace falta un umbral para decidirlo,
+  ya lo decide qué endpoint se llamó (`start-zip-gcs` = Job siempre;
+  `/cfdi/pdf/start`, un XML suelto, = Cloud Tasks siempre).
+- El límite real que sí importa (`maxConcurrentDispatches=8` en la cola de
+  Cloud Tasks) es configuración nuestra, no una ley de GCP — subirlo es una
+  opción real (patrón "Competing Consumers"/"Queue-Based Load Leveling",
+  bien documentado), pero no resuelve el riesgo de que ese número se
+  desafine sin que nadie lo note (ya pasó antes en este proyecto).
+- La idea de Gilberto de enrutar por *saturación observada* del sistema es
+  un patrón real (parecido a "cloud bursting"), pero es la opción más
+  compleja de implementar bien (requiere leer carga en tiempo real, con
+  riesgo de condición de carrera) para un problema que ya resuelve la
+  alternativa de enrutar por forma/endpoint.
+- **Recomendación de esa exploración:** no adivinar un número (ni 100 ni
+  otro) — dejar `BATCH_JOB_THRESHOLD=1` como decisión permanente,
+  justificada por forma del trabajo, no por tamaño, una vez confirmado con
+  una prueba de un ZIP chico real de punta a punta (pendiente, ver abajo).
+  El escenario de negocio que a Gilberto le preocupa (1000 batches chicos
+  simultáneos, no uno grande) es un problema distinto —throughput agregado
+  del Job bajo muchas ejecuciones a la vez— que esta sesión no probó.
+
+### Bug operativo encontrado y corregido durante la limpieza: el servicio dejó de rastrear `LATEST`
+
+Al limpiar los recursos de prueba se encontró (y se corrigió) el mismo
+problema que ya está documentado en la memoria de este proyecto como
+"crítico": desplegar la revisión aislada `test-old-path` con `--no-traffic`
+dejó al servicio con el tráfico pineado por nombre a `cfdi-suite-api-00128-dax`
+en vez de seguir el alias `LATEST` — cualquier despliegue automático futuro
+(`git push` a `main`) habría construido una revisión nueva que se queda sin
+una sola petición, reportando "éxito" de todos modos, exactamente como ya
+pasó dos veces antes en este proyecto. Se corrigió redesplegando
+explícitamente la configuración correcta (misma imagen, mismas variables,
+`API_URL`/`ALLOWED_ORIGINS`/`BATCH_JOB_*` reafirmados) y promoviendo con
+`--to-latest`, con confirmación explícita antes del redeploy. Verificado
+después: `latestRevision: True`, tráfico y `latestReadyRevisionName`
+coinciden en la misma revisión (`cfdi-suite-api-00106-cfn`).
+
+### Limpieza de recursos de prueba (12 de julio de 2026)
+
+Con confirmación explícita, se limpiaron los recursos que existían solo para
+las pruebas de esta sesión, no como parte de la funcionalidad final:
+- Revisión y tag `test-old-path` (la que forzaba el camino viejo para la
+  comparación) — eliminada.
+- Tag `canary-batch-shard` — removido (quedaba redundante, apuntando a una
+  revisión que ya no sirve tráfico tras el redeploy de corrección de
+  `LATEST`).
+- Datos de prueba manuales en Redis/GCS (`test-canario-82a0257e`, el batch
+  de 2 XMLs preparado a mano para la primera prueba) — borrados.
+- Los ~4000 PDFs reales de las dos pruebas de comparación (2000 XMLs cada
+  una) se dejaron para que expiren solos vía el lifecycle de GCS de 1 día ya
+  configurado (`infra/gcs-lifecycle.json`) — decisión explícita de Gilberto,
+  no hacía falta borrarlos a mano.
+
+**Lo que NO se tocó, porque es la funcionalidad real, no un artefacto de
+prueba:** el Job `cfdi-batch-shard`, su permiso IAM (`roles/run.invoker`,
+acotado al Job), y la revisión de producción actual con el código nuevo.
+
 ### Estado operativo actual (12 de julio de 2026, fin de esta sesión)
 
-- **Producción está sirviendo la revisión nueva al 100% del tráfico**, con
-  `BATCH_JOB_ENABLED=true` y `BATCH_JOB_THRESHOLD=1` — cualquier ZIP que
-  cualquier usuario suba ahora mismo usa el camino nuevo (Cloud Run Job).
-  Esto fue confirmado explícitamente por Gilberto, entendiendo la
-  implicación, para esta fase de pruebas activas.
-- Existe una revisión aislada adicional (tag `test-old-path`, 0% de
-  tráfico) que fuerza el camino viejo — quedó desplegada como referencia,
-  no cuesta nada mientras no reciba tráfico.
+- **Producción sirve el 100% del tráfico** desde `cfdi-suite-api-00106-cfn`,
+  rastreando `LATEST` correctamente (verificado), con `BATCH_JOB_ENABLED=true`
+  y `BATCH_JOB_THRESHOLD=1` — cualquier ZIP que cualquier usuario suba ahora
+  mismo usa el camino nuevo (Cloud Run Job). Confirmado explícitamente por
+  Gilberto, entendiendo la implicación, para esta fase de pruebas activas.
 - El Job `cfdi-batch-shard` existe en GCP, con las 8 variables de entorno
-  correctas (incluyendo Pusher, ya corregido).
+  correctas (incluyendo Pusher, ya corregido), y sin recursos de prueba
+  sobrantes.
 
 ### Pendientes reales, actualizados
 
-1. **El umbral de producción sigue en `1`** — válido para esta fase de
-   pruebas activas, pero Gilberto ya señaló que quiere un umbral
-   calculado/variable (posiblemente atado a plan de cliente o a carga) antes
-   de que esto sea el comportamiento permanente. Sigue sin definirse.
+1. **Prueba pendiente antes de fijar el umbral como decisión permanente**
+   (no como artefacto de pruebas): subir un ZIP real chico (5-10 XMLs) de
+   punta a punta por el sitio web y medir contra el camino viejo — el
+   decision-expander de arriba lo señaló como el paso que falta antes de
+   cerrar esta decisión con justificación de forma, no de tamaño adivinado.
 2. **Investigar el cuello de botella de extracción del ZIP** — nuevo,
    descubierto en esta sesión, no estaba en el radar de ninguna ronda
    anterior. Candidato natural para el próximo perfilado: separar cuánto de
@@ -1191,7 +1261,16 @@ una pregunta que ninguna ronda anterior había hecho.
 3. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
    — probarlo con un ZIP más grande (ideal: el escenario real de 15,000) para
    saber si el "~1 hora" es una sobreestimación o el piso real.
-4. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
+4. **El escenario de negocio de "muchos batches chicos simultáneos"**
+   (1000 usuarios × 50 facturas) no se ha probado — todo lo medido hasta
+   ahora es "un batch grande a la vez". Es un problema de escalamiento
+   distinto (throughput agregado del Job bajo muchas ejecuciones
+   concurrentes), no cubierto por ninguna prueba de esta sesión.
+5. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
    fase de pruebas) — migrar a Secret Manager antes de que esto deje de ser
    un entorno de prueba, tal como ya está anotado para el Redis de
    Upstash en la memoria del proyecto.
+6. **Capa 2 (typst) sigue sin PoC** — Ronda 0.5 recomendó una prueba local
+   gratuita antes de comprometerse; nunca se hizo. Sigue pendiente, sin
+   urgencia nueva desde que la Capa 1 sola ya entregó una mejora real
+   medida.
