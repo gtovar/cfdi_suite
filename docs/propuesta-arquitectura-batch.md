@@ -1436,8 +1436,91 @@ una sorpresa.
 1. **Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job**
    (la idea corregida de arriba) — con más cuidado que el intento de hoy,
    probablemente en otra sesión.
-2. **Resolver el hueco de progreso durante extracción** (Hallazgo 1) — la
-   pantalla debería mostrar algo durante la extracción, no solo 0% fijo.
-3. Todos los pendientes de la sección anterior (paso c) de Cloud Tasks,
+2. Todos los pendientes de la sección anterior (paso c) de Cloud Tasks,
    escalamiento del volumen, escenario de muchos batches simultáneos,
    Secret Manager, PoC de Capa 2) siguen abiertos, sin cambios por esto.
+
+## Progreso real durante la extracción: implementado, probado y desplegado (12 de julio de 2026)
+
+**El hueco del Hallazgo 1 (pantalla en 0% fijo durante la extracción) ya
+está resuelto.** Gilberto notó que yo sí podía ver el avance real (consultando
+Redis directamente) mientras su pantalla no mostraba nada, y preguntó
+específicamente por qué — la respuesta llevó a encontrar la causa exacta en
+el código (`_batch_progress_snapshot` solo contaba PDFs ya convertidos, nunca
+XMLs ya subidos durante la extracción, aunque ese dato ya existía en Redis).
+
+### Qué se construyó
+
+- **Backend** (`pdf.py`): `_batch_progress_snapshot` ahora devuelve
+  `status: "extracting"` con un campo `extracted` (y `percentage` calculado
+  sobre ese avance) mientras el ZIP se sigue subiendo — antes de que empiece
+  cualquier conversión. `process_zip_in_background` manda además un aviso a
+  Pusher cada 5 chunks (100 XMLs) durante la extracción, no solo cada 30s vía
+  polling. El aviso de progreso quedó aislado en su propio `try/except` —
+  se encontró, corriendo los tests, que sin ese aislamiento un fallo ahí
+  hubiera podido tumbar la subida real a GCS y el encolado de Cloud Tasks del
+  mismo chunk (un defecto real de diseño, no solo un test desactualizado).
+- **Frontend** (`pdf-download.ts`, `ConversionMasivaPage.tsx`): el tipo
+  `BatchProgressPayload` admite el nuevo status `"extracting"` y el campo
+  `extracted`; la pantalla muestra un badge ("Preparando tus facturas...") y
+  cambia la etiqueta de la barra ("Preparando facturas" en vez de "Progreso
+  General") durante esa fase, reutilizando la misma barra y el mismo `%` sin
+  arriesgar que se vea retroceder al pasar a la fase de conversión (son dos
+  campos con significado distinto, `extracted` vs. `done`/`error`, nunca se
+  mezclan en el mismo número).
+
+### Verificación antes de desplegar (aprendiendo del intento fallido anterior)
+
+Dado lo que pasó horas antes con el fix de GCS (se veía bien en teoría, salió
+mal en producción real), esta vez se probó contra un canario aislado (0%
+tráfico, `API_URL` apuntada a sí mismo) con el mismo ZIP real de 2000 XMLs
+antes de tocar producción:
+
+```
+{"status":"extracting","total":2000,"extracted":20,...,"percentage":1}
+{"status":"extracting","total":2000,"extracted":80,...,"percentage":4}
+{"status":"extracting","total":2000,"extracted":120,...,"percentage":6}
+{"status":"extracting","total":2000,"extracted":180,...,"percentage":9}
+{"status":"extracting","total":2000,"extracted":220,...,"percentage":11}
+```
+
+El `%` sube en tiempo real, medido, no solo esperado. Cero errores en el
+envío del aviso a Pusher (confirmado en logs). 208/208 tests de backend,
+12/12 de los dos archivos de frontend tocados, sin errores nuevos de
+TypeScript (se verificó explícitamente que un error preexistente de
+`DocumentSettings.jsx` y 6 tests de un componente no relacionado ya fallaban
+antes de este cambio — no son causados por esto).
+
+### El despliegue en sí: otra rareza de `gcloud` encontrada y resuelta
+
+Al desplegar a producción, el mensaje de texto de `gcloud run deploy` se
+quedó repitiendo el nombre de la revisión del canario de prueba anterior en
+varios intentos seguidos, aunque **sí se estaban creando revisiones nuevas de
+verdad** cada vez (confirmado con `gcloud run revisions list`, no confiando
+solo en el texto impreso del comando). El campo `latestReadyRevisionName`
+también quedó desincronizado del despliegue real, probablemente por la
+interacción con el tag `--no-traffic` usado para el canario momentos antes.
+
+Se resolvió: se verificó independientemente cuál era la revisión más
+reciente de verdad (`cfdi-suite-api-00114-bpv`, por timestamp de creación,
+con las variables de entorno correctas confirmadas), se enrutó el tráfico
+ahí explícitamente por nombre (con confirmación de Gilberto, dado que esto
+se aparta del flujo normal), y se verificó que quedara consistente:
+`latestRevision: True`, tráfico y `latestReadyRevisionName` coinciden en
+`00114-bpv`, servicio sano (200 en `/docs`). No hizo falta un segundo deploy
+de reparación esta vez — el `update-traffic` explícito resincronizó el
+campo `latestReadyRevisionName` por sí solo.
+
+**Lección para la próxima vez que pase algo así:** no confiar en el texto
+que imprime `gcloud run deploy` para saber qué revisión quedó realmente
+activa — verificar siempre con `gcloud run revisions list` (por timestamp) y
+`gcloud run services describe --format="value(status.traffic,
+status.latestReadyRevisionName)"` de forma independiente.
+
+### Pendientes actualizados (otra vez)
+
+1. **Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job**
+   — sigue igual que antes, sin cambios.
+2. Todos los pendientes de secciones anteriores (paso c) de Cloud Tasks,
+   escalamiento del volumen, escenario de muchos batches simultáneos,
+   Secret Manager, PoC de Capa 2) siguen abiertos.
