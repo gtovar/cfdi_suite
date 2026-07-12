@@ -653,6 +653,11 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                 <BarChart3 className="text-primary-500" size={18} />
                 <h3 className="text-sm font-semibold text-gray-900">Estado del Procesamiento en la Nube</h3>
               </div>
+              {batchProgress.status === 'extracting' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                  <Loader2 size={12} className="animate-spin" /> Preparando tus facturas...
+                </span>
+              )}
               {batchProgress.status === 'processing' && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
                   <Loader2 size={12} className="animate-spin" /> Convirtiendo en ráfaga...
@@ -687,10 +692,12 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
               </div>
             )}
 
-            {/* Barra de progreso unificada */}
+            {/* Barra de progreso unificada — durante "extracting" el % es de
+                XMLs ya subidos a la nube, no de PDFs convertidos (son fases
+                distintas, ver BatchProgressPayload en pdf-download.ts) */}
             <div className="w-full">
               <div className="mb-2 flex items-center justify-between text-xs font-medium text-gray-600">
-                <span>Progreso General</span>
+                <span>{batchProgress.status === 'extracting' ? 'Preparando facturas' : 'Progreso General'}</span>
                 <span className="text-sm font-bold text-primary-600 tabular-nums">{batchProgress.percentage}%</span>
               </div>
               <div className="h-3 w-full overflow-hidden rounded-full bg-gray-100">

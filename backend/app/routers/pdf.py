@@ -379,6 +379,28 @@ async def _batch_progress_snapshot(batch_id: str) -> dict:
     registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
     registered_ids = [rid.decode("utf-8") for rid in registered_raw]
 
+    # Fase de extracción: el ZIP todavía se está desempaquetando y subiendo a
+    # GCS -- ningún XML ha empezado a convertirse todavía. Se reporta con un
+    # status distinto ("extracting", no "processing") para no reusar el
+    # mismo "percentage" con dos significados (extraído vs. convertido) y
+    # arriesgar que la barra parezca retroceder al pasar de una fase a otra.
+    # 2026-07-12: antes de esto, la pantalla se quedaba en 0% fijo toda la
+    # extracción (6-25 min medidos) sin ningún aviso -- el dato (cuántos
+    # XMLs ya están en pdf:batch_ids) ya existía, solo no se exponía aquí.
+    is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
+    if is_extracting:
+        extracted = len(registered_ids)
+        return {
+            "status": "extracting",
+            "total": total,
+            "extracted": extracted,
+            "done": 0,
+            "error": 0,
+            "converting": 0,
+            "pending": total,
+            "percentage": int((extracted / total) * 100) if total else 0,
+        }
+
     done = error = converting = 0
     if registered_ids:
         keys = [f"pdf:status:{jid}" for jid in registered_ids]
@@ -744,7 +766,14 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             chunk = []
             CHUNK_SIZE = 20
 
+            # Aviso de progreso de EXTRACCIÓN vía Pusher (no solo el polling de
+            # 30s a /status) -- throttled cada 5 chunks (100 XMLs), mismo
+            # criterio que PUBLISH_EVERY_N_JOBS para el tick de conversión,
+            # para no saturar el plan de Pusher en batches grandes.
+            flushed_chunks = 0
+
             async def flush_chunk(current_chunk):
+                nonlocal flushed_chunks
                 # a) Redis: estado "pending" + registro incremental del batch
                 #    (mismo pipeline, así el TTL del set nunca queda huérfano
                 #    si el proceso muere a mitad de camino)
@@ -754,6 +783,26 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                     pipe.sadd(f"pdf:batch_ids:{batch_id}", *[jid for jid, _ in current_chunk])
                     pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
                     await pipe.execute()
+
+                # El aviso de progreso es cosmético -- un fallo aquí (Redis,
+                # Pusher, lo que sea) NUNCA debe impedir que b) y c) corran de
+                # verdad para este chunk, por eso todo esto va en su propio
+                # try/except, aislado del trabajo real.
+                flushed_chunks += 1
+                try:
+                    total_xmls = len(xml_entries)
+                    extracted_so_far = await redis_client.scard(f"pdf:batch_ids:{batch_id}")
+                    if flushed_chunks % 5 == 0 or extracted_so_far >= total_xmls:
+                        await asyncio.to_thread(publish_batch_progress, batch_id, {
+                            "status": "extracting",
+                            "total": total_xmls,
+                            "extracted": extracted_so_far,
+                            "done": 0, "error": 0, "converting": 0,
+                            "pending": total_xmls,
+                            "percentage": int(extracted_so_far / total_xmls * 100) if total_xmls else 0,
+                        })
+                except Exception as pusher_err:
+                    print(f"Aviso: tick de extracción no publicado para {batch_id}: {pusher_err}")
 
                 # b) Storage: el archivo pesado
                 for jid, xml_data in current_chunk:

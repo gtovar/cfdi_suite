@@ -11,7 +11,11 @@ function resolveApiBaseUrl() {
 
 // Estructura de control para el progreso global de un lote ZIP
 export interface BatchProgressPayload {
-  status: 'processing' | 'done' | 'error';
+  // 'extracting': el ZIP todavía se está desempaquetando y subiendo a GCS —
+  // ningún XML ha empezado a convertirse. "percentage" en esta fase es el
+  // % ya extraído, no el % convertido (son números distintos a propósito,
+  // ver docs/propuesta-arquitectura-batch.md, 2026-07-12).
+  status: 'extracting' | 'processing' | 'done' | 'error';
   total: number;
   done: number;
   error: number;
@@ -19,6 +23,8 @@ export interface BatchProgressPayload {
   pending: number;
   percentage: number;
   message?: string;
+  // Solo presente durante status "extracting" — cuántos XMLs ya se subieron.
+  extracted?: number;
   // Job IDs terminados desde el tick anterior — evita que el frontend tenga
   // que volver a pedir /ready-files (O(n) sobre todo el batch) en cada tick.
   readyIds?: string[];
