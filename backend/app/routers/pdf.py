@@ -170,7 +170,7 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
                     xml_bytes = None
             
         if not xml_bytes:
-            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
+            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
             print(f"Abortando Job {payload.job_id}: XML ya no existe ni en Redis ni en GCS.")
             if payload.batch_id:
                 try:
@@ -197,7 +197,7 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         blob = bucket.blob(f"pdfs/{payload.job_id}.pdf")
         await asyncio.to_thread(blob.upload_from_string, pdf_bytes, content_type="application/pdf")
 
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=86400)
+        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=BATCH_METADATA_TTL_SECONDS)
         # Tamaño en bytes, guardado aquí (ya lo tenemos en memoria) para que la
         # descarga del ZIP consolidado pueda estimar el progreso sin tener que
         # volver a golpear GCS por metadata de cada PDF del lote.
@@ -227,7 +227,7 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
     except Exception as e:
         print(f"Error generando PDF {payload.job_id}: {e}")
         try:
-            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=1800)
+            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
         except Exception as redis_err:
             pass
         
@@ -367,7 +367,7 @@ async def start_pdf_zip_generation(
                 await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
             except Exception as ex:
                 print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
-                await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
+                await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
 
     async_tasks = [safe_enqueue_task(jid) for jid in just_ids]
     await asyncio.gather(*async_tasks)
@@ -782,7 +782,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                         await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
                     except Exception as ex:
                         print(f"Error registrando en Tasks {jid}: {ex}")
-                        await redis_client.set(f"pdf:status:{jid}", b"error", ex=1800)
+                        await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
 
             for file_info in xml_entries:
                 # Determinístico (no uuid4): si Cloud Tasks reintenta esta

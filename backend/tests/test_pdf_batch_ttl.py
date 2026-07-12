@@ -185,6 +185,172 @@ class BatchMetadataTtlTests(unittest.TestCase):
         mock_redis.expire.assert_any_call(
             "pdf:ready_recent:batch-3", pdf_router.BATCH_METADATA_TTL_SECONDS
         )
+        mock_redis.set.assert_any_call(
+            "pdf:status:job-9", b"done", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
+        )
+
+    def test_internal_generate_pdf_xml_missing_sets_error_status_ttl_to_24h(self) -> None:
+        """Estado terminal ("error", XML ya no existe ni en Redis ni GCS) debe
+        vivir tanto como pdf:batch_ids — si expira antes (era ex=1800, 30 min),
+        _batch_progress_snapshot ve este job como "pending" para siempre y el
+        batch nunca reporta "done" dentro de la ventana de 24h de Fase 2."""
+        from backend.app.routers.pdf import GeneratePdfPayload
+
+        mock_request = MagicMock()
+        mock_request.headers = {"x-cloudtasks-queuename": "pdf-generator-queue"}
+        payload = GeneratePdfPayload(
+            job_id="job-missing", xml_b64="", template_id="default", batch_id="batch-4"
+        )
+
+        mock_blob_xml = MagicMock()
+        mock_blob_xml.exists.return_value = False
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob_xml
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "publish_batch_progress"),
+        ):
+            mock_redis.get = AsyncMock(return_value=None)
+            mock_redis.set = AsyncMock()
+            mock_redis.incr = AsyncMock()
+            mock_redis.expire = AsyncMock()
+
+            _run(pdf_router.internal_generate_pdf(payload, mock_request))
+
+        mock_redis.set.assert_any_call(
+            "pdf:status:job-missing", b"error", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
+        )
+
+    def test_internal_generate_pdf_generation_failure_sets_error_status_ttl_to_24h(self) -> None:
+        from backend.app.routers.pdf import GeneratePdfPayload
+
+        mock_request = MagicMock()
+        mock_request.headers = {"x-cloudtasks-queuename": "pdf-generator-queue"}
+        payload = GeneratePdfPayload(
+            job_id="job-boom", xml_b64="", template_id="default", batch_id=None
+        )
+
+        mock_blob_xml = MagicMock()
+        mock_blob_xml.exists.return_value = True
+        mock_blob_xml.download_as_bytes.return_value = b"<xml/>"
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob_xml
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        from fastapi import HTTPException
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "generate", side_effect=RuntimeError("motor de render colapsó")),
+            patch.object(pdf_router, "PDF_PROCESS_POOL", None),
+        ):
+            mock_redis.get = AsyncMock(return_value=None)
+            mock_redis.set = AsyncMock()
+
+            # El endpoint re-lanza como HTTPException 500 tras marcar el
+            # status — eso es esperado, lo relevante aquí es el TTL grabado.
+            with self.assertRaises(HTTPException):
+                _run(pdf_router.internal_generate_pdf(payload, mock_request))
+
+        mock_redis.set.assert_any_call(
+            "pdf:status:job-boom", b"error", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
+        )
+
+    def test_direct_path_enqueue_failure_sets_error_status_ttl_to_24h(self) -> None:
+        """start_pdf_zip_generation (~283-346): si Cloud Tasks rechaza el
+        encolado, el job nunca progresará — su status "error" debe vivir
+        24h, igual que pdf:batch_ids, no los 1800s (30 min) originales."""
+        import io
+        import zipfile
+
+        from fastapi.testclient import TestClient
+
+        from backend.app.main import app
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("a.xml", "<xml/>")
+        zip_bytes = buf.getvalue()
+
+        mock_bucket = MagicMock()
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "enqueue_pdf_generation", side_effect=RuntimeError("cloud tasks down")),
+        ):
+            mock_redis.set = AsyncMock()
+            mock_redis.sadd = AsyncMock()
+            mock_redis.expire = AsyncMock()
+            pipe_cm = MagicMock()
+            pipe_cm.__aenter__ = AsyncMock(return_value=pipe_cm)
+            pipe_cm.__aexit__ = AsyncMock(return_value=False)
+            pipe_cm.set = MagicMock()
+            pipe_cm.execute = AsyncMock()
+            mock_redis.pipeline = MagicMock(return_value=pipe_cm)
+
+            client = TestClient(app)
+            client.post(
+                "/api/cfdi/pdf/start-zip",
+                files={"file": ("batch.zip", zip_bytes, "application/zip")},
+            )
+
+        mock_redis.set.assert_any_call(
+            unittest.mock.ANY, b"error", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
+        )
+
+    def test_background_path_enqueue_failure_sets_error_status_ttl_to_24h(self) -> None:
+        """process_zip_in_background/flush_chunk: mismo caso que el test
+        anterior, para el segundo camino de extracción (Cloud Tasks)."""
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("a.xml", "<xml/>")
+        zip_bytes = buf.getvalue()
+
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        def fake_download_to_filename(path):
+            with open(path, "wb") as fh:
+                fh.write(zip_bytes)
+
+        mock_blob.download_to_filename.side_effect = fake_download_to_filename
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "enqueue_pdf_generation", side_effect=RuntimeError("cloud tasks down")),
+        ):
+            mock_redis.set = AsyncMock()
+            pipe_cm = MagicMock()
+            pipe_cm.__aenter__ = AsyncMock(return_value=pipe_cm)
+            pipe_cm.__aexit__ = AsyncMock(return_value=False)
+            pipe_cm.set = MagicMock()
+            pipe_cm.sadd = MagicMock()
+            pipe_cm.expire = MagicMock()
+            pipe_cm.execute = AsyncMock()
+            mock_redis.pipeline = MagicMock(return_value=pipe_cm)
+            mock_redis.delete = AsyncMock()
+
+            _run(pdf_router.process_zip_in_background("uploads/some.zip", "batch-5", "default"))
+
+        mock_redis.set.assert_any_call(
+            unittest.mock.ANY, b"error", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
+        )
 
 
 if __name__ == "__main__":
