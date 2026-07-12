@@ -5,13 +5,18 @@
 main
 
 ## Último cambio
-**Plan de recuperación de PDFs de batches (`docs/plan-recuperacion-batches-pdf.md`) — Fases 1-4
-ejecutadas con TDD, commiteadas en local (`b94e301`, `5c29a27`, `93d48c1`, `07c4a3b`, más
-`be07d0b`). Backend (Fases 1+2) DESPLEGADO Y VERIFICADO en producción 2026-07-12 — commit
-`dd6c8ad`, revisión `cfdi-suite-api-00102-sfs`, 100% tráfico, `latestRevision: True`. Frontend
-(Fases 3+4) sigue pendiente de push a `main`, con confirmación explícita del usuario requerida
-para ese siguiente paso (ver sección "Pendiente" abajo). Fase 5 es solo documentación, ya cumplida
-por el propio plan.**
+**Plan de recuperación de PDFs de batches (`docs/plan-recuperacion-batches-pdf.md`) — Fases 1-5
+COMPLETAS Y DESPLEGADAS EN PRODUCCIÓN, 2026-07-12. Sin pendientes de código ni de deploy.**
+
+- Backend (Fases 1+2): deploy manual inicial commit `dd6c8ad` (revisión `00102-sfs`), luego
+  re-desplegado automáticamente por `deploy-backend.yml` en el push de las Fases 3+4 (mismo
+  código, revisión `00103-mpk` final) — `latestRevision: True` confirmado en ambos casos.
+- Frontend (Fases 3+4): push a `main` (`8e43cc5`) disparó `deploy-frontend.yml` → Vercel,
+  exitoso. Verificado con Playwright **directo contra `cfdiinspector.vercel.app`** (no solo
+  local): `?batch=<id>` carga la vista correcta, banner de recuperación, link persistente con la
+  URL correcta, botones Copiar/Compartir presentes, 0 mutaciones de DOM en 2s (confirma que el fix
+  del loop de render también resiste en producción real).
+- Fase 5: solo documentación, ya cumplida por el propio plan.
 
 **Verificación del deploy de backend (`00102-sfs`)**: `status.traffic` confirmó
 `{'latestRevision': True, 'percent': 100, 'revisionName': 'cfdi-suite-api-00102-sfs'}` — el deploy
@@ -68,17 +73,14 @@ intento). Verificado con un segundo chequeo de Playwright: 0 mutaciones DOM en 2
   eso no es código, es una pregunta que solo el usuario puede resolver.
 - **Fase 5**: decisión de qué NO se construye, ya documentada en el plan — sin código.
 
-**Pendiente, gateado por el usuario (no autónomo por diseño — ver política de confirmación antes
-de deploy):**
-1. ~~Deploy manual del backend (Fase 2)~~ — **HECHO 2026-07-12**, ver "Último cambio" arriba.
-   Queda el segundo paso: **push a `main`** para desplegar Fase 3+4 del frontend (dispara
-   `deploy-frontend.yml` vía GitHub Actions). Requiere confirmación explícita del usuario antes de
-   ejecutarse — el orden ya no es un riesgo (el backend con TTL de 24h ya está en producción), así
-   que este push ya no tiene la ventana de carrera documentada antes.
-2. Confirmar con el equipo si "necesito el PDF en otro dispositivo, y copiar/compartir no fue
-   suficiente" ocurre seguido — determina si la Fase 4 termina ahí o si se construye correo.
-3. La cifra de Upstash en `pdf.py`/docs ya quedó corregida con datos reales de la Management API
-   (ver Fase 1 arriba) — este punto del plan original ya no está pendiente.
+**Pendiente — ya no es deploy, es una decisión de negocio:**
+1. Confirmar con el equipo si "necesito el PDF en otro dispositivo, y copiar/compartir no fue
+   suficiente" ocurre seguido (telemetría de Sentry ya activa en producción, evento
+   `pdf_batch_link_copied`/`pdf_batch_link_shared`) — determina si la Fase 4 termina ahí o si se
+   construye correo transaccional. Sin esto no se toma esa decisión ni se construye nada nuevo.
+2. Limpieza sin urgencia: dos revisiones canario viejas de la sesión de Signal 6 con tags activos
+   sin tráfico (`canary` → `00113-log`, `canary-c5` → `00121-kiy`) — ninguna afecta producción,
+   se pueden borrar cuando ya no se necesiten para más pruebas.
 
 ## Signal 6 (cerrado, historial)
 **Signal 6: RESUELTO DE PUNTA A PUNTA — fix en producción (`e1d8238`) y `concurrency=5` YA
