@@ -298,7 +298,11 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     } else if (phase === 'running') {
       onProgressUpdate?.({ completed: batchProgress?.done ?? 0, total: batchProgress?.total ?? 0, phase: 'processing' });
     }
-  }, [batchProgress, phase, isZipMode, batchId, onProgressUpdate]);
+    // onProgressUpdate excluido a propósito (igual que BatchAnalysisPage):
+    // App.tsx le pasa una arrow function nueva en cada render — incluirla
+    // aquí crearía un ciclo (efecto llama setState en App → nuevo closure →
+    // deps cambian → el efecto vuelve a correr → …), no solo un lint nit.
+  }, [batchProgress, phase, isZipMode, batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleRetryBatchConnection() {
     if (batchId) void listenToBatch(batchId);
@@ -595,7 +599,9 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
       {wasRestored && isZipMode && batchId && (
         <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
           <CheckCircle2 size={14} className="shrink-0" />
-          Recuperamos tu lote anterior — sigue procesándose en la nube.
+          {batchProgress?.status === 'done'
+            ? 'Recuperamos tu lote anterior — ya está listo.'
+            : 'Recuperamos tu lote anterior — sigue procesándose en la nube.'}
         </div>
       )}
 
