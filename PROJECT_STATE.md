@@ -57,6 +57,17 @@ de deploy):**
    convertiría el síntoma actual ("silenciosamente ya no recupera") en uno peor ("Lote no
    encontrado" explícito), porque el frontend extendería su ventana de reconexión a 24h sobre un
    backend cuyo TTL seguiría en 1h. Ver el propio plan, Fase 2, "hallazgo de verificación".
+   **Ojo (encontrado en revisión, advisor): un solo `git push` a `main` NO respeta este orden por
+   sí solo** — `deploy-backend.yml` y `deploy-frontend.yml` se disparan en paralelo por el mismo
+   push (cada uno cuando el diff toca `backend/**`/`frontend/**` respectivamente), así que
+   empujar los 5 commits juntos dispara ambos deploys a la vez, exactamente la ventana de carrera
+   que el orden buscaba evitar. Secuencia real necesaria: (a) deploy manual solo del backend vía
+   `gcloud builds submit --config=backend/cloudbuild.yaml . --substitutions=COMMIT_SHA=$(git rev-parse HEAD)`
+   (no un push a main todavía); (b) confirmar `gcloud run services describe cfdi-suite-api
+   --region=us-central1 --format="value(status.traffic)"` → `latestRevision: True` (si no, correr
+   `--to-latest` — ver "Riesgos abiertos", pin de tráfico); (c) probar que un batch con TTL
+   vencido bajo el esquema viejo (>1h) ya resuelve bien; (d) recién entonces push a `main` (dispara
+   `deploy-frontend.yml` con los commits de Fase 3/4).
 2. Confirmar con el equipo si "necesito el PDF en otro dispositivo, y copiar/compartir no fue
    suficiente" ocurre seguido — determina si la Fase 4 termina ahí o si se construye correo.
 3. La cifra de Upstash en `pdf.py`/docs ya quedó corregida con datos reales de la Management API
