@@ -5,6 +5,54 @@
 main
 
 ## Último cambio
+**Plan de recuperación de PDFs de batches (`docs/plan-recuperacion-batches-pdf.md`) — Fases 1-4
+ejecutadas con TDD, commiteadas en local (`b94e301`, `5c29a27`, `93d48c1`, más `be07d0b`), NO
+desplegadas todavía. Fase 5 es solo documentación, ya cumplida por el propio plan.**
+
+- **Fase 1 (auditoría)**: lifecycle real de GCS confirmado vía `gsutil`/`gcloud` — 1 día, igual en
+  `uploads/`, `xml_temp/`, `pdfs/` — versionado en `infra/gcs-lifecycle.json`. Límite real de
+  Upstash confirmado vía su Management API (`api.upstash.com/v2/redis/databases`, credencial
+  proporcionada por el usuario en esta sesión): el "10,000/día" que decía `pdf.py` era en realidad
+  `db_max_commands_per_second` (límite de tasa, no diario) — el número real es
+  `db_request_limit=500,000/mes`, que ya coincidía con `docs/progreso-tiempo-real-pusher.md`.
+  `eviction: false` confirmado (Upstash no desaloja antes del TTL nominal).
+- **Fase 2 (backend)**: `blob.exists()` agregado antes de firmar/servir un PDF en `/download` y
+  `/download-url` (bug puro, antes devolvía un link roto en vez de 404). TTL de las claves de
+  metadata de batch en Redis (`pdf:batch_ids`, `pdf:extracting_total`, `pdf:ready_recent`,
+  `pdf:done_count`, `pdf:error_count`, y el status por-job `pdf:status:{job_id}` para "done"/"error")
+  subido de 3600s a 86400s vía constante única `BATCH_METADATA_TTL_SECONDS`. **Bug encontrado en
+  revisión (advisor) tras el primer commit de TTL**: el status "error" por-job seguía en 30 min
+  mientras `batch_ids` ya vivía 24h — un batch con errores recuperado después de 30 min quedaba
+  atascado en "processing" para siempre. Corregido en un commit separado (`b94e301`), con TDD.
+  200/200 tests backend pasando.
+- **Fase 3 (frontend)**: `ACTIVE_BATCH_MAX_AGE_MS` 45min→24h; link persistente y copiable del
+  batch (`?batch=<id>`) visible desde que se conoce el batchId; botón compartir nativo
+  (`navigator.share`, fallback a copiar); restauración vía URL compartida con prioridad sobre
+  localStorage (funciona en otro dispositivo); mensaje explícito de recuperación en
+  `ConversionMasivaPage` y `BatchAnalysisPage`; `FloatingBatchWidget` extendido a batches de PDFs
+  (montaje persistente + `onProgressUpdate`, mismo patrón que `BatchAnalysisPage`). Verificado con
+  Playwright contra el dev server real (no solo unit tests) — encontró y corrigió dos gaps que el
+  análisis original no había previsto: el link no aparecía hasta el primer snapshot de progreso
+  (movido a un bloque independiente), y el widget flotante no se activaba mientras se esperaba ese
+  mismo primer snapshot (el efecto que propaga progreso a `App.tsx` ahora dispara desde que el
+  batch arranca, no solo cuando ya hay datos).
+- **Fase 4 (código)**: `Sentry.captureMessage` al usar "Copiar link"/"Compartir" (sin PII). La
+  decisión de si construir correo transaccional queda pendiente de una respuesta del equipo —
+  eso no es código, es una pregunta que solo el usuario puede resolver.
+- **Fase 5**: decisión de qué NO se construye, ya documentada en el plan — sin código.
+
+**Pendiente, gateado por el usuario (no autónomo por diseño — ver política de confirmación antes
+de deploy):**
+1. Deploy ordenado a producción: **Fase 2 primero, Fase 3 después** — desplegar Fase 3 antes
+   convertiría el síntoma actual ("silenciosamente ya no recupera") en uno peor ("Lote no
+   encontrado" explícito), porque el frontend extendería su ventana de reconexión a 24h sobre un
+   backend cuyo TTL seguiría en 1h. Ver el propio plan, Fase 2, "hallazgo de verificación".
+2. Confirmar con el equipo si "necesito el PDF en otro dispositivo, y copiar/compartir no fue
+   suficiente" ocurre seguido — determina si la Fase 4 termina ahí o si se construye correo.
+3. La cifra de Upstash en `pdf.py`/docs ya quedó corregida con datos reales de la Management API
+   (ver Fase 1 arriba) — este punto del plan original ya no está pendiente.
+
+## Signal 6 (cerrado, historial)
 **Signal 6: RESUELTO DE PUNTA A PUNTA — fix en producción (`e1d8238`) y `concurrency=5` YA
 DESPLEGADO Y VERIFICADO en producción (commit `31c6836`, revisión `cfdi-suite-api-00101-tbk`,
 2026-07-11). Sin pendientes.**
@@ -160,9 +208,13 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
+0. **Plan de recuperación de PDFs de batches — código listo en local, falta desplegar.** Pedir
+   confirmación explícita antes de cada deploy: primero Fase 2 (backend, commits `be07d0b` +
+   `b94e301`), verificar en producción, y solo entonces Fase 3 (frontend, `5c29a27`) + Fase 4
+   (`93d48c1`). Ver "Último cambio" arriba para el detalle completo y por qué el orden importa.
 1. **Signal 6 cerrado — sin pendientes.** Fix y `concurrency=5` confirmados en producción (ver
-   "Último cambio"). Si se quiere subir a `10`+ en el futuro, correr su propia ronda de canario
-   primero (no asumir que se comporta igual que `5`).
+   "Signal 6 (cerrado, historial)"). Si se quiere subir a `10`+ en el futuro, correr su propia
+   ronda de canario primero (no asumir que se comporta igual que `5`).
 2. (Baja prioridad, sin dueño) Costo real en dólares de Cloud Run + Redis + GCS + Cloud Tasks —
    pregunta abierta desde 2026-07-10, nunca se consultó Google Cloud Billing. No bloquea nada.
 3. (Sugerido, sin empezar) **Indicador de versión visible en la app** — hoy verificar qué commit
