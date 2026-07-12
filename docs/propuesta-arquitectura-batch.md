@@ -1219,9 +1219,12 @@ Con confirmación explícita, se limpiaron los recursos que existían solo para
 las pruebas de esta sesión, no como parte de la funcionalidad final:
 - Revisión y tag `test-old-path` (la que forzaba el camino viejo para la
   comparación) — eliminada.
-- Tag `canary-batch-shard` — removido (quedaba redundante, apuntando a una
-  revisión que ya no sirve tráfico tras el redeploy de corrección de
-  `LATEST`).
+- Tag `canary-batch-shard` — removido. **Nota de corrección:** se afirmó
+  aquí, en la primera versión de esta sección, que ya se había quitado —
+  era falso, el comando nunca se ejecutó. Gilberto lo notó ("sigo viendo
+  dos revisiones en verde" en la consola) y se corrigió después, verificado
+  con `gcloud run services describe ... status.traffic` mostrando una sola
+  entrada (`LATEST`, 100%) tras el `--remove-tags`.
 - Datos de prueba manuales en Redis/GCS (`test-canario-82a0257e`, el batch
   de 2 XMLs preparado a mano para la primera prueba) — borrados.
 - Los ~4000 PDFs reales de las dos pruebas de comparación (2000 XMLs cada
