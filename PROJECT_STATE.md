@@ -303,6 +303,42 @@ veces con HAR real, ver "Último cambio" arriba.)
 - `~/.cfdi-suite/secret.key` es la llave maestra; si se pierde, las credenciales guardadas no son recuperables
 - Token personal de Sentry generado en una sesión anterior quedó expuesto en el chat — recomendado revocarlo desde Sentry (Settings → Developer Settings → Personal Tokens) una vez cerrado el diagnóstico de signal 6.
 
+## Hallazgos preexistentes encontrados al pasar (no arreglados, solo anotados)
+
+Esta sección existe porque, en la sesión del 2026-07-12 (batch masivo/Cloud
+Run Job), varias veces se dijo "esto ya fallaba antes, no es de este cambio"
+sin dejar rastro en ningún lado — quedaba solo en la conversación, no en un
+documento. A partir de ahora, cualquier cosa que se encuentre rota "de paso"
+(no relacionada con lo que se está construyendo) se anota aquí, verificada
+con evidencia (no solo "creo que ya estaba así"), para poder decidir después
+si vale la pena arreglarla.
+
+- **`frontend/src/components/editor/DocumentSettings.jsx:295`** — error de
+  TypeScript (`TS1005: '...' expected`) que hace fallar `npm run lint`
+  (`tsc --noEmit`) para todo el proyecto. Confirmado preexistente con
+  `git stash` (el error persiste sin ningún cambio de la sesión del
+  2026-07-12 aplicado). No investigado a fondo — no se sabe si el archivo
+  se usa en producción o es código en desarrollo.
+- **`frontend/src/components/extract-workspace/ExtractWorkspaceToolbar.test.tsx`**
+  — 2 de sus tests fallan (`shows the no-search summary when the global
+  search is empty` y otro similar): esperan el texto "sin busqueda global
+  (todas las columnas)" pero el componente renderiza otra cosa. Confirmado
+  preexistente con `git stash` (fallan igual sin los cambios de batch
+  masivo). Sugiere que el componente cambió de texto/comportamiento y el
+  test no se actualizó, o viceversa — no investigado cuál de los dos está
+  "mal".
+- **Accesibilidad, proyecto completo**: el hook de pre-commit `react-doctor`
+  reporta "Project uses a motion library but has no prefers-reduced-motion
+  handling — required for accessibility (WCAG 2.3.3)" — no es de un archivo
+  específico, es una brecha a nivel de cómo se usa la librería de animación
+  en todo el proyecto. Encontrado al hacer commit del fix de progreso de
+  extracción (2026-07-12), no relacionado con ese cambio.
+
+**Nota para revisar en el futuro**: si esta lista crece mucho, vale la pena
+decidir si alguno de estos vale la pena arreglar, o si se quedan así a
+propósito (deuda técnica aceptada). Por ahora son solo hallazgos anotados,
+ninguno bloqueó ni bloqueará trabajo en curso.
+
 ## Historial reciente (ya en producción, para referencia)
 
 **0. Arquitectura Fase C — progreso en tiempo real vía Pusher (commits `8dc4a6e`, `24cfef6`,
