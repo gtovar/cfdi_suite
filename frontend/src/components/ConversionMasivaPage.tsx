@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import * as Sentry from '@sentry/react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
@@ -514,6 +515,11 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
       await navigator.clipboard.writeText(getBatchShareUrl(batchId));
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
+      // Fase 4 del plan: medición mínima antes de considerar construir correo
+      // transaccional — si el botón de copiar/compartir ya cubre el caso
+      // "necesito el PDF en otro dispositivo", no hace falta esa
+      // infraestructura nueva. Sin PII: solo el evento, nunca el batch_id.
+      Sentry.captureMessage('pdf_batch_link_copied', 'info');
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
@@ -525,6 +531,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     if (navigator.share) {
       try {
         await navigator.share({ title: 'Lote de PDFs CFDI', url });
+        Sentry.captureMessage('pdf_batch_link_shared', 'info');
       } catch {
         // Usuario canceló el diálogo nativo — no es un error a reportar.
       }
