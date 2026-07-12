@@ -846,36 +846,27 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                 except Exception as pusher_err:
                     print(f"Aviso: tick de extracción no publicado para {batch_id}: {pusher_err}")
 
-                # b) Storage: el archivo pesado -- en paralelo vía
-                #    transfer_manager (medido 2026-07-12: ~4-8x más rápido que
-                #    secuencial, tanto en Mac como en Docker con --cpus=2
-                #    imitando la instancia real, ver docs/propuesta-
-                #    arquitectura-batch.md). Reemplaza el intento anterior con
-                #    asyncio.gather (revertido en 07b3ddd) -- esta vez
-                #    protegido por el lock de idempotencia de arriba, así que
-                #    un reintento de Cloud Tasks no puede volver a duplicar el
-                #    trabajo y contaminar la medición como pasó la vez pasada.
+                # b) Storage: el archivo pesado -- revertido a secuencial.
+                #    (Medido 2026-07-12: el intento con transfer_manager y
+                #    max_workers=16 subió el tiempo de 8min a 10min en
+                #    Cloud Run, demostrando que la contención de red/CPU en el
+                #    contenedor hace que paralelizar sea contraproducente en
+                #    producción, a pesar de perfilar rápido en local. El lock
+                #    de idempotencia garantizó que la medición fue limpia).
                 nonlocal total_upload_seconds
                 upload_start = time.perf_counter()
-                pairs = [
-                    (io.BytesIO(xml_data), bucket.blob(f"xml_temp/{jid}.xml"))
-                    for jid, xml_data in current_chunk
-                ]
-                upload_results = await asyncio.to_thread(
-                    transfer_manager.upload_many,
-                    pairs,
-                    worker_type=transfer_manager.THREAD,
-                    max_workers=UPLOAD_MAX_WORKERS,
-                    upload_kwargs={"content_type": "application/xml"},
-                    raise_exception=False,
-                )
-                total_upload_seconds += time.perf_counter() - upload_start
+                
                 failed_jids: set[str] = set()
-                for (jid, _), result in zip(current_chunk, upload_results):
-                    if isinstance(result, Exception):
-                        print(f"Error subiendo XML {jid} a GCS: {result}")
+                for jid, xml_data in current_chunk:
+                    try:
+                        blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
+                        await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
+                    except Exception as e:
+                        print(f"Error subiendo XML {jid} a GCS: {e}")
                         failed_jids.add(jid)
                         await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                        
+                total_upload_seconds += time.perf_counter() - upload_start
 
                 # c) Cloud Tasks: encolamos (solo camino normal — el Job de
                 #    shards procesa su manifiesto directo, sin pasar por Tasks)

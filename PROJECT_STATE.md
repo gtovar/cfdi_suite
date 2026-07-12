@@ -31,9 +31,12 @@ CONSTRUIDO, TESTS PASANDO, Y AHORA DESPLEGADO (2026-07-12).**
   medición no dependa de un solo número sin desglosar. 209/209 tests pasan (nuevo:
   `test_process_zip_in_background_skips_when_lock_already_held`). **Ya en producción**, se corrigió
   el pin de tráfico que impedía que sirviera peticiones.
-- Pendiente real para saber si paralelizar las subidas ayuda de verdad: un canario instrumentado
-  en Cloud Run, ahora protegido por este lock, que registre el desglose de tiempos por sub-paso —
-  seguir probando local no va a cerrar la brecha (ver detalle en el doc).
+- **Veredicto final sobre subidas paralelas a GCS (2026-07-12):** Al desplegar la subida paralela con
+  `transfer_manager` (protegida por el lock de idempotencia para garantizar una medición limpia), el 
+  tiempo de extracción subió a **~10 minutos** (vs ~8 min secuencial). Esto prueba definitivamente
+  que la contención (red, CPU, o pool de conexiones a GCS) en Cloud Run hace que paralelizar
+  las subidas de XML sea contraproducente en producción, contradiciendo el perfilado local. 
+  **La subida se revirtió a secuencial de forma definitiva**.
 
 ## Capa 1 (Cloud Run Job de shards) — CONSTRUIDA, DESPLEGADA Y ACTIVA EN PRODUCCIÓN
 **Permanente desde 2026-07-12. El cuello de botella real que queda no es el procesamiento, es la

@@ -1476,32 +1476,13 @@ que reportó los 813s, aparecieron dos cosas que nadie había visto:
   `process_zip_in_background` completo (descarga del ZIP, pipelines de
   Redis, avisos a Pusher).
 
-**Veredicto honesto: no está probado que paralelizar las subidas sea malo
-en producción, ni que sea bueno.** La cifra de "1.7x más lento" que motivó
-la reversión viene de una sola medición contaminada por un bug de
-duplicación real que nadie conocía en ese momento. Lo único que se corrigió
-con evidencia sólida, independiente de si algún día se reintenta
-paralelizar:
+**Veredicto final sobre subidas paralelas a GCS (2026-07-12):** Tras desplegar la subida paralela con
+`transfer_manager` (protegida por el lock de idempotencia para garantizar una medición limpia, en el
+commit 17cce24), el tiempo de extracción del ZIP de 2000 facturas subió a **~10 minutos** en Cloud
+Run. Esto prueba definitivamente que la contención (red, CPU o pool de conexiones a GCS) dentro
+del contenedor hace que paralelizar las subidas de XML sea contraproducente en producción, 
+contradiciendo el perfilado local. **La subida se revirtió a secuencial de forma definitiva**.
 
-**Arreglado (código listo, tests pasan, NO desplegado todavía — pendiente
-confirmación explícita antes de tocar GCP):** `process_zip_in_background`
-(`backend/app/routers/pdf.py`) ahora toma un lock de idempotencia en Redis
-(`pdf:extracting_lock:{batch_id}`, `SET NX EX 1800`) antes de tocar GCS. Si
-un reintento de Cloud Tasks llega mientras el original sigue vivo, se aborta
-de inmediato (devuelve `skipped_already_in_progress`) en vez de repetir la
-descarga del ZIP completo y la subida de cada XML. También se agregó
-instrumentación mínima (tiempo de descarga del ZIP vs. tiempo de
-extracción+subida, por separado, en los logs) para que la próxima medición
-en producción — de la estrategia que sea — no dependa de un solo número de
-latencia total sin desglosar. 209/209 tests pasan (`test_pdf_batch_ttl.py`,
-nuevo caso: `test_process_zip_in_background_skips_when_lock_already_held`).
-
-**Pendiente real para saber si paralelizar ayuda:** un canario instrumentado
-en Cloud Run real, ahora protegido por el lock (para que un reintento no
-vuelva a contaminar la medición), que registre el desglose de tiempos por
-sub-paso. Sin eso, seguir corriendo variantes locales no va a cerrar la
-brecha — las tres pruebas locales ya estuvieron de acuerdo entre sí y en
-desacuerdo con producción.
 2. Todos los pendientes de la sección anterior (paso c) de Cloud Tasks,
    escalamiento del volumen, escenario de muchos batches simultáneos,
    Secret Manager, PoC de Capa 2) siguen abiertos, sin cambios por esto.
