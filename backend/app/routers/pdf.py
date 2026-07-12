@@ -10,6 +10,7 @@ import zlib
 import datetime
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # --- AÑADIR ESTAS DOS LÍNEAS AQUÍ ARRIBA ---
 import google.auth
@@ -38,6 +39,17 @@ from ..services.batch_progress import publish_batch_tick
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
 
 router = APIRouter(prefix="/api", tags=["PDF"])
+
+# Pool de hilos dedicado para subidas paralelas a GCS durante la extracción de
+# un ZIP (flush_chunk). No usar el executor por default de asyncio.to_thread
+# para esto: su tamaño por defecto es min(32, os.cpu_count()+4), y en un
+# contenedor con --cpu=2 eso puede caer a ~6 hilos -- muy por debajo de
+# CHUNK_SIZE=20, lo que limitaría en silencio la concurrencia real medida en
+# el perfilado (ver docs/propuesta-arquitectura-batch.md, 2026-07-12).
+# max_workers=32 da margen sobre CHUNK_SIZE sin ser excesivo (mismo orden que
+# el semáforo de red de 50 que ya se probó como seguro para ráfagas salientes
+# de Cloud Run, ver historial de task_dispatcher.py el 2026-07-07).
+GCS_UPLOAD_POOL = ThreadPoolExecutor(max_workers=32)
 
 # Techo duro por conexión SSE. Con concurrency=1 cada stream abierto retiene
 # una instancia entera de Cloud Run; el cliente (subscribeWithRetry) se
@@ -759,11 +771,17 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                 #    Perfilado 2026-07-12 (ver docs/propuesta-arquitectura-batch.md):
                 #    subir los XMLs del chunk secuencialmente es el cuello de
                 #    botella real de la extracción (~600ms/XML por la ida y
-                #    vuelta de red de cada subida) — asyncio.gather los solapa,
-                #    medido ~4x más rápido con el mismo ZIP real.
+                #    vuelta de red de cada subida) — en paralelo, medido ~4x
+                #    más rápido con el mismo ZIP real. Usa GCS_UPLOAD_POOL
+                #    (pool explícito, no el default de asyncio.to_thread) para
+                #    no depender de cuántos hilos le tocan a este contenedor.
+                loop = asyncio.get_running_loop()
+
                 async def _upload_one(jid: str, xml_data: bytes) -> None:
                     blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
-                    await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
+                    await loop.run_in_executor(
+                        GCS_UPLOAD_POOL, blob_xml.upload_from_string, xml_data, "application/xml"
+                    )
 
                 await asyncio.gather(*[_upload_one(jid, xml_data) for jid, xml_data in current_chunk])
 
