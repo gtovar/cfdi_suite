@@ -7,7 +7,7 @@ main
 ## Último cambio
 **Auditoría de la regresión de GCS del 12 de julio: la medición de "1.7x más lento" estaba
 contaminada por un bug real de duplicación (nuevo), y ese bug ya se corrigió en código —
-CONSTRUIDO, TESTS PASANDO, NO DESPLEGADO. Pendiente de confirmación antes de tocar GCP.**
+CONSTRUIDO, TESTS PASANDO, Y AHORA DESPLEGADO (2026-07-12).**
 
 - Auditando `gcloud logging read` sobre `cfdi-suite-api` en la ventana real de la prueba
   (11:05-11:55 UTC, 2026-07-12) se encontró: la extracción que dio 813s corrió sola durante los
@@ -23,14 +23,14 @@ CONSTRUIDO, TESTS PASANDO, NO DESPLEGADO. Pendiente de confirmación antes de to
   4-8x más rápido) y ninguna reprodujo la lentitud real de producción. Detalle completo, incluida
   la corrección honesta de que "paralelizar es malo" nunca quedó probado:
   `docs/propuesta-arquitectura-batch.md`, sección "CORRECCIÓN (2026-07-12, sesión posterior)".
-- **Fix real, con evidencia, ya en código:** `process_zip_in_background` (`backend/app/routers/
+- **Fix real, con evidencia, ya en código y DESPLEGADO:** `process_zip_in_background` (`backend/app/routers/
   pdf.py`) ahora toma un lock de idempotencia en Redis (`pdf:extracting_lock:{batch_id}`, `SET NX
   EX 1800`) antes de tocar GCS — un reintento que llega mientras el original sigue vivo se aborta
   de inmediato en vez de duplicar el trabajo. Se agregó instrumentación mínima (tiempo de
   descarga del ZIP vs. tiempo de extracción+subida, por separado, en logs) para que la próxima
   medición no dependa de un solo número sin desglosar. 209/209 tests pasan (nuevo:
-  `test_process_zip_in_background_skips_when_lock_already_held`). **No desplegado** — antes de
-  tocar GCP se pide confirmación explícita, como siempre.
+  `test_process_zip_in_background_skips_when_lock_already_held`). **Ya en producción**, se corrigió
+  el pin de tráfico que impedía que sirviera peticiones.
 - Pendiente real para saber si paralelizar las subidas ayuda de verdad: un canario instrumentado
   en Cloud Run, ahora protegido por este lock, que registre el desglose de tiempos por sub-paso —
   seguir probando local no va a cerrar la brecha (ver detalle en el doc).
