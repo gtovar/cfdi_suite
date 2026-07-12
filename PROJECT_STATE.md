@@ -6,8 +6,18 @@ main
 
 ## Último cambio
 **Plan de recuperación de PDFs de batches (`docs/plan-recuperacion-batches-pdf.md`) — Fases 1-4
-ejecutadas con TDD, commiteadas en local (`b94e301`, `5c29a27`, `93d48c1`, más `be07d0b`), NO
-desplegadas todavía. Fase 5 es solo documentación, ya cumplida por el propio plan.**
+ejecutadas con TDD, commiteadas en local (`b94e301`, `5c29a27`, `93d48c1`, `07c4a3b`, más
+`be07d0b`), NO desplegadas todavía. Fase 5 es solo documentación, ya cumplida por el propio plan.**
+
+**Bug serio encontrado y corregido tras el commit de Fase 3 (`07c4a3b`)**: el efecto que propaga
+progreso de `ConversionMasivaPage` a `App.tsx` incluía `onProgressUpdate` en sus dependencias —
+como App.tsx pasa esa prop como arrow function inline (identidad nueva cada render), esto era un
+ciclo de render autosostenido mientras hubiera un batch activo, no detectable por el test unitario
+(mock estable) ni por el primer smoke test con Playwright (`textContent` se ve normal en pleno
+churn). Corregido excluyendo `onProgressUpdate` de las deps, igual que ya hacía
+`BatchAnalysisPage` (el patrón que se estaba replicando, con ese detalle no copiado en el primer
+intento). Verificado con un segundo chequeo de Playwright: 0 mutaciones DOM en 2s con
+`?batch=<id>` activo.
 
 - **Fase 1 (auditoría)**: lifecycle real de GCS confirmado vía `gsutil`/`gcloud` — 1 día, igual en
   `uploads/`, `xml_temp/`, `pdfs/` — versionado en `infra/gcs-lifecycle.json`. Límite real de
