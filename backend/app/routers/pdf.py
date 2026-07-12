@@ -34,6 +34,8 @@ import redis.asyncio as aioredis
 from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
 from ..services.realtime import publish_batch_progress
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
+from ..services.batch_progress import publish_batch_tick
+from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
 
 router = APIRouter(prefix="/api", tags=["PDF"])
 
@@ -97,49 +99,21 @@ def _is_valid_xml_entry(file_info: zipfile.ZipInfo) -> bool:
     return file_info.filename.lower().endswith(".xml")
 
 
-PUBLISH_EVERY_N_JOBS = 5
-
-
 async def _publish_batch_tick(batch_id: str, *, definitive_error: bool = False):
-    """Cuenta el avance con INCR atómico y lo empuja a Pusher.
+    """Wrapper delgado sobre batch_progress.publish_batch_tick.
 
-    Publica cada N archivos (y siempre al llegar al total) — así los
-    espectadores reciben el progreso sin SSE ni polling a Redis. Solo se
-    cuenta el error definitivo (XML desaparecido); los errores transitorios
-    no, porque Cloud Tasks los reintenta y podrían terminar en éxito.
+    La lógica en sí (INCR, umbral de "publica cada N", payload de Pusher) vive
+    en app/services/batch_progress.py — compartida con el Cloud Run Job de
+    shards (app/workers/batch_shard_worker.py, Capa 1 de
+    docs/propuesta-arquitectura-batch.md). Este wrapper sigue existiendo tal
+    cual (mismo nombre, misma firma) porque tests/test_pdf_batch_ttl.py lo
+    llama directo y parchea `redis_client` a nivel de módulo — referenciarlo
+    aquí (no importado a valor fijo) preserva ese patrón de test.
     """
-    counter = "error_count" if definitive_error else "done_count"
-    await redis_client.incr(f"pdf:{counter}:{batch_id}")
-    await redis_client.expire(f"pdf:{counter}:{batch_id}", BATCH_METADATA_TTL_SECONDS)
-
-    total_bytes = await redis_client.get(f"pdf:extracting_total:{batch_id}")
-    total = int(total_bytes) if total_bytes else 0
-    if total <= 0:
-        return
-
-    done = int(await redis_client.get(f"pdf:done_count:{batch_id}") or 0)
-    error = int(await redis_client.get(f"pdf:error_count:{batch_id}") or 0)
-    processed = done + error
-    if processed < total and processed % PUBLISH_EVERY_N_JOBS != 0 and not definitive_error:
-        return
-
-    # Job IDs recién terminados desde el último tick, para que el frontend
-    # llene la tabla de descargas individuales sin volver a pedir /ready-files
-    # (que antes se llamaba en cada tick e iba O(n) sobre todo el batch).
-    ready_ids_raw = await redis_client.lpop(f"pdf:ready_recent:{batch_id}", 200)
-    ready_ids = [rid.decode("utf-8") for rid in ready_ids_raw] if ready_ids_raw else []
-
-    payload = {
-        "status": "done" if processed >= total else "processing",
-        "total": total,
-        "done": done,
-        "error": error,
-        "converting": 0,
-        "pending": max(total - processed, 0),
-        "percentage": int((processed / total) * 100),
-        "readyIds": ready_ids,
-    }
-    await asyncio.to_thread(publish_batch_progress, batch_id, payload)
+    await publish_batch_tick(
+        redis_client, publish_batch_progress, batch_id,
+        definitive_error=definitive_error, ttl_seconds=BATCH_METADATA_TTL_SECONDS,
+    )
 
 
 @router.post("/internal/generate-pdf")
@@ -757,6 +731,16 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             # desde los primeros segundos, en vez de hasta que todo el ZIP termine.
             await redis_client.set(f"pdf:extracting_total:{batch_id}", len(xml_entries), ex=BATCH_METADATA_TTL_SECONDS)
 
+            # "Artillería pesada" (Capa 1, docs/propuesta-arquitectura-batch.md):
+            # apagado por defecto (BATCH_JOB_ENABLED=false) — should_use_batch_job
+            # siempre da False sin configuración explícita, así que el resto de
+            # este bloque se comporta exactamente igual que antes de este cambio.
+            # Cuando esté activo para un batch grande, el manifiesto y los XMLs en
+            # GCS se siguen construyendo igual (pasos a y b) pero el paso c) NO
+            # encola Cloud Tasks por XML — se dispara UN solo Cloud Run Job después,
+            # una vez que el manifiesto completo ya existe (ver más abajo).
+            use_batch_job = should_use_batch_job(len(xml_entries))
+
             chunk = []
             CHUNK_SIZE = 20
 
@@ -776,13 +760,15 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                     blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
                     await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
 
-                # c) Cloud Tasks: encolamos
-                for jid, _ in current_chunk:
-                    try:
-                        await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
-                    except Exception as ex:
-                        print(f"Error registrando en Tasks {jid}: {ex}")
-                        await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                # c) Cloud Tasks: encolamos (solo camino normal — el Job de
+                #    shards procesa su manifiesto directo, sin pasar por Tasks)
+                if not use_batch_job:
+                    for jid, _ in current_chunk:
+                        try:
+                            await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
+                        except Exception as ex:
+                            print(f"Error registrando en Tasks {jid}: {ex}")
+                            await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
 
             for file_info in xml_entries:
                 # Determinístico (no uuid4): si Cloud Tasks reintenta esta
@@ -800,6 +786,22 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             # Procesamos el residuo final (si sobraron menos de 20)
             if chunk:
                 await flush_chunk(chunk)
+
+            # Manifiesto completo (pdf:batch_ids:{batch_id} en Redis, XMLs ya en
+            # GCS) -- ahora sí se puede disparar el Job de shards, una sola vez.
+            if use_batch_job and xml_entries:
+                try:
+                    op_name = await asyncio.to_thread(
+                        trigger_batch_shard_job, batch_id, len(xml_entries), template_id
+                    )
+                    print(f"[process_zip_in_background] Job de shards disparado para batch {batch_id}: {op_name}")
+                except Exception as job_err:
+                    print(f"Error disparando Cloud Run Job para batch {batch_id}: {job_err}")
+                    await redis_client.set(
+                        f"pdf:extracting_error:{batch_id}",
+                        f"No se pudo disparar el Job de shards: {job_err}",
+                        ex=3600,
+                    )
 
     except Exception as e:
         print(f"Error crítico procesando ZIP en background: {e}")

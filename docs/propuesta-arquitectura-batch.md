@@ -487,10 +487,25 @@ Tres razones, en orden de peso:
 ### Estado de las rondas
 
 - **Ronda 0:** completada el 12 de julio de 2026 — ver resultado íntegro abajo.
-- **Ronda 1:** no iniciada. Depende de (a) el resultado de Ronda 0 (ya disponible,
-  ver abajo) y (b) el perfilado de `generate()` mencionado en la sección anterior,
-  que sigue pendiente.
-- **Ronda 2:** no iniciada. Depende de que Ronda 1 no descarte la propuesta.
+- **Ronda 0.5:** completada el 12 de julio de 2026 — cerró los dos pendientes
+  que dejó Ronda 0 (cuota real de GCP, decisión sobre PoC de typst) con datos
+  reales del proyecto. Su primera conclusión ("pausar, falta volumen real")
+  fue corregida el mismo día — ver la sección "Recomendación de esta ronda —
+  CORREGIDA" más abajo: el criterio correcto no es el volumen de hoy, es que
+  construir ahora cuesta lo mismo que construir después, y el escenario de
+  15,000 XMLs sí es real (recurrente, ligado a un cliente grande y a una
+  presentación a inversionistas).
+- **Ronda 1 (Capa 1 — Cloud Run Jobs):** **se procede a construir**, no se
+  pospone. Es la capa más barata (build cuesta igual ahora que después, uso
+  cuesta centavos, idle cuesta $0) y la que resuelve el requisito real
+  ("15,000 en menos de un minuto, cuando se necesite"). Pendiente: definir el
+  umbral de XMLs que activa esta ruta ("artillería pesada") vs. el camino
+  actual, y confirmación explícita antes de desplegar el Job real a GCP.
+- **Ronda 1 (Capa 2 — typst):** PoC local sin costo, puede avanzar en
+  paralelo — la decisión pendiente ahí no es de dinero sino de cuánta
+  complejidad nueva (un motor en Rust) vale la pena mantener por ~170ms de
+  ganancia por factura.
+- **Ronda 2:** no iniciada. Depende de que se retome y no descarte la Ronda 1.
 
 ## Resultado de la Ronda 0 (investigación dirigida, 12 de julio de 2026)
 
@@ -693,3 +708,490 @@ técnicamente posible?"; el perfilado resuelve "¿vale la pena el esfuerzo dado
 lo que tarda hoy?". Ambas respuestas hacen falta antes de convocar a los tres
 perfiles de la Ronda 1 con algo concreto que evaluar, en vez de apuestas sin
 medir.
+
+## Ronda 0.5: cerrando los pendientes antes de convocar la Ronda 1 (12 de julio de 2026)
+
+**Por qué existe esta ronda:** al pedir un segundo pase con `decision-expander`
+sobre "¿de verdad ya se puede convocar la Ronda 1?", la respuesta fue no
+todavía — Ronda 0 dejó dos pendientes explícitos sin resolver (la cuota real
+de Cloud Run Jobs en la consola de GCP, y si vale la pena una prueba de
+concepto de typst antes de comprometerse), y además surgió un dato nuevo que
+Ronda 0 no pudo tener en cuenta: la mejora de `FontConfiguration` ya
+implementada cambia cuánto queda por ganar en la Capa 2. Esta ronda cierra
+ambos pendientes con datos reales del proyecto, no con documentación genérica.
+
+### Pendiente 1 resuelto: cuota real de Cloud Run Jobs, consultada directamente
+
+A diferencia de Ronda 0 (que solo pudo citar documentación general de Google
+Cloud y decir "hay que consultarlo en la consola"), aquí sí se consultó
+directamente vía `gcloud` — el proyecto real de CFDI Suite
+(`ultra-acre-431617-p0`, región `us-central1`) ya estaba autenticado en este
+entorno. Comando usado: `gcloud beta quotas info describe <QUOTA_ID>
+--service=run.googleapis.com --project=ultra-acre-431617-p0`.
+
+**Cuotas reales del proyecto, hoy, sin ajustar nunca (0 solicitudes de aumento
+de cuota registradas — se confirmó con `gcloud beta quotas preferences list`,
+que devolvió "Listed 0 items"):**
+
+| Cuota | Valor real en `us-central1` |
+|---|---:|
+| CPU total asignable (`CpuAllocPerProjectRegion`) | 200,000 milli-vCPU = **200 vCPU** |
+| Memoria total asignable (`MemAllocPerProjectRegion`) | 429,496,729,600 bytes = **400 GiB** |
+| Ejecuciones concurrentes (`RunningExecutionsPerProject`) | **1,000** |
+| Arranques de ejecución de Job por minuto (`JobRunPerMinutePerProjectRegion`) | **60** |
+| Jobs distintos definibles (`JobsPerProject`) | **1,000** |
+
+**Lo que esto significa en la práctica para la Capa 1:** el techo real de
+paralelismo *dentro de una ejecución* de un futuro Cloud Run Job no es un
+número documentado aparte (como sugería la documentación genérica) — es
+**la cuota de CPU/memoria del proyecto, dividida entre el tamaño de cada
+tarea**. Con un tamaño de tarea razonable (1 vCPU / 2 GiB por tarea, similar a
+lo que ya usan `cfdi-suite-api`/`cfdi-suite-worker` hoy), el techo real de
+tareas simultáneas es de aproximadamente **~170-200 tareas en paralelo**,
+descontando lo que los tres servicios de Cloud Run ya activos en este proyecto
+(`cfdi-suite-api`: hasta 10 instancias × 2 vCPU/2GiB; `cfdi-suite-worker`:
+hasta 5 instancias × 2 vCPU/2GiB; `rrhh-backend`: 1 instancia × 1 vCPU/0.5GiB)
+podrían llegar a reservar en el peor caso (~31 vCPU combinados, sobre 200
+disponibles). Esto es un número muy distinto al "10,000 tasks por ejecución"
+que suena impresionante en la documentación general — ese 10,000 es el tope de
+*cuántas tareas puede tener definida una ejecución*, no cuántas corren *al
+mismo tiempo*; lo que de verdad limita el paralelismo simultáneo es la cuota
+de CPU/memoria, y ese número real y hoy es de cientos, no de miles, salvo que
+se solicite un aumento de cuota a Google con anticipación.
+
+**Otro dato nuevo, no anticipado en Ronda 0:** `JobRunPerMinutePerProjectRegion
+= 60` — solo se pueden *arrancar* 60 ejecuciones de Job por minuto en esta
+región. Si el diseño de la Capa 1 alguna vez implicara lanzar muchas
+ejecuciones de Job pequeñas en ráfaga (en vez de una sola ejecución grande con
+muchas tareas), este límite importaría. Tal como está descrito el diagrama de
+la propuesta original ("Cloud Run Job — N tareas en paralelo" — una sola
+ejecución con muchas tareas, no muchas ejecuciones), este límite no aplica,
+pero vale la pena tenerlo anotado si el diseño cambia.
+
+**Confirmado también:** hoy no existe ningún Cloud Run Job en este proyecto
+(`gcloud run jobs list` devuelve 0) — la Capa 1 sería, literalmente, empezar
+de cero en este mecanismo específico de GCP, no una extensión de algo que ya
+esté configurado.
+
+> **Veredicto actualizado de la Capa 1: VIABLE, con número concreto en vez de
+> "hay que consultarlo".** El paralelismo real disponible hoy sin pedir nada a
+> Google es de aproximadamente 150-200 tareas simultáneas — más que suficiente
+> para cualquier volumen de batch que este proyecto ha manejado hasta ahora
+> (ver el dato de volumen real más abajo), y con headroom para crecer bastante
+> antes de necesitar una solicitud de aumento de cuota.
+
+### Pendiente 2 resuelto: ¿vale la pena una PoC de typst ahora, o se pospone?
+
+Para decidir esto con criterio y no por instinto, se buscó el dato que faltaba
+en Ronda 0: **¿cuál es el volumen real de batches que este proyecto procesa
+hoy en producción**, no el "15,000 XMLs" hipotético que usa la propuesta
+original como ejemplo ilustrativo? Se encontró en `PROJECT_STATE.md`:
+
+- Los batches **reales, auditados en producción** en las últimas semanas son
+  de **150 archivos** (auditoría completa con HAR, 2026-07-11) y **20
+  archivos** (segunda auditoría post-fix, mismo día).
+- La prueba de carga más grande que se ha corrido contra este sistema fue un
+  **canario controlado** (sin tráfico de producción real) con
+  `mil_facturas_prueba.zip`: **1,600 de 2,000 XMLs reales de Miniso** (facturas
+  con miles de conceptos cada una) a `concurrency=5`. Esa prueba encontró y ya
+  resolvió un bug real de corrupción de memoria (`free(): invalid next size`,
+  señal 6) — **no relacionado con la velocidad de WeasyPrint ni de ReportLab**,
+  sino con aislamiento de procesos — y hoy, con el fix ya desplegado, ese mismo
+  ZIP corre completo (2000/2000) sin error a `concurrency=5`.
+
+**Esto es un dato central para decidir sobre la Capa 2:** el volumen real que
+este sistema maneja hoy (decenas a un par de miles de XMLs por batch) ya está
+resuelto y probado — el riesgo grave que existía (crashes) ya se arregló, y no
+tenía nada que ver con qué tan rápido es WeasyPrint. Ninguna de las tres capas
+de esta propuesta (Cloud Run Jobs, motor compilado, vectorización) está
+resolviendo un problema que hoy esté causando dolor real en producción — están
+resolviendo "¿qué tan rápido podría ser esto si el volumen creciera mucho más
+de lo que se ha visto hasta ahora?", una pregunta legítima pero de otra
+urgencia.
+
+> **Veredicto explícito sobre la PoC de typst: se recomienda posponerla, no
+> descartarla.** No es una cuestión técnica (Ronda 0 ya mostró que typst es
+> viable) ni de costo de la prueba en sí — es que, con el volumen real de hoy
+> ya cubierto por el sistema actual, y sin una fecha o un volumen proyectado
+> que lo urja, construir una PoC de un motor tipográfico nuevo sería adelantar
+> trabajo para un problema que todavía no está costando nada en producción.
+> **Esta es una recomendación, no una decisión tomada por mi cuenta** — la
+> urgencia de negocio (si hay un crecimiento de volumen proyectado que yo no
+> conozca, o una fecha límite) es un dato que solo Gilberto tiene.
+
+### Recalculado: el caso de negocio de la Capa 2, descontando el 30% ya capturado
+
+Con el fix de `FontConfiguration` ya en producción, se recalculó cuánto le
+queda de margen a la Capa 2 (reemplazar WeasyPrint con un motor compilado),
+usando los mismos datos del perfilado original:
+
+| n_rows | WeasyPrint ANTES del fix | WeasyPrint DESPUÉS del fix (implícito) | Cuánto ganó ya el fix | Total ANTES | Total DESPUÉS |
+|---:|---:|---:|---:|---:|---:|
+| 1   | 275ms | 178ms | 97ms  | 324ms | 229ms |
+| 6   | 292ms | 170ms | 122ms | 357ms | 234ms |
+| 50  | 273ms | 181ms | 92ms  | 352ms | 250ms |
+| 200 | 271ms | 177ms | 94ms  | 392ms | 290ms |
+
+**Lectura de esta tabla:** el fix ya capturado se comió entre 92 y 122ms de
+los 271-292ms que costaba WeasyPrint por factura — es decir, **el "premio"
+que quedaría disponible para un motor compilado que reemplace WeasyPrint por
+completo bajó de ~275-292ms a ~170-181ms por factura, una reducción de
+aproximadamente un tercio del margen original.** Sigue siendo la porción más
+grande del tiempo total (WeasyPrint sigue siendo ~72-77% del total incluso
+después del fix, similar proporción a antes, solo que sobre un total más
+chico), así que la Capa 2 **no perdió su lógica** — pero si alguien iba a
+argumentar el caso de negocio de construir un motor nuevo citando el ahorro
+absoluto en segundos sobre un batch grande, ese número hoy es un tercio más
+chico que antes de este fix, gratis.
+
+### Recomendación de esta ronda — CORREGIDA el 12 de julio de 2026 (ver nota abajo)
+
+> **Nota de por qué esta sección se corrigió en el mismo día:** la primera
+> versión de esta recomendación decía "pausar, no convocar Ronda 1, falta
+> volumen real que lo justifique". Gilberto la rechazó, y con razón: el
+> criterio de decisión no es "¿cuánto volumen hay hoy?" — es "¿cuánto cuesta
+> construirlo ahora vs. después (la respuesta: exactamente lo mismo), y sigue
+> siendo barato cuando nadie lo está usando?". El escenario de 15,000 XMLs **sí
+> va a pasar** — no seguido, pero sí real: puede ser una vez, puede ser una vez
+> al mes, con un cliente grande específico, y es además un diferenciador para
+> una presentación a inversionistas. El requisito duro no es "¿pasa seguido?"
+> es **"cuando pase, hay que entregarlo rápido — no tardar días"**. Esa es la
+> pregunta correcta, y esta sección la contesta con números, no con la
+> propuesta de esperar.
+
+> **CORRECCIÓN posterior (12 de julio de 2026, más tarde el mismo día): el
+> número de "~30-40 segundos" de aquí abajo se probó con datos reales y
+> resultó FALSO — no se sostuvo.** Se dejan los números originales tal cual
+> (tachados/marcados) para que quede constancia de qué se pensaba y por qué
+> estaba mal, en vez de borrarlo y pretender que nunca se dijo. Ver la
+> sección **"Desplegado y probado con datos reales"** (mucho más abajo en
+> este documento) para los números reales medidos: en un ZIP real de 2000
+> XMLs, el procesamiento fue ~2.3× más rápido que el camino viejo (no
+> "instantáneo"), y el total incluyendo la extracción del ZIP —un cuello de
+> botella que esta sección no consideró— fue de ~16-17 minutos, no segundos.
+
+**La respuesta concreta, en tiempo y en dinero (no en vCPU ni GiB) — ESTIMACIÓN, NO CONFIRMADA (ver corrección arriba):**
+
+Usando el diseño de shards que ya proponía este documento desde el inicio (1
+shard = 100 XMLs por tarea de Cloud Run Job) y el paralelismo real medido en
+la Ronda 0.5 (~150-200 tareas simultáneas con la cuota actual, sin pedirle
+nada a Google):
+
+- 15,000 XMLs ÷ 100 por shard = **150 tareas** — caben TODAS en un solo oleaje
+  simultáneo, dado el paralelismo real disponible hoy.
+- ~~Tiempo estimado del batch completo: **~30-40 segundos**~~ **INCORRECTO,
+  ver corrección arriba** (estimado a partir del tiempo medido de
+  `generate()` por factura ya con el fix de `FontConfiguration` aplicado,
+  sin contar red/Redis/extracción del ZIP — de ahí el error de ~13× en la
+  fase de procesamiento, y el hallazgo adicional de que la extracción del ZIP
+  es un cuello de botella aparte que esta estimación no consideró en
+  absoluto).
+- **Costo del batch completo: ~$0.15-1 USD** (precio real de Cloud Run en
+  `us-central1`: $0.000024/vCPU-segundo, $0.0000025/GiB-segundo — fuente:
+  [Cloud Run pricing](https://cloud.google.com/run/pricing)) — este número sí
+  sigue siendo razonable en orden de magnitud (el error fue de tiempo, no de
+  tarifa por segundo), aunque como el tiempo real fue mayor al estimado, el
+  costo real también sería proporcionalmente mayor al estimado aquí,
+  probablemente cubierto igual por el nivel gratuito mensual (180,000
+  vCPU-segundos y 360,000 GiB-segundos gratis cada mes) si no se usa con
+  mucha frecuencia.
+- **Costo cuando NADIE lo está usando: $0.00.** Cloud Run Jobs es serverless —
+  no hay instancias corriendo ni cobro alguno hasta que se dispara una
+  ejecución. Esto es lo que hace que "construirlo ahora" no tenga costo de
+  oportunidad frente a "construirlo cuando se necesite" — el gasto de
+  ingeniería es el mismo en ambos casos, y el gasto de operación es cero
+  mientras no se usa.
+
+**Esto contesta directamente el requisito real: 15,000 facturas convertidas
+en menos de un minuto, por menos de un dólar, sin costo cuando no se usa.**
+Es la Capa 1 (Cloud Run Jobs) sola la que entrega esto — no depende de
+construir el motor tipográfico compilado (Capa 2) ni de vectorizar nada
+(Capa 3). Esas dos capas afinan la velocidad *por factura*; la Capa 1 es la
+que resuelve *"muchas a la vez, rápido, cuando se necesite"*, que es
+exactamente lo que se pidió.
+
+### Diseño de "artillería pesada" que ya propusiste tú mismo, y que adoptamos como marco
+
+La idea de "si esto crece que empiece a usar la artillería pesada, pero si es
+tan barato no importa" ya es, en esencia, el diseño correcto — y es aditivo al
+sistema actual, no un reemplazo (consistente con lo que este documento dice
+desde la primera línea: "no reemplaza al sistema actual, que funciona bien
+para el volumen de hoy"):
+
+- **XMLs individuales o batches chicos:** siguen exactamente por el camino de
+  hoy (Cloud Run + Cloud Tasks), sin tocar nada.
+- **Batches grandes (por definir el umbral — ver pendiente abajo):** se
+  enrutan al Cloud Run Job nuevo, que solo existe y solo cuesta dinero cuando
+  se dispara.
+
+**Pendiente de decisión, y es tuyo, no mío:** ¿cuál es el umbral de XMLs que
+separa "camino normal" de "artillería pesada"? (¿500? ¿1,000? ¿lo que tarde
+más de X minutos por el camino actual?) Este número no lo puedo inventar yo —
+depende de qué tan seguido ves batches medianos hoy y en qué punto el camino
+actual empieza a sentirse lento para un cliente.
+
+### Qué sigue, con esta corrección
+
+1. **Construir la Capa 1 (Cloud Run Jobs) es lo que sigue** — es la más barata
+   (build cuesta lo mismo ahora que después, uso cuesta centavos, idle cuesta
+   $0) y la que resuelve el problema real planteado. Antes de desplegar nada
+   real a GCP (crear el Job, tocar infraestructura compartida), se pide
+   confirmación explícita tuya — ya es una acción que toca el proyecto real,
+   no solo código local.
+2. **La Capa 2 (motor tipográfico compilado, typst) puede probarse en local
+   sin costo** (no requiere GCP, no requiere desplegar nada) — bajo tu regla
+   de "si sigue gratis, hagámoslo", una PoC acotada localmente sigue siendo
+   razonable. La diferencia real de esta capa no es su costo en dinero, sino
+   que agrega una pieza más al stack (un motor nuevo en Rust) que hay que
+   mantener después — eso no se resuelve con una PoC, es una decisión aparte
+   sobre cuánta complejidad nueva vale la pena para la ganancia de ~170ms por
+   factura que le queda disponible tras el fix ya aplicado.
+3. La Capa 3 (vectorización numpy) sigue siendo la de menor prioridad — solo
+   importa en facturas de miles de conceptos, el caso menos común.
+
+## Capa 1 construida (código, no desplegada) — 12 de julio de 2026
+
+**Qué significa "construida pero no desplegada":** todo el código nuevo de
+esta sección ya existe en el repo, con tests que pasan (208/208 en la suite
+completa del backend). Pero **no se ha creado ningún recurso real en GCP** —
+no existe el Cloud Run Job en la nube, y el interruptor que activaría este
+camino (`BATCH_JOB_ENABLED`) está apagado por defecto. Nada de esto cambia el
+comportamiento de producción hasta que alguien (a) corra el script de
+despliegue a mano y (b) configure las variables de entorno para activarlo —
+ambos pasos requieren confirmación explícita, no se hicieron solos.
+
+### Diseño: se reutiliza el sistema existente, no se inventa uno paralelo
+
+Se investigó primero (no se asumió) cómo funciona hoy el flujo de batch —
+dónde se sube el ZIP, cómo se arma el "manifiesto" de un batch, qué claves de
+Redis trackean el progreso, cómo se avisa a Pusher. Resultado clave: **el
+manifiesto de un batch ya existe** — es el Redis Set `pdf:batch_ids:{batch_id}`
+que llena `process_zip_in_background` en `pdf.py`. No hizo falta inventar un
+manifiesto nuevo en GCS ni en otro lado; el Cloud Run Job solo necesita leer
+ese mismo Set.
+
+**El único problema técnico real:** un Redis Set no tiene orden garantizado, y
+cada tarea del Job necesita saber exactamente qué porción (shard) del batch le
+toca, sin coordinarse con las otras tareas. Solución: cada tarea lee el mismo
+Set completo (`SMEMBERS`), lo ordena (`sorted()`) y calcula su propio slice
+(`job_ids[task_index*100 : (task_index+1)*100]`) — como todas las tareas parten
+del mismo Set ya inmutable (la extracción del ZIP ya terminó antes de disparar
+el Job) y ordenan igual, el particionado es determinístico sin necesitar tocar
+el schema de Redis ni coordinar nada entre tareas. Esto se probó explícitamente
+(`tests/test_batch_shard_job.py::ShardSliceTests`): partición exacta, con
+residuo, tarea de más que da shard vacío en vez de error, y — el caso que
+podía romper todo — dos "tareas" que reciben el mismo Set en distinto orden de
+llegada (como pasaría de verdad con `SMEMBERS`) calculan el mismo shard.
+
+### Archivos nuevos
+
+- **`backend/app/services/batch_progress.py`** — la lógica de "cuenta el
+  avance e informa a Pusher cada N o al llegar al total" (`publish_batch_tick`),
+  extraída de `pdf.py` para que la comparta el camino de Cloud Tasks (de
+  siempre) y el Job de shards (nuevo) sin duplicar la fórmula. `pdf.py` guardó
+  su función `_publish_batch_tick` con el mismo nombre y firma (ahora un
+  wrapper delgado) precisamente porque `tests/test_pdf_batch_ttl.py` la llama
+  directo y parchea `redis_client` a nivel de módulo — se verificó que ese test
+  sigue pasando exactamente igual tras el refactor.
+- **`backend/app/services/batch_job_trigger.py`** — decide si un batch usa
+  "artillería pesada" (`should_use_batch_job`, apagado por defecto vía
+  `BATCH_JOB_ENABLED=false`) y dispara la ejecución del Job vía la librería
+  oficial `google-cloud-run` (`google.cloud.run_v2`, agregada a
+  `requirements.txt`) — verificada contra la API real instalada, no contra
+  memoria/documentación (se confirmó que `RunJobRequest.Overrides.
+  ContainerOverride` y `JobsClient.job_path` existen tal cual en la versión
+  instalada antes de escribir el resto del código sobre esa base).
+- **`backend/app/workers/batch_shard_worker.py`** — el entrypoint que corre
+  CADA tarea del Job: toma su shard, y por cada XML descarga de
+  `xml_temp/{job_id}.xml`, genera el PDF con la misma función `generate()` de
+  siempre (`pdf_pipeline.py` — incluye el fix de `FontConfiguration` ya en
+  producción), lo sube a `pdfs/{job_id}.pdf`, y llama al mismo
+  `publish_batch_tick` compartido. Un error en un XML del shard se marca como
+  error y se sigue con los demás — no se revienta la tarea completa por un XML
+  corrupto (eso no se arregla reintentando, y los otros ~99 del shard sí deben
+  completarse).
+- **`infra/deploy-batch-shard-job.sh`** — define el Job en GCP (`gcloud run
+  jobs deploy`), reutilizando la misma imagen de contenedor que ya usa
+  `cfdi-suite-api`. **No se ejecutó** — hay que correrlo a mano, y antes de
+  eso resolver un TODO marcado explícitamente ahí: de dónde sale
+  `REDIS_PASSWORD` para el Job (el patrón actual del servicio principal lo
+  pasa en texto plano vía GitHub secret, dentro de un workflow — este script
+  vive en el repo, así que vale la pena usar Secret Manager en vez de repetir
+  ese patrón).
+- **`backend/app/routers/pdf.py`** (editado, no nuevo) — `process_zip_in_background`
+  ahora consulta `should_use_batch_job(len(xml_entries))` una vez que conoce el
+  tamaño real del batch. Si es `False` (el default siempre, hasta que se
+  configure lo contrario), el código se comporta exactamente igual que antes —
+  verificado corriendo la suite completa de tests, no solo leyendo el diff.
+
+### Qué faltaba antes de esta sección (ya resuelto abajo)
+
+Esta lista era el plan pendiente cuando se escribió la sección de arriba. Se
+resolvió todo el mismo día — ver "Desplegado y probado con datos reales" más
+abajo para el estado real, no el planeado:
+
+1. ~~Decidir el umbral real~~ — resuelto para la fase de pruebas: `1` en
+   producción y en el canario (cualquier batch usa el camino nuevo). El
+   umbral "calculado/variable" que Gilberto pidió para producción real sigue
+   sin definirse — ver pendientes al final de esta sección.
+2. ~~Resolver cómo se inyecta `REDIS_PASSWORD`~~ — resuelto: mismo patrón que
+   hoy (env var directa), decisión explícita de Gilberto dado que el Redis
+   de este proyecto es de pruebas.
+3. ~~Dar permiso `run.jobs.run`~~ — resuelto, otorgado acotado al Job
+   específico (`roles/run.invoker`, no un rol más amplio).
+4. ~~Correr `infra/deploy-batch-shard-job.sh` de verdad~~ — resuelto, con
+   confirmación explícita antes de cada paso real en GCP.
+5. ~~Probar una ejecución real~~ — resuelto, dos veces: una prueba chica
+   controlada por mí, y una prueba real de 2000 XMLs subida por Gilberto
+   desde el sitio web. **El número de "~30-40s y ~$0.15-1" NO se confirmó —
+   salió falso.** Ver el detalle real abajo.
+
+## Desplegado y probado con datos reales (12 de julio de 2026)
+
+Esta sección reemplaza las estimaciones de arriba con lo que en realidad pasó
+al desplegar y probar la Capa 1 contra el proyecto real, incluyendo dos
+errores que se encontraron y corrigieron en vivo, y una comparación medida
+(no proyectada) contra el camino viejo.
+
+### Qué se desplegó, en orden
+
+1. **Revisión canario de `cfdi-suite-api`** (`cfdi-suite-api-00128-dax`) con
+   todo el código nuevo, primero sin tráfico (0%), luego **promovida al 100%
+   del tráfico real de producción** — con confirmación explícita de Gilberto
+   en cada paso (primero el canario, después la promoción a producción por
+   separado). Configurada con `BATCH_JOB_ENABLED=true`,
+   `BATCH_JOB_THRESHOLD=1` — es decir, **ahora mismo, cualquier ZIP que
+   cualquier usuario suba en producción usa el camino nuevo (Cloud Run Job),
+   no el de Cloud Tasks.** Esto fue una decisión explícita para esta fase de
+   pruebas, no un descuido — Gilberto la confirmó sabiendo la implicación.
+2. **El Cloud Run Job `cfdi-batch-shard`** creado en GCP, con permiso
+   `run.jobs.run` otorgado a la cuenta de servicio, acotado al Job (no un rol
+   amplio a nivel proyecto).
+
+### Bug encontrado y corregido en vivo: faltaban credenciales de Pusher en el Job
+
+La primera prueba real (un ZIP de 2000 XMLs que Gilberto subió desde el sitio
+web) reveló un bug: el Job procesaba los XMLs correctamente (Redis se
+actualizaba, `done_count` subía de verdad, los PDFs se generaban) pero **la
+pantalla del usuario se quedaba fija en 0%** — ningún aviso de progreso
+llegaba al navegador. Causa raíz, confirmada en los logs del propio Job
+(`[Pusher Warning] Faltan variables de entorno; progreso en tiempo real
+desactivado`): el script de despliegue (`infra/deploy-batch-shard-job.sh`)
+nunca incluyó `PUSHER_APP_ID`/`PUSHER_KEY`/`PUSHER_SECRET`/`PUSHER_CLUSTER` —
+solo se pusieron las variables de Redis y GCS. `get_pusher()`
+(`app/services/realtime.py`) está diseñado para apagarse en silencio si
+faltan credenciales (no truena), así que el batch se procesó de principio a
+fin sin ningún error visible en el backend — el único síntoma era el
+silencio total en el frontend.
+
+Se corrigió con `gcloud run jobs update --update-env-vars=PUSHER_...`
+(credenciales que Gilberto proporcionó directamente) **a mitad de esa misma
+corrida** — las 20 tareas que ya estaban en vuelo en ese momento no heredaron
+el cambio (no es retroactivo), pero cualquier ejecución nueva del Job sí lo
+tiene. El script de despliegue (`infra/deploy-batch-shard-job.sh`) ya quedó
+actualizado con un comentario explícito sobre este bug para que no se repita
+si el Job se despliega desde cero en el futuro.
+
+Ese primer batch de 2000 XMLs terminó, de todos modos, **2000/2000 sin
+errores** — el bug era solo de visibilidad del progreso, nunca de
+corrección del resultado.
+
+### La comparación real: camino nuevo vs. camino viejo, mismo ZIP de 2000 XMLs
+
+Después de corregir el bug de Pusher, Gilberto preguntó directamente: ¿esto
+sí fue más rápido, o seguimos igual? La respuesta requería un número real,
+no una reafirmación de la estimación original — así que se hizo la prueba:
+mismo ZIP real (`mil_facturas_prueba.zip`, 367MB, 2000 XMLs reales de
+Miniso, el mismo que ya se usó en pruebas de canario anteriores) corrido por
+ambos caminos, con cronómetro real en los dos.
+
+**Camino viejo:** se desplegó una segunda revisión aislada de
+`cfdi-suite-api` (tag `test-old-path`, **0% de tráfico real**, con
+`BATCH_JOB_ENABLED=false` y `API_URL` apuntada a sí misma — mismo patrón de
+aislamiento que ya se documentó en `PROJECT_STATE.md` para las pruebas de
+canario del fix de concurrency, así Cloud Tasks nunca toca producción
+durante la prueba). Se subió el mismo ZIP y se disparó el procesamiento vía
+API directa (sin pasar por el navegador), con hora de inicio y fin
+registradas.
+
+| | Extracción del ZIP | Procesamiento | TOTAL |
+|---|---:|---:|---:|
+| **Camino nuevo** (Cloud Run Job) | 7m58s | 8m43s | **16m41s** |
+| **Camino viejo** (Cloud Tasks) | 6m13s (aprox.) | 19m58s | **26m11s** |
+
+0 errores en ambos caminos.
+
+**Lectura honesta de estos números:**
+- **En el procesamiento puro (la parte que de verdad cambia entre las dos
+  arquitecturas): la Capa 1 es ~2.3× más rápida.** Real, medido, no
+  proyectado — consistente con que Cloud Tasks está topado a 8 despachos
+  concurrentes (`maxConcurrentDispatches=8` en la cola `pdf-generator-queue`,
+  confirmado con `gcloud tasks queues describe`) mientras el Job corrió 20
+  tareas en paralelo real para este mismo batch.
+- **En total (incluyendo la extracción del ZIP, que es código idéntico en
+  ambos caminos): solo ~1.57× más rápido** — mucho menos dramático, porque la
+  extracción domina una fracción grande del tiempo total y ninguna de las
+  tres capas de esta propuesta la toca.
+- **El número original de "~30-40 segundos para 15,000 XMLs" de la sección
+  "Ronda 0.5" (arriba) es INCORRECTO — no se sostuvo con datos reales.** Esa
+  estimación se calculó extrapolando el tiempo de `generate()` medido en
+  aislado con un XML sintético de 6 filas, sin contar: los viajes de red a
+  GCS por cada XML (descarga + subida), las llamadas a Redis por XML, ni la
+  complejidad real de facturas reales (más conceptos que el XML sintético de
+  prueba). El factor de error fue de aproximadamente 13× solo en la fase de
+  procesamiento.
+
+### Hallazgo nuevo, no anticipado por ninguna ronda anterior: la extracción del ZIP es un cuello de botella propio
+
+Ni la propuesta original, ni Ronda 0, ni Ronda 0.5 consideraron el tiempo de
+**extraer el ZIP y subir cada XML individual a GCS** como una variable
+independiente — se asumió, implícitamente, que ese paso era rápido/fijo. Los
+datos dicen lo contrario: tomó 6-8 minutos para un ZIP de 367MB/2000 XMLs, y
+es **código secuencial** (`process_zip_in_background` en `pdf.py` procesa el
+ZIP en chunks de 20, uno tras otro, en una sola tarea) — ninguna de las tres
+capas de esta propuesta (Cloud Run Jobs, motor compilado, vectorización) lo
+paraleliza ni lo acelera, porque todas atacan el paso de *generar* el PDF,
+no el paso de *extraer* el ZIP de origen.
+
+**Esto importa mucho para el escenario real de 15,000 XMLs:** si el tiempo de
+extracción escala con el volumen (probable, no verificado a esa escala —
+cada XML adicional requiere al menos una subida a GCS más, secuencial), un
+ZIP 7.5× más grande podría tardar en extraerse muchos minutos más, quizás
+del orden de una hora — un cuello de botella completamente aparte del que
+esta propuesta se diseñó para resolver. **No se ha medido a esa escala
+todavía** — esto queda anotado como pregunta abierta, no como hecho, pero es
+una pregunta que ninguna ronda anterior había hecho.
+
+### Estado operativo actual (12 de julio de 2026, fin de esta sesión)
+
+- **Producción está sirviendo la revisión nueva al 100% del tráfico**, con
+  `BATCH_JOB_ENABLED=true` y `BATCH_JOB_THRESHOLD=1` — cualquier ZIP que
+  cualquier usuario suba ahora mismo usa el camino nuevo (Cloud Run Job).
+  Esto fue confirmado explícitamente por Gilberto, entendiendo la
+  implicación, para esta fase de pruebas activas.
+- Existe una revisión aislada adicional (tag `test-old-path`, 0% de
+  tráfico) que fuerza el camino viejo — quedó desplegada como referencia,
+  no cuesta nada mientras no reciba tráfico.
+- El Job `cfdi-batch-shard` existe en GCP, con las 8 variables de entorno
+  correctas (incluyendo Pusher, ya corregido).
+
+### Pendientes reales, actualizados
+
+1. **El umbral de producción sigue en `1`** — válido para esta fase de
+   pruebas activas, pero Gilberto ya señaló que quiere un umbral
+   calculado/variable (posiblemente atado a plan de cliente o a carga) antes
+   de que esto sea el comportamiento permanente. Sigue sin definirse.
+2. **Investigar el cuello de botella de extracción del ZIP** — nuevo,
+   descubierto en esta sesión, no estaba en el radar de ninguna ronda
+   anterior. Candidato natural para el próximo perfilado: separar cuánto de
+   esos 6-8 minutos es descarga del ZIP a disco, cuánto es lectura/parseo del
+   ZIP, y cuánto son las subidas individuales a GCS — el mismo tipo de
+   perfilado que ya se hizo para `generate()`, aplicado ahora a
+   `process_zip_in_background`.
+3. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
+   — probarlo con un ZIP más grande (ideal: el escenario real de 15,000) para
+   saber si el "~1 hora" es una sobreestimación o el piso real.
+4. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
+   fase de pruebas) — migrar a Secret Manager antes de que esto deje de ser
+   un entorno de prueba, tal como ya está anotado para el Redis de
+   Upstash en la memoria del proyecto.
