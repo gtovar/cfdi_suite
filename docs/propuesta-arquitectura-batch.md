@@ -1365,28 +1365,36 @@ depender del default ambiguo. Verificado con una prueba real contra GCS: 20
 subidas con el pool explícito, 3.91s (196ms/XML efectivo) — concurrencia
 real confirmada, no una suposición.
 
+### Desplegado a producción (12 de julio de 2026)
+
+Desplegado con `gcloud run deploy --source=./backend` (rebuild desde el
+código con el fix ya incluido) — revisión `cfdi-suite-api-00107-msc`,
+sirviendo el 100% del tráfico directo, sin el problema de `LATEST` de la vez
+anterior (verificado: `latestRevision: True`, coincide con
+`latestReadyRevisionName`). Servicio sano (200 en `/docs`), las 14 variables
+de entorno presentes, incluidas `BATCH_JOB_ENABLED`/`BATCH_JOB_THRESHOLD`.
+
 ### Pendientes reales, actualizados
 
-1. **Desplegar el fix de paralelización de subida a GCS** — código listo y
-   probado, falta desplegarlo con confirmación explícita.
-2. **El paso c) (Cloud Tasks, camino viejo) tiene el mismo patrón
+1. **El paso c) (Cloud Tasks, camino viejo) tiene el mismo patrón
    secuencial** que el paso b) tenía — no se tocó en este cambio, mismo tipo
    de mejora disponible si se quiere aplicar después.
-3. **Medir el fix dentro de Cloud Run real** (no desde una laptop) para
-   confirmar el número absoluto, no solo la ganancia relativa.
-4. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
+2. **Medir el fix dentro de Cloud Run real** (no desde una laptop) para
+   confirmar el número absoluto, no solo la ganancia relativa — la próxima
+   subida real de un ZIP grande por el sitio lo confirmará.
+3. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
    — probarlo con un ZIP más grande (ideal: el escenario real de 15,000) para
    saber si el "~1 hora" es una sobreestimación o el piso real.
-5. **El escenario de negocio de "muchos batches chicos simultáneos"**
+4. **El escenario de negocio de "muchos batches chicos simultáneos"**
    (1000 usuarios × 50 facturas) no se ha probado — todo lo medido hasta
    ahora es "un batch grande a la vez". Es un problema de escalamiento
    distinto (throughput agregado del Job bajo muchas ejecuciones
    concurrentes), no cubierto por ninguna prueba de esta sesión.
-6. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
+5. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
    fase de pruebas) — migrar a Secret Manager antes de que esto deje de ser
    un entorno de prueba, tal como ya está anotado para el Redis de
    Upstash en la memoria del proyecto.
-7. **Capa 2 (typst) sigue sin PoC** — Ronda 0.5 recomendó una prueba local
+6. **Capa 2 (typst) sigue sin PoC** — Ronda 0.5 recomendó una prueba local
    gratuita antes de comprometerse; nunca se hizo. Sigue pendiente, sin
    urgencia nueva desde que la Capa 1 sola ya entregó una mejora real
    medida.
