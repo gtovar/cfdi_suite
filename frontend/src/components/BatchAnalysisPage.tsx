@@ -578,6 +578,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const [processStartTime, setProcessStartTime] = useState<number | null>(null);
   const [processEndTime, setProcessEndTime] = useState<number | null>(null);
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [wasRestored, setWasRestored] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -741,6 +742,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       setActiveBatchId(savedBatchId);
       setPhase('processing');
       setProcessStartTime(Date.now());
+      setWasRestored(true);
       startPollingStatus(savedBatchId);
     }
     return () => {
@@ -846,6 +848,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     setPhase('processing');
     setProcessStartTime(Date.now());
     setProcessEndTime(null);
+    setWasRestored(false);
 
     // Inicializamos la estructura visual vacía en lo que responde el servidor
     const initialQueue: QueueEntry[] = files.map((file) => ({ file, result: null }));
@@ -1259,6 +1262,17 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         {/* ═══════ PHASE: PROCESSING ═══════ */}
         {phase === 'processing' && (
           <>
+            {/* Aviso explícito de recuperación — antes esto pasaba en
+                silencio (reconstrucción del estado sin ningún mensaje al
+                usuario), igual que en ConversionMasivaPage (Fase 3). Este
+                backend ya usa TTL uniforme de 24h — no se toca aquí. */}
+            {wasRestored && (
+              <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
+                <CheckCircle2 size={14} className="shrink-0" />
+                Recuperamos tu lote anterior — sigue procesándose en la nube.
+              </div>
+            )}
+
             {/* Pipeline indicator */}
             <BatchPipelineIndicator
               stage="processing"

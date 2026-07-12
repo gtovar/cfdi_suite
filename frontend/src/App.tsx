@@ -58,7 +58,16 @@ const PAGO_COLUMNS = [
 ] as const;
 
 export default function App() {
-  const [activeView, setActiveView] = useState<AppView>('masivo');
+  // Link compartido de un lote de PDFs (?batch=<id>, ver Fase 3 de
+  // docs/plan-recuperacion-batches-pdf.md): leído de forma síncrona en el
+  // initializer (no en un useEffect) para que ya esté disponible en el
+  // primer render — un useEffect en App corre después que el useEffect de
+  // restauración de ConversionMasivaPage (los hijos se efectúan antes que
+  // los padres), y ese componente ya está montado desde el inicio (montaje
+  // persistente para el widget flotante), así que llegaría tarde.
+  const [activeView, setActiveView] = useState<AppView>(() =>
+    new URLSearchParams(window.location.search).get('batch') ? 'conversion-masiva' : 'masivo'
+  );
   const [activeTemplateId, setActiveTemplateId] = useState('default');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -91,6 +100,11 @@ export default function App() {
   const [batchNavFiles, setBatchNavFiles] = useState<File[]>([]);
   const [batchNavIndex, setBatchNavIndex] = useState(0);
   const [widgetDismissed, setWidgetDismissed] = useState(false);
+  const [batchPdfStatus, setBatchPdfStatus] = useState<BatchProgressStatus | null>(null);
+  const [widgetPdfDismissed, setWidgetPdfDismissed] = useState(false);
+  const [restorePdfBatchId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get('batch')
+  );
   const [taxAuditExpanded, setTaxAuditExpanded] = useState(false);
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'auditoria' | 'nodo-xml'>('auditoria');
@@ -354,7 +368,19 @@ export default function App() {
           }}
         />
       </div>
-      {activeView === 'conversion-masiva' && <ConversionMasivaPage templateId={activeTemplateId} />}
+      {/* Mismo patrón que BatchAnalysisPage arriba: montaje persistente para que
+          el listener de progreso (Pusher) siga vivo si el usuario navega a
+          otra vista — así FloatingBatchWidget puede seguir mostrando avance. */}
+      <div className={activeView === 'conversion-masiva' ? 'flex flex-col md:h-full md:overflow-hidden' : 'hidden'}>
+        <ConversionMasivaPage
+          templateId={activeTemplateId}
+          restoreBatchId={restorePdfBatchId}
+          onProgressUpdate={(status) => {
+            if (status?.phase === 'processing' && status.completed === 0) setWidgetPdfDismissed(false);
+            setBatchPdfStatus(status);
+          }}
+        />
+      </div>
       {activeView === 'emisores' && <EmisoresPage />}
       {activeView === 'pdf-templates' && (
           <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -496,12 +522,24 @@ export default function App() {
       </div>
       </div>
 
-      {/* Floating progress widget — visible when batch is running and user is on another view */}
+      {/* Floating progress widget — visible when batch is running and user is on another view.
+          Dos fuentes posibles (análisis DIOT/IVA-ISR y conversión de PDFs) — si
+          ambas están corriendo a la vez (caso raro), prioriza la de análisis;
+          no hay forma de mostrar dos widgets a la vez sin rediseñar el
+          componente, y no vale la pena para ese caso extremo. */}
       {batchMasivoStatus && batchMasivoStatus.phase === 'processing' && activeView !== 'masivo' && !widgetDismissed && (
         <FloatingBatchWidget
           status={batchMasivoStatus}
           onNavigate={() => setActiveView('masivo')}
           onDismiss={() => setWidgetDismissed(true)}
+        />
+      )}
+      {!(batchMasivoStatus && batchMasivoStatus.phase === 'processing') &&
+        batchPdfStatus && batchPdfStatus.phase === 'processing' && activeView !== 'conversion-masiva' && !widgetPdfDismissed && (
+        <FloatingBatchWidget
+          status={batchPdfStatus}
+          onNavigate={() => setActiveView('conversion-masiva')}
+          onDismiss={() => setWidgetPdfDismissed(true)}
         />
       )}
     </div>

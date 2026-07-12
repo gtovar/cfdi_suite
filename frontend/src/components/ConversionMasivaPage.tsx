@@ -2,10 +2,12 @@ import clsx from 'clsx';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
+  Copy,
   Download,
   FileDown,
   FolderOpen,
   Loader2,
+  Share2,
   Upload,
   XCircle,
   FileArchive,
@@ -26,6 +28,7 @@ import {
   ZIP_PROGRESS_SIZE_LIMIT_BYTES,
   Semaphore,
 } from '../lib/pdf-download';
+import type { BatchProgressStatus } from './FloatingBatchWidget';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -75,16 +78,22 @@ function StateChip({ state }: { state: PdfConversionState }) {
 
 interface ConversionMasivaPageProps {
   templateId?: string;
+  onProgressUpdate?: (status: BatchProgressStatus | null) => void;
+  // batch_id recibido vía ?batch=<id> en la URL (link compartido) — tiene
+  // prioridad sobre el lote guardado en localStorage, que es específico de
+  // este navegador/dispositivo.
+  restoreBatchId?: string | null;
 }
 
 // Lote en curso guardado para sobrevivir un refresh — el trabajo del servidor
-// sigue vivo aunque la UI se recargue. El tope de edad coincide con el
-// overallTimeoutMs de waitForBatchJob (45 min): más viejo que eso ya no hay
-// stream que retomar.
+// sigue vivo aunque la UI se recargue. El tope de edad coincide con el TTL
+// real del backend tras la Fase 2 (24h) — antes eran 45 min, más corto que
+// el TTL de Redis de ese momento (1h), lo que ocultaba el link en vez de
+// mostrar el batch como recuperable.
 const ACTIVE_BATCH_KEY = 'cfdi-active-batch';
-const ACTIVE_BATCH_MAX_AGE_MS = 45 * 60 * 1000;
+const ACTIVE_BATCH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-export default function ConversionMasivaPage({ templateId }: ConversionMasivaPageProps) {
+export default function ConversionMasivaPage({ templateId, onProgressUpdate, restoreBatchId }: ConversionMasivaPageProps) {
   // Estados para el flujo tradicional (XMLs sueltos)
   const [entries, setEntries] = useState<ConversionEntry[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -100,6 +109,8 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
   const [batchConnState, setBatchConnState] = useState<{ state: 'connected' | 'reconnecting'; attempt: number } | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
   const [readyFileIds, setReadyFileIds] = useState<string[]>([]);
+  const [wasRestored, setWasRestored] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
 
   // Progreso de descarga (0-100%) del ZIP consolidado y de PDFs individuales.
   // null = sin descarga en curso; percentage null = tamaño desconocido (no
@@ -175,7 +186,9 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     setBatchConnState(null);
     setBatchError(null);
     setReadyFileIds([]);
+    setWasRestored(false);
     localStorage.removeItem(ACTIVE_BATCH_KEY);
+    onProgressUpdate?.(null);
   }
 
   function toggleSelectAll(checked: boolean) {
@@ -220,11 +233,27 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     }
   }, []);
 
-  // Reconexión tras refresh: si quedó un lote en curso guardado, volver a
-  // escuchar su progreso en vez de obligar a resubir el ZIP.
+  // Reconexión tras refresh, o tras abrir un link compartido (?batch=<id>):
+  // volver a escuchar el progreso en vez de obligar a resubir el ZIP. El
+  // link compartido tiene prioridad — es una acción explícita del usuario y
+  // puede apuntar a un batch_id distinto al que quedó en este navegador.
   useEffect(() => {
     if (restoredBatchRef.current) return;
     restoredBatchRef.current = true;
+
+    if (restoreBatchId) {
+      setIsZipMode(true);
+      setPhase('running');
+      setBatchId(restoreBatchId);
+      setWasRestored(true);
+      // Sin `total` conocido de antemano (no viene de localStorage) — el
+      // snapshot inmediato de watchBatchProgress lo completa en segundos;
+      // mientras tanto se muestra el loader de "Desempaquetando..." de abajo.
+      fetchReadyFileIds(restoreBatchId).then(setReadyFileIds).catch(() => {});
+      void listenToBatch(restoreBatchId);
+      return;
+    }
+
     const raw = localStorage.getItem(ACTIVE_BATCH_KEY);
     if (!raw) return;
     try {
@@ -236,6 +265,7 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
       setIsZipMode(true);
       setPhase('running');
       setBatchId(saved.batchId);
+      setWasRestored(true);
       setBatchProgress({
         status: 'processing',
         total: saved.total,
@@ -252,7 +282,22 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     } catch {
       localStorage.removeItem(ACTIVE_BATCH_KEY);
     }
-  }, [listenToBatch]);
+  }, [listenToBatch, restoreBatchId]);
+
+  // Propaga el progreso a App.tsx para que FloatingBatchWidget lo muestre
+  // al navegar a otra vista — mismo patrón que BatchAnalysisPage. Dispara
+  // desde que el lote arranca (phase 'running'), no solo cuando ya llegó el
+  // primer snapshot — si el primer fetch tarda o falla momentáneamente, el
+  // widget igual aparece (0/0) en vez de quedarse invisible hasta que la
+  // red responda.
+  useEffect(() => {
+    if (!isZipMode || !batchId) return;
+    if (batchProgress?.status === 'done') {
+      onProgressUpdate?.({ completed: batchProgress.total, total: batchProgress.total, phase: 'done' });
+    } else if (phase === 'running') {
+      onProgressUpdate?.({ completed: batchProgress?.done ?? 0, total: batchProgress?.total ?? 0, phase: 'processing' });
+    }
+  }, [batchProgress, phase, isZipMode, batchId, onProgressUpdate]);
 
   function handleRetryBatchConnection() {
     if (batchId) void listenToBatch(batchId);
@@ -459,6 +504,35 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
     } finally { setIsDownloadingAll(false); }
   }
 
+  function getBatchShareUrl(id: string): string {
+    return `${window.location.origin}${window.location.pathname}?batch=${id}`;
+  }
+
+  async function handleCopyBatchLink() {
+    if (!batchId) return;
+    try {
+      await navigator.clipboard.writeText(getBatchShareUrl(batchId));
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleShareBatchLink() {
+    if (!batchId) return;
+    const url = getBatchShareUrl(batchId);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Lote de PDFs CFDI', url });
+      } catch {
+        // Usuario canceló el diálogo nativo — no es un error a reportar.
+      }
+    } else {
+      await handleCopyBatchLink();
+    }
+  }
+
   return (
     <div className="flex flex-col md:h-full md:overflow-hidden">
       <div className="flex flex-1 flex-col gap-5 overflow-auto p-6">
@@ -508,6 +582,43 @@ export default function ConversionMasivaPage({ templateId }: ConversionMasivaPag
           )}
           <input ref={fileInputRef} type="file" multiple accept=".xml,.zip" className="hidden" onChange={handleFileSelect} />
         </div>
+
+      {/* Aviso explícito de recuperación — antes esto pasaba en silencio
+          (reconstrucción del estado sin ningún mensaje al usuario) */}
+      {wasRestored && isZipMode && batchId && (
+        <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
+          <CheckCircle2 size={14} className="shrink-0" />
+          Recuperamos tu lote anterior — sigue procesándose en la nube.
+        </div>
+      )}
+
+      {/* Link persistente y copiable del lote — antes no se mostraba en
+          ningún punto, así que no había forma de retomarlo desde otro
+          dispositivo. Vive tanto como el TTL real del backend (24h). Visible
+          desde que se conoce el batchId, sin esperar al primer snapshot de
+          progreso (que puede tardar unos segundos). */}
+      {isZipMode && batchId && (
+        <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+          <input
+            readOnly
+            value={getBatchShareUrl(batchId)}
+            onFocus={(e) => e.currentTarget.select()}
+            className="flex-1 truncate bg-transparent font-mono text-tiny text-gray-500 outline-none"
+          />
+          <button
+            onClick={handleCopyBatchLink}
+            className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-tiny font-medium text-gray-600 hover:bg-gray-100"
+          >
+            <Copy size={12} /> {copyFeedback ? '¡Copiado!' : 'Copiar link'}
+          </button>
+          <button
+            onClick={handleShareBatchLink}
+            className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-tiny font-medium text-gray-600 hover:bg-gray-100"
+          >
+            <Share2 size={12} /> Compartir
+          </button>
+        </div>
+      )}
 
       {/* --- INDICADOR DE CARGA INICIAL (FEEDBACK INMEDIATO AL USUARIO) --- */}
       {isZipMode && !batchProgress && phase === 'running' && (
