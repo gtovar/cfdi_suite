@@ -1280,28 +1280,75 @@ automática de tamaño.
 `BATCH_JOB_THRESHOLD=1` — sin cambios, ya estaba así. Esta es ahora la
 decisión permanente, no un artefacto de la fase de pruebas.
 
+## Cuello de botella de extracción: perfilado y fix (12 de julio de 2026)
+
+Se investigó el cuello de botella de extracción del ZIP encontrado en la
+sección anterior, con el mismo método que ya funcionó para `generate()`:
+perfilar antes de tocar código, con el mismo ZIP real
+(`mil_facturas_prueba.zip`).
+
+**Hipótesis, confirmada al leer el código:** `flush_chunk` (dentro de
+`process_zip_in_background`, `pdf.py`) sube los XMLs de cada chunk **uno por
+uno, secuencial** — un `for` con `await` de una subida a GCS a la vez, 2000
+veces seguidas para el ZIP de prueba. `asyncio.to_thread` evita bloquear el
+servidor mientras espera, pero no hace que las subidas ocurran *al mismo
+tiempo* — cada una espera a que termine la anterior.
+
+**`CHUNK_SIZE = 20` es un valor real del código** (no un ejemplo ilustrativo,
+Gilberto preguntó directo) — así que cada chunk ya es un lote natural de 20
+XMLs para paralelizar sin cambiar el diseño de chunking existente.
+
+**Perfilado:** se subió un subconjunto real de 100 XMLs del mismo ZIP a un
+prefijo de prueba de GCS (`xml_temp_profiling_test/`, borrado al final, sin
+tocar el prefijo real de producción), comparando subida secuencial vs.
+`asyncio.gather` (todas las subidas del lote al mismo tiempo):
+
+| | Tiempo (100 XMLs) | Por XML |
+|---|---:|---:|
+| Secuencial (código actual) | 62.3s | 623ms |
+| Paralelo (`asyncio.gather`) | 15.1s | 151ms |
+
+**Reducción: 75.8% (4.1× más rápido).** Nota honesta: esta medición corrió
+desde una laptop hacia GCS (más lento que Cloud Run corriendo en la misma
+región que el bucket) — el número absoluto no es el que se vería en
+producción, pero la ganancia *relativa* de paralelizar sí es una señal real:
+si esa proporción se sostiene dentro de Cloud Run, los 6-8 minutos de
+extracción medidos en la Ronda 1 completa bajarían a un estimado de
+~1.5-2 minutos. **No incluye la descarga del ZIP completo a disco** (un solo
+paso, no aislado en este perfilado) — sigue siendo una incógnita, aunque
+mucho menos sospechosa que 2000 llamadas de red secuenciales.
+
+**Implementado:** el paso b) de `flush_chunk` (subida a GCS) ahora usa
+`asyncio.gather` para subir los XMLs de cada chunk de 20 en paralelo, en vez
+de uno por uno. Cambio acotado — no toca el manifiesto de Redis, el paso a)
+(Redis) ni el paso c) (Cloud Tasks, que tiene el mismo patrón secuencial pero
+no se tocó esta vez). Verificado con la suite completa de tests:
+208/208 pasan. **No desplegado a producción todavía** — pendiente de
+confirmación explícita, mismo criterio que el resto de los cambios de esta
+sesión.
+
 ### Pendientes reales, actualizados
 
-1. **Investigar el cuello de botella de extracción del ZIP** — nuevo,
-   descubierto en esta sesión, no estaba en el radar de ninguna ronda
-   anterior. Candidato natural para el próximo perfilado: separar cuánto de
-   esos 6-8 minutos es descarga del ZIP a disco, cuánto es lectura/parseo del
-   ZIP, y cuánto son las subidas individuales a GCS — el mismo tipo de
-   perfilado que ya se hizo para `generate()`, aplicado ahora a
-   `process_zip_in_background`.
-2. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
+1. **Desplegar el fix de paralelización de subida a GCS** — código listo y
+   probado, falta desplegarlo con confirmación explícita.
+2. **El paso c) (Cloud Tasks, camino viejo) tiene el mismo patrón
+   secuencial** que el paso b) tenía — no se tocó en este cambio, mismo tipo
+   de mejora disponible si se quiere aplicar después.
+3. **Medir el fix dentro de Cloud Run real** (no desde una laptop) para
+   confirmar el número absoluto, no solo la ganancia relativa.
+4. **Confirmar si el tiempo de extracción escala linealmente con el volumen**
    — probarlo con un ZIP más grande (ideal: el escenario real de 15,000) para
    saber si el "~1 hora" es una sobreestimación o el piso real.
-3. **El escenario de negocio de "muchos batches chicos simultáneos"**
+5. **El escenario de negocio de "muchos batches chicos simultáneos"**
    (1000 usuarios × 50 facturas) no se ha probado — todo lo medido hasta
    ahora es "un batch grande a la vez". Es un problema de escalamiento
    distinto (throughput agregado del Job bajo muchas ejecuciones
    concurrentes), no cubierto por ninguna prueba de esta sesión.
-4. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
+6. **`REDIS_PASSWORD` sigue en texto plano** (decisión explícita para esta
    fase de pruebas) — migrar a Secret Manager antes de que esto deje de ser
    un entorno de prueba, tal como ya está anotado para el Redis de
    Upstash en la memoria del proyecto.
-5. **Capa 2 (typst) sigue sin PoC** — Ronda 0.5 recomendó una prueba local
+7. **Capa 2 (typst) sigue sin PoC** — Ronda 0.5 recomendó una prueba local
    gratuita antes de comprometerse; nunca se hizo. Sigue pendiente, sin
    urgencia nueva desde que la Capa 1 sola ya entregó una mejora real
    medida.

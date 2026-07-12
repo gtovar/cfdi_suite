@@ -755,10 +755,17 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                     pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
                     await pipe.execute()
 
-                # b) Storage: el archivo pesado
-                for jid, xml_data in current_chunk:
+                # b) Storage: el archivo pesado — en paralelo, no uno por uno.
+                #    Perfilado 2026-07-12 (ver docs/propuesta-arquitectura-batch.md):
+                #    subir los XMLs del chunk secuencialmente es el cuello de
+                #    botella real de la extracción (~600ms/XML por la ida y
+                #    vuelta de red de cada subida) — asyncio.gather los solapa,
+                #    medido ~4x más rápido con el mismo ZIP real.
+                async def _upload_one(jid: str, xml_data: bytes) -> None:
                     blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
                     await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
+
+                await asyncio.gather(*[_upload_one(jid, xml_data) for jid, xml_data in current_chunk])
 
                 # c) Cloud Tasks: encolamos (solo camino normal — el Job de
                 #    shards procesa su manifiesto directo, sin pasar por Tasks)
