@@ -1424,20 +1424,20 @@ una sorpresa.
 1. Se revirtieron ambos commits del fix (`04db8cf`, `74f3506`) —
    confirmado con `git diff` que `pdf.py` quedó byte-idéntico al estado
    anterior a ambos. 208/208 tests pasan.
-2. **Pendiente: desplegar el revert a producción** — el código ya está
-   revertido en el repo, pero la revisión que sirve tráfico ahora mismo
-   (`cfdi-suite-api-00107-msc`) sigue corriendo el fix que resultó regresivo,
-   hasta que se despliegue el revert.
+2. **Desplegado a producción** — revisión `cfdi-suite-api-00108-wdg`, 100%
+   del tráfico, `LATEST` rastreado correctamente, servicio sano (200 en
+   `/docs`), las 14 variables de entorno confirmadas presentes. La
+   regresión de extracción ya no está en producción — el camino de subida
+   a GCS volvió a ser el secuencial de siempre (probado, más lento en
+   general pero sin el efecto contrario que causó el intento de hoy).
 
 ### Pendientes actualizados
 
-1. **Desplegar el revert a producción** — urgente, la regresión sigue viva
-   en producción hasta que esto se despliegue.
-2. **Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job**
+1. **Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job**
    (la idea corregida de arriba) — con más cuidado que el intento de hoy,
    probablemente en otra sesión.
-3. **Resolver el hueco de progreso durante extracción** (Hallazgo 1) — la
+2. **Resolver el hueco de progreso durante extracción** (Hallazgo 1) — la
    pantalla debería mostrar algo durante la extracción, no solo 0% fijo.
-4. Todos los pendientes de la sección anterior (paso c) de Cloud Tasks,
+3. Todos los pendientes de la sección anterior (paso c) de Cloud Tasks,
    escalamiento del volumen, escenario de muchos batches simultáneos,
    Secret Manager, PoC de Capa 2) siguen abiertos, sin cambios por esto.
