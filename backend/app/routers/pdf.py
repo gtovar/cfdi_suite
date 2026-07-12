@@ -615,7 +615,7 @@ async def download_pdf(job_id: str):
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(f"pdfs/{job_id}.pdf")
     
-    if not blob.exists():
+    if not await asyncio.to_thread(blob.exists):
          raise HTTPException(status_code=404, detail="El archivo PDF no se encontró en Storage.")
 
     pdf_bytes = await asyncio.to_thread(blob.download_as_bytes)
@@ -699,6 +699,9 @@ async def get_pdf_download_url(job_id: str):
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(f"pdfs/{job_id}.pdf")
 
+        if not await asyncio.to_thread(blob.exists):
+            raise HTTPException(status_code=404, detail="El archivo PDF no se encontró en Storage.")
+
         download_url = blob.generate_signed_url(
             version="v4",
             expiration=datetime.timedelta(minutes=15),
@@ -708,6 +711,8 @@ async def get_pdf_download_url(job_id: str):
             access_token=credentials.token,
         )
         return {"downloadUrl": download_url}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error creando la Signed URL de descarga: {str(e)}")
