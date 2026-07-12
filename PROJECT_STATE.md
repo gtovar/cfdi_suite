@@ -7,7 +7,24 @@ main
 ## Último cambio
 **Plan de recuperación de PDFs de batches (`docs/plan-recuperacion-batches-pdf.md`) — Fases 1-4
 ejecutadas con TDD, commiteadas en local (`b94e301`, `5c29a27`, `93d48c1`, `07c4a3b`, más
-`be07d0b`), NO desplegadas todavía. Fase 5 es solo documentación, ya cumplida por el propio plan.**
+`be07d0b`). Backend (Fases 1+2) DESPLEGADO Y VERIFICADO en producción 2026-07-12 — commit
+`dd6c8ad`, revisión `cfdi-suite-api-00102-sfs`, 100% tráfico, `latestRevision: True`. Frontend
+(Fases 3+4) sigue pendiente de push a `main`, con confirmación explícita del usuario requerida
+para ese siguiente paso (ver sección "Pendiente" abajo). Fase 5 es solo documentación, ya cumplida
+por el propio plan.**
+
+**Verificación del deploy de backend (`00102-sfs`)**: `status.traffic` confirmó
+`{'latestRevision': True, 'percent': 100, 'revisionName': 'cfdi-suite-api-00102-sfs'}` — el deploy
+manual vía `cloudbuild.yaml` (sin `--tag`/`--no-traffic`) sí siguió `LATEST` correctamente, no
+repitió el bug de pin de tráfico. **Hallazgo nuevo**: el label `commit-sha` de la revisión quedó
+con el valor del deploy anterior (`31c6836`, `managed-by=github-actions`) — ese label solo lo
+actualiza el pipeline de GitHub Actions (`deploy-backend.yml`), no el path manual de
+`cloudbuild.yaml`. Para deploys manuales, verificar por **dígest de imagen** en vez de por ese
+label: `gcloud run revisions describe <rev> --format="value(spec.containers[0].image)"` debe
+coincidir con el digest que `gcloud builds submit` reportó al hacer push. Confirmado que coincidía
+(`sha256:09a5fa6c1...`). Variables de entorno confirmadas intactas (nombres, no valores):
+`ALLOWED_ORIGINS, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, MODE, API_URL, SENTRY_DSN, PUSHER_*,
+GCS_BUCKET_NAME`. Smoke test: `/docs` → 200, `/download-url` de un job inexistente → 404.
 
 **Bug serio encontrado y corregido tras el commit de Fase 3 (`07c4a3b`)**: el efecto que propaga
 progreso de `ConversionMasivaPage` a `App.tsx` incluía `onProgressUpdate` en sus dependencias —
@@ -53,21 +70,11 @@ intento). Verificado con un segundo chequeo de Playwright: 0 mutaciones DOM en 2
 
 **Pendiente, gateado por el usuario (no autónomo por diseño — ver política de confirmación antes
 de deploy):**
-1. Deploy ordenado a producción: **Fase 2 primero, Fase 3 después** — desplegar Fase 3 antes
-   convertiría el síntoma actual ("silenciosamente ya no recupera") en uno peor ("Lote no
-   encontrado" explícito), porque el frontend extendería su ventana de reconexión a 24h sobre un
-   backend cuyo TTL seguiría en 1h. Ver el propio plan, Fase 2, "hallazgo de verificación".
-   **Ojo (encontrado en revisión, advisor): un solo `git push` a `main` NO respeta este orden por
-   sí solo** — `deploy-backend.yml` y `deploy-frontend.yml` se disparan en paralelo por el mismo
-   push (cada uno cuando el diff toca `backend/**`/`frontend/**` respectivamente), así que
-   empujar los 5 commits juntos dispara ambos deploys a la vez, exactamente la ventana de carrera
-   que el orden buscaba evitar. Secuencia real necesaria: (a) deploy manual solo del backend vía
-   `gcloud builds submit --config=backend/cloudbuild.yaml . --substitutions=COMMIT_SHA=$(git rev-parse HEAD)`
-   (no un push a main todavía); (b) confirmar `gcloud run services describe cfdi-suite-api
-   --region=us-central1 --format="value(status.traffic)"` → `latestRevision: True` (si no, correr
-   `--to-latest` — ver "Riesgos abiertos", pin de tráfico); (c) probar que un batch con TTL
-   vencido bajo el esquema viejo (>1h) ya resuelve bien; (d) recién entonces push a `main` (dispara
-   `deploy-frontend.yml` con los commits de Fase 3/4).
+1. ~~Deploy manual del backend (Fase 2)~~ — **HECHO 2026-07-12**, ver "Último cambio" arriba.
+   Queda el segundo paso: **push a `main`** para desplegar Fase 3+4 del frontend (dispara
+   `deploy-frontend.yml` vía GitHub Actions). Requiere confirmación explícita del usuario antes de
+   ejecutarse — el orden ya no es un riesgo (el backend con TTL de 24h ya está en producción), así
+   que este push ya no tiene la ventana de carrera documentada antes.
 2. Confirmar con el equipo si "necesito el PDF en otro dispositivo, y copiar/compartir no fue
    suficiente" ocurre seguido — determina si la Fase 4 termina ahí o si se construye correo.
 3. La cifra de Upstash en `pdf.py`/docs ya quedó corregida con datos reales de la Management API
