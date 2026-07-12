@@ -1360,3 +1360,84 @@ de entorno presentes, incluidas `BATCH_JOB_ENABLED`/`BATCH_JOB_THRESHOLD`.
    gratuita antes de comprometerse; nunca se hizo. Sigue pendiente, sin
    urgencia nueva desde que la Capa 1 sola ya entregó una mejora real
    medida.
+
+## El fix de paralelización de GCS, revertido: resultó peor en producción real (12 de julio de 2026)
+
+**Esto contradice la sección anterior — se deja completa arriba, no se borra,
+para que quede constancia de qué se creyó y por qué estaba mal.** El
+perfilado que justificó el fix corrió desde una laptop; la medición real en
+producción, con el mismo ZIP de 2000 XMLs subido por el sitio, dio el
+resultado contrario.
+
+### La medición real
+
+| | Tiempo de extracción |
+|---|---:|
+| Antes del fix (secuencial, medido antes) | 478s (7m58s) |
+| Con el fix (paralelo, 32 hilos, medido en producción real) | 813s (13m33s) |
+
+**El fix hizo la extracción ~1.7× más lenta, no más rápida.** Se detectó en
+vivo porque Gilberto seguía cronómetro en mano y vio que, tras 8 minutos, la
+pantalla seguía sin mostrar ningún avance — lo cual llevó a dos hallazgos
+más, no relacionados con la velocidad en sí:
+
+### Hallazgo 1: la pantalla nunca muestra progreso durante la extracción, por diseño
+
+`_batch_progress_snapshot` (`pdf.py`) calcula el porcentaje como
+`(done+error)/total`, donde `done`/`error` solo cuentan XMLs ya **convertidos
+a PDF** — nunca cuenta cuántos ya se subieron durante la extracción. Esto
+significa que, sin importar si la extracción tarda 8 minutos o 25, la
+pantalla del usuario muestra 0% fijo todo ese tiempo. No es un efecto del fix
+de hoy — es un hueco de producto que ya existía, solo que nunca se había
+notado porque la extracción normalmente era más corta. Pendiente de
+resolver aparte (no se tocó en esta sesión).
+
+### Hallazgo 2: la idea de reemplazo ("que cada tarea del Job lea del ZIP directamente") tenía una falla real, encontrada antes de construirla
+
+Al proponer una alternativa más de fondo (mover la extracción al Job, en vez
+de intentar acelerarla dentro de una sola instancia), Gilberto preguntó
+directo: si cada tarea descarga el ZIP completo, ¿no estaríamos recreando el
+problema que GCS se supone que resuelve? Se verificó, no se asumió: **el
+directorio de escritura local de Cloud Run, por defecto, está respaldado en
+RAM (tmpfs)** — cualquier archivo escrito ahí consume del mismo límite de
+memoria del contenedor, no un espacio aparte ([documentación de Cloud
+Run](https://docs.cloud.google.com/run/docs/configuring/services/in-memory-volume-mounts)).
+Esto confirma que "cada tarea descarga el ZIP completo" recrearía la misma
+categoría de riesgo que ya causó un incidente real en este proyecto
+(`download_batch_zip`, reescrito porque bufferaba ~800MB en RAM y causaba
+OOM/503 con lotes grandes, ver `PROJECT_STATE.md`) — no sería idéntico
+(cada tarea tiene su propio límite de 2GiB, no un pool compartido), pero sí
+desperdicia memoria y red para conseguir solo el 5-10% del contenido que
+cada tarea realmente necesita.
+
+**Idea corregida, no construida todavía:** que cada tarea lea solo los bytes
+que necesita del ZIP en GCS, usando lectura por rangos
+(`blob.download_as_bytes(start=, end=)`) en vez de descargar el archivo
+completo. Requiere ubicar los offsets de cada archivo dentro del ZIP (el
+directorio central del formato ZIP lo permite sin leer el contenido
+completo) — más trabajo de diseño e implementación que el intento de hoy,
+deliberadamente no construido a la carrera en la misma sesión donde ya hubo
+una sorpresa.
+
+### Qué se hizo, en orden
+
+1. Se revirtieron ambos commits del fix (`04db8cf`, `74f3506`) —
+   confirmado con `git diff` que `pdf.py` quedó byte-idéntico al estado
+   anterior a ambos. 208/208 tests pasan.
+2. **Pendiente: desplegar el revert a producción** — el código ya está
+   revertido en el repo, pero la revisión que sirve tráfico ahora mismo
+   (`cfdi-suite-api-00107-msc`) sigue corriendo el fix que resultó regresivo,
+   hasta que se despliegue el revert.
+
+### Pendientes actualizados
+
+1. **Desplegar el revert a producción** — urgente, la regresión sigue viva
+   en producción hasta que esto se despliegue.
+2. **Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job**
+   (la idea corregida de arriba) — con más cuidado que el intento de hoy,
+   probablemente en otra sesión.
+3. **Resolver el hueco de progreso durante extracción** (Hallazgo 1) — la
+   pantalla debería mostrar algo durante la extracción, no solo 0% fijo.
+4. Todos los pendientes de la sección anterior (paso c) de Cloud Tasks,
+   escalamiento del volumen, escenario de muchos batches simultáneos,
+   Secret Manager, PoC de Capa 2) siguen abiertos, sin cambios por esto.
