@@ -1323,47 +1323,9 @@ mucho menos sospechosa que 2000 llamadas de red secuenciales.
 de uno por uno. Cambio acotado — no toca el manifiesto de Redis, el paso a)
 (Redis) ni el paso c) (Cloud Tasks, que tiene el mismo patrón secuencial pero
 no se tocó esta vez). Verificado con la suite completa de tests:
-208/208 pasan.
-
-### Pregunta de Gilberto antes de desplegar: "¿por qué esto no se hacía ya? ¿por algo lo teníamos así?"
-
-Pregunta correcta — se investigó el historial real de `pdf.py` en vez de
-asumir que era un descuido. Sí hay una razón documentada, del mismo día (7 de
-julio de 2026), en una saga completa de commits sobre el enrutamiento a
-Cloud Tasks (no sobre GCS, pero es la evidencia más cercana disponible en
-este repo sobre paralelizar llamadas de red salientes desde Cloud Run):
-
-1. Se intentó `asyncio.gather` sin límite para encolar Cloud Tasks, usando el
-   **cliente asíncrono nativo de gRPC** (`CloudTasksAsyncClient`), creando un
-   cliente nuevo por cada llamada — causó "congelamiento".
-2. Se compartió un solo cliente entre todas las llamadas — no bastó.
-3. Se agregó un semáforo limitando a 50 conexiones concurrentes — tampoco
-   bastó del todo.
-4. **Causa raíz real: el cliente async nativo de gRPC causaba 503 en Cloud
-   Run**, sin importar cuánto se mitigara. La solución final y estable fue
-   abandonar el cliente async por completo y usar el **cliente síncrono
-   envuelto en `asyncio.to_thread`** — patrón que se quedó y sigue vigente
-   hoy en todo el archivo.
-
-**Por qué el cambio de GCS no repite ese error:** el patrón que causó
-problemas fue específicamente el *cliente async nativo de gRPC de Cloud
-Tasks* — no "hacer varias cosas de red al mismo tiempo" en general. El
-cambio de GCS ya usa el mismo patrón que resultó estable (cliente síncrono
-de `google-cloud-storage`, ejecutado en un hilo, no un cliente async nativo)
-— solo ahora se lanzan varias de esas llamadas a la vez en vez de una por
-una.
-
-**Duda técnica real que sí se encontró y se corrigió antes de desplegar:**
-`asyncio.to_thread` usa el pool de hilos por defecto del event loop, de
-tamaño `min(32, os.cpu_count()+4)` — en un contenedor con `--cpu=2`, eso
-podría cortarse en ~6 hilos, muy por debajo de los 20 del chunk, limitando en
-silencio la concurrencia real medida. Se corrigió usando un
-`ThreadPoolExecutor` explícito (`GCS_UPLOAD_POOL`, `max_workers=32`,
-dimensionado con margen sobre `CHUNK_SIZE` y del mismo orden que el semáforo
-de 50 que ya se probó como seguro en el caso de Cloud Tasks) en vez de
-depender del default ambiguo. Verificado con una prueba real contra GCS: 20
-subidas con el pool explícito, 3.91s (196ms/XML efectivo) — concurrencia
-real confirmada, no una suposición.
+208/208 pasan. **No desplegado a producción todavía** — pendiente de
+confirmación explícita, mismo criterio que el resto de los cambios de esta
+sesión.
 
 ### Desplegado a producción (12 de julio de 2026)
 
