@@ -36,6 +36,7 @@ from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
 from ..services.realtime import publish_batch_progress
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
 from ..services.batch_progress import publish_batch_tick
+from ..services.zip_manifest import is_valid_xml_entry, compute_job_id
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
 
 router = APIRouter(prefix="/api", tags=["PDF"])
@@ -92,12 +93,6 @@ class ExtractZipPayload(BaseModel):
     gcs_path: str
     batch_id: str
     template_id: str
-
-
-def _is_valid_xml_entry(file_info: zipfile.ZipInfo) -> bool:
-    if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
-        return False
-    return file_info.filename.lower().endswith(".xml")
 
 
 async def _publish_batch_tick(batch_id: str, *, definitive_error: bool = False):
@@ -267,7 +262,7 @@ async def start_pdf_zip_generation(
     try:
         with zipfile.ZipFile(file.file, "r") as z:
             for file_info in z.infolist():
-                if _is_valid_xml_entry(file_info):
+                if is_valid_xml_entry(file_info):
                     job_id = str(uuid.uuid4())
                     xml_content = z.read(file_info.filename)
                     job_ids.append((job_id, xml_content))
@@ -783,7 +778,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     chunk_upload_seconds: list[float] = []
     try:
         with zipfile.ZipFile(temp_filename, "r") as z:
-            xml_entries = [fi for fi in z.infolist() if _is_valid_xml_entry(fi)]
+            xml_entries = [fi for fi in z.infolist() if is_valid_xml_entry(fi)]
             # Total real conocido de inmediato: el frontend deja de ver 0% fijo
             # desde los primeros segundos, en vez de hasta que todo el ZIP termine.
             await redis_client.set(f"pdf:extracting_total:{batch_id}", len(xml_entries), ex=BATCH_METADATA_TTL_SECONDS)
@@ -925,7 +920,10 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                 # Determinístico (no uuid4): si Cloud Tasks reintenta esta
                 # extracción completa tras un fallo, regenera los mismos IDs
                 # en vez de duplicar registros para los mismos archivos.
-                job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{batch_id}:{file_info.filename}"))
+                # compute_job_id vive en zip_manifest.py -- misma fórmula que
+                # usa el manifiesto remoto y cada tarea del shard, para que
+                # nunca diverjan (ver zip_manifest.py).
+                job_id = compute_job_id(batch_id, file_info.filename)
                 xml_content = z.read(file_info.filename)
                 chunk.append((job_id, xml_content))
 
