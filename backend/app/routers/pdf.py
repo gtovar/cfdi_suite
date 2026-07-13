@@ -18,6 +18,7 @@ import google.auth.transport.requests
 
 from google.cloud import storage
 from google.cloud.storage import transfer_manager
+from remotezip import RemoteZip
 
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
@@ -36,7 +37,8 @@ from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
 from ..services.realtime import publish_batch_progress
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
 from ..services.batch_progress import publish_batch_tick
-from ..services.zip_manifest import is_valid_xml_entry, compute_job_id
+from ..services.zip_manifest import is_valid_xml_entry, compute_job_id, build_manifest
+from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
 
 router = APIRouter(prefix="/api", tags=["PDF"])
@@ -730,6 +732,111 @@ async def internal_extract_zip(payload: ExtractZipPayload, request: Request):
 # tarde más sin que el lock expire antes de que termine sola.
 EXTRACTION_LOCK_TTL_SECONDS = 1800
 
+# Interruptor SOLO para pruebas dirigidas -- apagado por defecto, mismo
+# patrón que BATCH_JOB_ENABLED/EXTRACTION_PARALLEL_UPLOAD. Con esto en false
+# (default de producción), process_zip_in_background se comporta exactamente
+# igual que hoy (descarga el ZIP completo). Con esto en true Y el batch
+# calificando para el Job de shards (should_use_batch_job), en vez de bajar
+# el ZIP completo se lee solo su directorio central (remotezip) para armar
+# el manifiesto y disparar el Job -- cada tarea del Job lee su propia
+# porción directo del ZIP original por rango de bytes (ver
+# batch_shard_worker.py), sin que ninguna instancia individual tenga que
+# mover el contenido completo de los XMLs por su propia red. Ver
+# docs/propuesta-arquitectura-batch.md para el hallazgo real (límite de red
+# de 600 Mbps por instancia de Cloud Run) que motiva esto.
+REMOTE_ZIP_SHARD_READ = os.getenv("REMOTE_ZIP_SHARD_READ", "false").lower() == "true"
+
+
+async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, template_id: str) -> bool | None:
+    """
+    Camino nuevo (solo si REMOTE_ZIP_SHARD_READ=true): en vez de descargar
+    el ZIP completo, lee solo su directorio central (remotezip -- una
+    lectura por rango, sin tocar contenido de archivos) para construir el
+    manifiesto y disparar el Job de shards directamente. Cada tarea del Job
+    lee su propia porción del ZIP original por rango de bytes (ver
+    batch_shard_worker.py), así que ninguna instancia individual -- ni
+    siquiera esta -- llega a mover el contenido pesado de los XMLs.
+
+    Devuelve:
+      True  -- el batch calificó para el Job de shards y se disparó (con
+               éxito o con un error ya registrado en pdf:extracting_error).
+      None  -- el batch no calificó (muy chico, should_use_batch_job dio
+               False incluso con el interruptor prendido) -- el llamador
+               debe caer al camino de siempre (descarga completa).
+    """
+    try:
+        session = get_gcs_authorized_session()
+        url = gcs_object_url(BUCKET_NAME, gcs_path)
+        rz = await asyncio.to_thread(RemoteZip, url, session=session)
+        try:
+            infolist = await asyncio.to_thread(rz.infolist)
+        finally:
+            rz.close()
+    except Exception as e:
+        print(f"[_try_remote_manifest_path] Error leyendo el directorio central remoto de {gcs_path}: {e}")
+        await redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600)
+        return True
+
+    manifest = build_manifest(infolist, batch_id)  # job_id -> filename
+    total_xmls = len(manifest)
+
+    if not should_use_batch_job(total_xmls):
+        # Batch muy chico -- ni con el interruptor prendido tiene sentido
+        # esta ruta (ver Ronda 0.5, docs/propuesta-arquitectura-batch.md,
+        # sobre por qué el umbral no es de tamaño sino de forma de trabajo).
+        # Cae al camino de siempre, sin haber tocado Redis ni disparado nada.
+        return None
+
+    await redis_client.set(f"pdf:extracting_total:{batch_id}", total_xmls, ex=BATCH_METADATA_TTL_SECONDS)
+
+    job_ids = list(manifest.keys())
+    if job_ids:
+        async with redis_client.pipeline(transaction=False) as pipe:
+            for jid in job_ids:
+                pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+            pipe.sadd(f"pdf:batch_ids:{batch_id}", *job_ids)
+            pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
+            await pipe.execute()
+
+        # Un solo aviso de progreso (100% extraído) -- a diferencia del
+        # camino de siempre, aquí no hay una fase de extracción larga que
+        # justifique ticks intermedios: construir el manifiesto solo lee el
+        # directorio central, no el contenido de los XMLs, así que esto
+        # termina en segundos sin importar el tamaño del batch.
+        try:
+            await asyncio.to_thread(publish_batch_progress, batch_id, {
+                "status": "extracting",
+                "total": total_xmls,
+                "extracted": total_xmls,
+                "done": 0, "error": 0, "converting": 0,
+                "pending": total_xmls,
+                "percentage": 100,
+            })
+        except Exception as pusher_err:
+            print(f"Aviso: tick de extracción no publicado para {batch_id}: {pusher_err}")
+
+        try:
+            op_name = await asyncio.to_thread(
+                trigger_batch_shard_job, batch_id, total_xmls, template_id, gcs_path
+            )
+            print(f"[_try_remote_manifest_path] Job de shards disparado para batch {batch_id}: {op_name}")
+        except Exception as job_err:
+            print(f"Error disparando Cloud Run Job para batch {batch_id}: {job_err}")
+            await redis_client.set(
+                f"pdf:extracting_error:{batch_id}",
+                f"No se pudo disparar el Job de shards: {job_err}",
+                ex=3600,
+            )
+
+    # NOTA (decisión deliberada, ver docs/propuesta-arquitectura-batch.md):
+    # el ZIP original NO se borra aquí. A diferencia del camino de siempre
+    # (una sola instancia, "terminado" bien definido), aquí N tareas del Job
+    # leen el mismo ZIP de forma concurrente e independiente -- no hay un
+    # momento único y seguro para borrarlo. Se deja que la regla de
+    # lifecycle de GCS ya existente (1 día sobre uploads/,
+    # infra/gcs-lifecycle.json) lo limpie.
+    return True
+
 
 async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: str) -> bool:
     """
@@ -758,6 +865,16 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(gcs_path)
+
+    if REMOTE_ZIP_SHARD_READ:
+        ran = await _try_remote_manifest_path(bucket, gcs_path, batch_id, template_id)
+        if ran is not None:
+            await redis_client.delete(f"pdf:extracting:{batch_id}")
+            await redis_client.delete(lock_key)
+            return ran
+        # ran is None: el batch no calificó para el Job de shards (batch
+        # chico) incluso con el interruptor prendido -- cae al camino de
+        # siempre debajo, sin cambios.
 
     # Descargamos a un archivo temporal en disco. NOTA (corregido 2026-07-12,
     # ver PROJECT_STATE.md): el filesystem local de Cloud Run, sin volumen

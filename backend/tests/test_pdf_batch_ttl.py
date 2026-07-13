@@ -376,6 +376,118 @@ class BatchMetadataTtlTests(unittest.TestCase):
         # No debe haber tocado GCS en absoluto si el lock no se adquirió.
         mock_storage_client.bucket.assert_not_called()
 
+    def _make_zip_info(self, filename: str):
+        import zipfile
+        return zipfile.ZipInfo(filename=filename)
+
+    def _mock_redis_for_remote_path(self):
+        mock_redis = AsyncMock()
+        mock_redis.set = AsyncMock(return_value=True)  # lock adquirido
+        mock_redis.delete = AsyncMock()
+        pipe_cm = MagicMock()
+        pipe_cm.__aenter__ = AsyncMock(return_value=pipe_cm)
+        pipe_cm.__aexit__ = AsyncMock(return_value=False)
+        pipe_cm.set = MagicMock()
+        pipe_cm.sadd = MagicMock()
+        pipe_cm.expire = MagicMock()
+        pipe_cm.execute = AsyncMock()
+        mock_redis.pipeline = MagicMock(return_value=pipe_cm)
+        return mock_redis, pipe_cm
+
+    def test_remote_zip_shard_read_activo_no_descarga_el_zip_completo(self) -> None:
+        """Con REMOTE_ZIP_SHARD_READ=true y un batch que sí califica para el
+        Job de shards: nunca debe llamar blob.download_to_filename (nunca
+        baja el ZIP completo), nunca debe subir nada a xml_temp/, sí debe
+        llamar trigger_batch_shard_job con el gcs_path, y NO debe borrar el
+        ZIP original (decisión de diseño: se deja al lifecycle de GCS)."""
+        fake_infolist = [self._make_zip_info(f"factura_{i}.xml") for i in range(30)]
+        mock_rz = MagicMock()
+        mock_rz.infolist.return_value = fake_infolist
+        mock_rz.close = MagicMock()
+
+        mock_bucket = MagicMock()
+        mock_blob = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        mock_redis, pipe_cm = self._mock_redis_for_remote_path()
+
+        with (
+            patch.object(pdf_router, "REMOTE_ZIP_SHARD_READ", True),
+            patch.object(pdf_router, "should_use_batch_job", return_value=True),
+            patch.object(pdf_router, "trigger_batch_shard_job", return_value="op-name") as mock_trigger,
+            patch.object(pdf_router, "RemoteZip", return_value=mock_rz),
+            patch.object(pdf_router, "get_gcs_authorized_session", return_value=MagicMock()),
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client", mock_redis),
+            patch.object(pdf_router, "publish_batch_progress"),
+        ):
+            ran = _run(pdf_router.process_zip_in_background("uploads/batch-remote.zip", "batch-remote", "default"))
+
+        self.assertTrue(ran)
+        mock_blob.download_to_filename.assert_not_called()
+        for call in mock_bucket.blob.call_args_list:
+            self.assertNotIn("xml_temp/", call.args[0] if call.args else "")
+        mock_trigger.assert_called_once_with(
+            "batch-remote", 30, "default", "uploads/batch-remote.zip"
+        )
+        mock_blob.delete.assert_not_called()
+        pipe_cm.sadd.assert_called_once()
+        self.assertEqual(pipe_cm.sadd.call_args.args[0], "pdf:batch_ids:batch-remote")
+
+    def test_remote_zip_shard_read_batch_chico_cae_al_camino_de_siempre(self) -> None:
+        """Con el interruptor prendido pero should_use_batch_job=False (batch
+        muy chico): debe caer al camino de descarga completa de siempre, sin
+        haber disparado el Job ni tocado pdf:batch_ids."""
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("a.xml", "<xml/>")
+        zip_bytes = buf.getvalue()
+
+        fake_infolist = [self._make_zip_info("a.xml")]
+        mock_rz = MagicMock()
+        mock_rz.infolist.return_value = fake_infolist
+        mock_rz.close = MagicMock()
+
+        mock_bucket = MagicMock()
+        mock_blob = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+
+        def fake_download_to_filename(path):
+            with open(path, "wb") as fh:
+                fh.write(zip_bytes)
+
+        mock_blob.download_to_filename.side_effect = fake_download_to_filename
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        mock_redis, _ = self._mock_redis_for_remote_path()
+        mock_redis.scard = AsyncMock(return_value=1)
+
+        with (
+            patch.object(pdf_router, "REMOTE_ZIP_SHARD_READ", True),
+            patch.object(pdf_router, "should_use_batch_job", return_value=False),
+            patch.object(pdf_router, "trigger_batch_shard_job") as mock_trigger,
+            patch.object(pdf_router, "RemoteZip", return_value=mock_rz),
+            patch.object(pdf_router, "get_gcs_authorized_session", return_value=MagicMock()),
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client", mock_redis),
+            patch.object(pdf_router, "enqueue_pdf_generation"),
+        ):
+            ran = _run(pdf_router.process_zip_in_background("uploads/batch-chico.zip", "batch-chico", "default"))
+
+        self.assertTrue(ran)
+        mock_trigger.assert_not_called()
+        # Cayó al camino de siempre: sí descargó el ZIP completo.
+        mock_blob.download_to_filename.assert_called_once()
+
+    def test_remote_zip_shard_read_apagado_por_defecto(self) -> None:
+        self.assertFalse(pdf_router.REMOTE_ZIP_SHARD_READ)
+
 
 if __name__ == "__main__":
     unittest.main()

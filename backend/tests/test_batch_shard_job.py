@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import unittest
+import zipfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     from backend.app.services import batch_job_trigger, batch_progress
+    from backend.app.workers import batch_shard_worker
     from backend.app.workers.batch_shard_worker import shard_slice
 except ModuleNotFoundError as error:
     batch_job_trigger = None
     batch_progress = None
+    batch_shard_worker = None
     shard_slice = None
     _IMPORT_ERROR = error
 else:
@@ -82,6 +86,118 @@ class ShouldUseBatchJobTests(unittest.TestCase):
                 self.assertFalse(batch_job_trigger.should_use_batch_job(999))
                 self.assertTrue(batch_job_trigger.should_use_batch_job(1000))
                 self.assertTrue(batch_job_trigger.should_use_batch_job(15000))
+
+
+@unittest.skipIf(batch_job_trigger is None, f"backend no disponible: {_IMPORT_ERROR}")
+class TriggerBatchShardJobZipGcsPathTests(unittest.TestCase):
+    """zip_gcs_path es opcional (default None) -- confirma que solo agrega
+    el EnvVar ZIP_GCS_PATH cuando se pasa, y que no pasarlo (compatibilidad
+    con cualquier llamador existente) no lo agrega."""
+
+    def _run_trigger(self, **kwargs):
+        mock_client = MagicMock()
+        mock_client.job_path.return_value = "projects/p/locations/r/jobs/j"
+        mock_client.run_job.return_value.operation.name = "op-name"
+        with patch("google.cloud.run_v2.JobsClient", return_value=mock_client):
+            batch_job_trigger.trigger_batch_shard_job(
+                "batch-1", 250, "default", **kwargs
+            )
+        return mock_client
+
+    def test_sin_zip_gcs_path_no_agrega_envvar(self) -> None:
+        mock_client = self._run_trigger()
+        request = mock_client.run_job.call_args.kwargs["request"]
+        env_names = [e.name for e in request.overrides.container_overrides[0].env]
+        self.assertNotIn("ZIP_GCS_PATH", env_names)
+
+    def test_con_zip_gcs_path_agrega_envvar(self) -> None:
+        mock_client = self._run_trigger(zip_gcs_path="uploads/batch-1.zip")
+        request = mock_client.run_job.call_args.kwargs["request"]
+        env_by_name = {e.name: e.value for e in request.overrides.container_overrides[0].env}
+        self.assertEqual(env_by_name.get("ZIP_GCS_PATH"), "uploads/batch-1.zip")
+
+
+@unittest.skipIf(batch_shard_worker is None, f"backend no disponible: {_IMPORT_ERROR}")
+class RunShardZipGcsPathTests(unittest.TestCase):
+    """run_shard() con ZIP_GCS_PATH presente debe leer directo del ZIP
+    remoto (vía RemoteZip mockeado) y NUNCA tocar pdf:batch_ids de Redis
+    para particionar -- ver el comentario en batch_shard_worker.py sobre
+    por qué mezclar las dos fuentes sería peligroso."""
+
+    def _make_zip_info(self, filename: str) -> zipfile.ZipInfo:
+        return zipfile.ZipInfo(filename=filename)
+
+    def test_camino_nuevo_no_usa_smembers_y_procesa_su_shard(self) -> None:
+        fake_infolist = [self._make_zip_info(f"factura_{i}.xml") for i in range(5)]
+        mock_rz = MagicMock()
+        mock_rz.infolist.return_value = fake_infolist
+        mock_rz.read.return_value = b"<xml/>"
+        mock_rz.close = MagicMock()
+
+        mock_redis = AsyncMock()
+        mock_redis.set = AsyncMock()
+        mock_redis.rpush = AsyncMock()
+        mock_redis.expire = AsyncMock()
+
+        env = {
+            "BATCH_ID": "batch-remote",
+            "TEMPLATE_ID": "default",
+            "SHARD_SIZE": "5",
+            "CLOUD_RUN_TASK_INDEX": "0",
+            "ZIP_GCS_PATH": "uploads/batch-remote.zip",
+        }
+
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(batch_shard_worker, "redis_client", mock_redis),
+            patch.object(batch_shard_worker, "RemoteZip", return_value=mock_rz),
+            patch.object(batch_shard_worker, "get_gcs_authorized_session", return_value=MagicMock()),
+            patch.object(batch_shard_worker.storage, "Client", return_value=MagicMock()),
+            patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
+            patch.object(batch_shard_worker, "publish_batch_tick", new=AsyncMock()),
+        ):
+            asyncio.run(batch_shard_worker.run_shard())
+
+        mock_redis.smembers.assert_not_called()
+        self.assertEqual(mock_rz.read.call_count, 5)
+        mock_rz.close.assert_called_once()
+
+    def test_camino_de_siempre_sin_zip_gcs_path_usa_smembers(self) -> None:
+        """Guarda de regresión: sin ZIP_GCS_PATH, el comportamiento debe
+        seguir siendo exactamente el de antes (Redis + xml_temp/)."""
+        mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(return_value={b"job-1"})
+        mock_redis.set = AsyncMock()
+        mock_redis.rpush = AsyncMock()
+        mock_redis.expire = AsyncMock()
+
+        mock_bucket = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_as_bytes.return_value = b"<xml/>"
+        mock_bucket.blob.return_value = mock_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        env = {
+            "BATCH_ID": "batch-old",
+            "TEMPLATE_ID": "default",
+            "SHARD_SIZE": "5",
+            "CLOUD_RUN_TASK_INDEX": "0",
+        }
+
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(batch_shard_worker, "redis_client", mock_redis),
+            patch.object(batch_shard_worker.storage, "Client", return_value=mock_storage_client),
+            patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
+            patch.object(batch_shard_worker, "publish_batch_tick", new=AsyncMock()),
+        ):
+            os.environ.pop("ZIP_GCS_PATH", None)  # por si una prueba anterior lo dejó puesto
+            asyncio.run(batch_shard_worker.run_shard())
+
+        mock_redis.smembers.assert_called_once_with("pdf:batch_ids:batch-old")
+        mock_bucket.blob.assert_any_call("xml_temp/job-1.xml")
 
 
 @unittest.skipIf(batch_progress is None, f"backend no disponible: {_IMPORT_ERROR}")

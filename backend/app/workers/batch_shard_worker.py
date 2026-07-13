@@ -19,6 +19,13 @@ Variables de entorno:
   SHARD_SIZE             — XMLs por tarea, default 100 (debe coincidir con el
                             cálculo de --tasks al disparar la ejecución, ver
                             batch_job_trigger.trigger_batch_shard_job).
+  ZIP_GCS_PATH           — opcional. Si está presente, esta tarea lee sus
+                            XMLs directo del ZIP original en GCS (lecturas
+                            por rango vía remotezip, sin pasar por
+                            xml_temp/) en vez del camino de siempre (leer
+                            pdf:batch_ids de Redis + descargar de
+                            xml_temp/{job_id}.xml). Ver run_shard() y
+                            _process_one_remote() más abajo.
   GCS_BUCKET_NAME, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD — mismas que el
                             servicio principal (ver infra/deploy-batch-shard-job.sh).
 """
@@ -30,10 +37,13 @@ import sys
 
 import redis.asyncio as aioredis
 from google.cloud import storage
+from remotezip import RemoteZip
 
 from ..services.batch_progress import BATCH_METADATA_TTL_SECONDS, publish_batch_tick
+from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.pdf_pipeline import generate
 from ..services.realtime import publish_batch_progress
+from ..services.zip_manifest import build_manifest
 
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
 
@@ -80,6 +90,22 @@ async def _process_one(bucket, job_id: str, template_id: str) -> None:
     await asyncio.to_thread(blob_xml.delete)
 
 
+async def _process_one_remote(rz: RemoteZip, bucket, job_id: str, filename: str, template_id: str) -> None:
+    """Igual que _process_one, pero lee el XML directo del ZIP original vía
+    una lectura por rango (rz.read) en vez de xml_temp/{job_id}.xml -- sin
+    paso intermedio de subida/descarga. No hay xml_temp que borrar aquí."""
+    xml_bytes = await asyncio.to_thread(rz.read, filename)
+    await redis_client.set(f"pdf:status:{job_id}", b"converting", ex=3600)
+
+    pdf_bytes = generate(xml_bytes, template_id)
+
+    blob_pdf = bucket.blob(f"pdfs/{job_id}.pdf")
+    await asyncio.to_thread(blob_pdf.upload_from_string, pdf_bytes, content_type="application/pdf")
+
+    await redis_client.set(f"pdf:status:{job_id}", b"done", ex=BATCH_METADATA_TTL_SECONDS)
+    await redis_client.set(f"pdf:size:{job_id}", str(len(pdf_bytes)).encode(), ex=86400)
+
+
 def shard_slice(job_ids: list[str], task_index: int, shard_size: int) -> list[str]:
     """Partición determinística: cada tarea calcula su propio slice a partir
     de la MISMA lista ordenada — no requiere coordinación entre tareas ni una
@@ -92,7 +118,55 @@ async def run_shard() -> None:
     template_id = os.getenv("TEMPLATE_ID", "default")
     shard_size = int(os.getenv("SHARD_SIZE", "100"))
     task_index = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    zip_gcs_path = os.getenv("ZIP_GCS_PATH")  # presencia = camino nuevo
 
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+
+    if zip_gcs_path:
+        # Camino nuevo: la tarea calcula su propia porción a partir del
+        # MISMO manifiesto (build_manifest) que usó process_zip_in_background
+        # para construir pdf:batch_ids -- deliberadamente NO se lee ese Set
+        # de Redis aquí. Si esta tarea leyera Redis para la lista de
+        # job_ids y por separado el ZIP para los nombres de archivo, serían
+        # dos listas calculadas de forma independiente que podrían divergir
+        # (un job_id sin archivo, o viceversa) -- el peor bug para depurar,
+        # se ve como un batch atorado sin error visible. Con una sola fuente
+        # (el manifiesto derivado del ZIP), eso es estructuralmente imposible.
+        session = get_gcs_authorized_session()
+        url = gcs_object_url(BUCKET_NAME, zip_gcs_path)
+        rz = await asyncio.to_thread(RemoteZip, url, session=session)
+        try:
+            infolist = await asyncio.to_thread(rz.infolist)
+            manifest = build_manifest(infolist, batch_id)  # job_id -> filename
+            job_ids = list(manifest.keys())
+
+            my_shard = shard_slice(job_ids, task_index, shard_size)
+            if not my_shard:
+                print(f"[batch_shard_worker] tarea {task_index}: shard vacío (batch {batch_id} más chico de lo esperado), nada que hacer.")
+                return
+
+            print(f"[batch_shard_worker] tarea {task_index}: procesando {len(my_shard)} XMLs del batch {batch_id} (lectura remota por rango, sin xml_temp/).")
+
+            for job_id in my_shard:
+                try:
+                    await _process_one_remote(rz, bucket, job_id, manifest[job_id], template_id)
+                    await redis_client.rpush(f"pdf:ready_recent:{batch_id}", job_id)
+                    await redis_client.expire(f"pdf:ready_recent:{batch_id}", BATCH_METADATA_TTL_SECONDS)
+                    await publish_batch_tick(redis_client, publish_batch_progress, batch_id)
+                except Exception as exc:
+                    print(f"[batch_shard_worker] error procesando {job_id}: {exc}")
+                    try:
+                        await redis_client.set(f"pdf:status:{job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                    except Exception:
+                        pass
+                    await publish_batch_tick(redis_client, publish_batch_progress, batch_id, definitive_error=True)
+        finally:
+            rz.close()
+        return
+
+    # Camino de siempre (sin ZIP_GCS_PATH): lee pdf:batch_ids de Redis y
+    # descarga cada XML de xml_temp/{job_id}.xml -- sin cambios.
     # Orden determinístico: SMEMBERS no garantiza orden, pero ordenar la misma
     # lista en cada una de las N tareas (todas leen el mismo Set, ya inmutable
     # -- la extracción del batch ya terminó antes de disparar el Job) produce
@@ -106,9 +180,6 @@ async def run_shard() -> None:
         return
 
     print(f"[batch_shard_worker] tarea {task_index}: procesando {len(my_shard)} XMLs del batch {batch_id}.")
-
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(BUCKET_NAME)
 
     for job_id in my_shard:
         try:
