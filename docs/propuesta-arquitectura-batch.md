@@ -1595,8 +1595,216 @@ status.latestReadyRevisionName)"` de forma independiente.
 
 ### Pendientes actualizados (otra vez)
 
-1. **Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job**
-   — sigue igual que antes, sin cambios.
+1. ~~Diseñar la lectura por rangos del ZIP dentro de cada tarea del Job~~ —
+   **construido, ver la sección siguiente.**
 2. Todos los pendientes de secciones anteriores (paso c) de Cloud Tasks,
    escalamiento del volumen, escenario de muchos batches simultáneos,
    Secret Manager, PoC de Capa 2) siguen abiertos.
+
+## Lectura por rangos del ZIP: causa raíz real, diseño y despliegue (12 de julio de 2026)
+
+**Por qué se retomó esto:** en una sesión posterior se investigó a fondo por
+qué la extracción de un ZIP grande es lenta en producción — no con
+suposiciones, con datos reales de Cloud Monitoring. Resumen del hallazgo
+(detalle completo en `PROJECT_STATE.md`): **cada instancia de Cloud Run
+tiene un límite de red duro de 600 Mbps** (1 Gbps con Direct VPC Egress, que
+este proyecto no tiene configurado — no existe ni una red VPC en el
+proyecto). Durante una extracción lenta real (2000 XMLs, 10 minutos), la CPU
+de esa instancia nunca pasó de 17% mientras la red estuvo saturada todo ese
+tiempo — descarta un problema de cómputo, confirma que es de red. Como hoy
+una sola instancia baja el ZIP completo y sube cada XML a `xml_temp/`, esa
+extracción específica está atada al límite de esa única instancia, sin
+importar cuántas más tenga disponibles el servicio.
+
+**La idea (la misma "lectura por rangos" que quedó anotada, no construida,
+en `El fix de paralelización de GCS` más arriba), verificada contra el
+bucket real antes de construir nada:** el formato ZIP permite leer solo el
+directorio central (tabla de contenidos) sin bajar el archivo completo, y
+cada entrada se comprime de forma independiente. Se probó con la librería
+`remotezip` contra el bucket real: listar 50 archivos y leer 1 completo bajó
+0.249 MB de un ZIP de 9.18 MB (2.7%), con 2 peticiones HTTP.
+
+**Se descartaron explicaciones alternativas con evidencia, no solo con
+lógica:**
+- Cloud Storage FUSE (montar el bucket como carpeta local) — descartado:
+  pasa por la misma API de Cloud Storage, mismo límite de red de la
+  instancia; además documentado como malo para muchos archivos chicos y con
+  riesgo real de memoria (~64 MiB por archivo en streaming).
+- "1,600 hilos de `transfer_manager` ahogando el CPU" (hipótesis de la
+  sección anterior de este documento) — descartada con una prueba directa:
+  reproducir el patrón exacto de producción en local (Docker `--cpus=2`,
+  100 pools de 16 hilos) dio 4.6x MÁS RÁPIDO que secuencial, no más lento.
+  La causa real solo se encontró con Cloud Monitoring (arriba).
+
+**Diseño e implementación — ver el plan completo en el historial de
+`/Users/gil/.claude/plans/wondrous-finding-snowflake.md`.** Resumen:
+
+- `backend/app/services/zip_manifest.py` (nuevo): `compute_job_id`,
+  `is_valid_xml_entry`, `build_manifest` — única fuente de verdad para
+  calcular qué XMLs hay en un ZIP y su job_id, usada tanto por
+  `process_zip_in_background` como por cada tarea del Job de shards. Evita
+  el riesgo real de este diseño: que el manifiesto y una tarea calculen
+  listas de job_id distintas para el mismo ZIP (se vería como un batch
+  atorado sin error visible).
+- `backend/app/services/gcs_range_auth.py` (nuevo): sesión HTTP autenticada
+  (`AuthorizedSession` vía `google.auth.default()`) para que `remotezip`
+  pueda leer por rangos sin necesitar signed URLs (el backend es quien pide
+  los datos, no un navegador externo).
+- `backend/app/routers/pdf.py`: interruptor `REMOTE_ZIP_SHARD_READ`
+  (default `false`, mismo patrón que `BATCH_JOB_ENABLED`). Activo + batch
+  que califica para el Job: `_try_remote_manifest_path` lee solo el
+  directorio central remoto, arma el manifiesto, puebla Redis y dispara el
+  Job — sin descargar el ZIP completo. El ZIP original **no se borra** en
+  este camino (N tareas concurrentes leen de él; sin momento único de
+  "ya terminé, es seguro borrar") — se deja al lifecycle de GCS ya
+  existente (1 día sobre `uploads/`).
+- `backend/app/workers/batch_shard_worker.py`: si `ZIP_GCS_PATH` está en el
+  entorno de la tarea, calcula su propia porción a partir del MISMO
+  manifiesto derivado del ZIP (no lee `pdf:batch_ids` de Redis para
+  particionar en este camino) y lee cada XML por rango directo del ZIP
+  original — sin paso intermedio de `xml_temp/`.
+- `backend/app/services/batch_job_trigger.py`: `trigger_batch_shard_job`
+  acepta `zip_gcs_path` opcional (default `None`, compatible con
+  llamadores existentes), lo propaga como `ZIP_GCS_PATH` a cada tarea.
+
+**Estado del código: implementado y commiteado localmente (commits
+`e6c27d2`, `1c36c39`, `4023015`), NO subido a `origin/main` todavía.**
+227/227 tests pasan (mockeados, sin red real) — incluye guardas de
+regresión explícitas que confirman que con el interruptor apagado (o un
+batch que no califica para el Job) el comportamiento es byte-idéntico al de
+antes.
+
+### Plan de despliegue por etapas (en orden, cada una depende de que la anterior salga limpia)
+
+**Etapa 1 — prueba local contra el bucket real (sin tocar infraestructura
+de GCP, solo datos de prueba en el bucket ya existente).** Mismo patrón ya
+usado varias veces en esta sesión, pero esta vez usando el código real
+(`get_gcs_authorized_session`, no el Bearer token manual de las
+verificaciones anteriores) contra un ZIP de prueba subido al bucket.
+Confirma que el helper de autenticación y `remotezip` funcionan juntos tal
+como los usará el código en producción.
+
+**Etapa 2 — canario real en Cloud Run, 0% de tráfico de producción.** Se
+construye una revisión aislada (`gcloud builds submit` + `gcloud run
+deploy --tag=... --no-traffic`) a partir del código ya commiteado
+localmente — **sin pasar por `origin/main` todavía**, así que no dispara
+`deploy-backend.yml` ni toca el 100% de tráfico real. Esa revisión, con
+`REMOTE_ZIP_SHARD_READ=true` y `BATCH_JOB_ENABLED=true`/
+`BATCH_JOB_THRESHOLD=1`, se prueba directo contra su URL etiquetada con el
+ZIP real de pruebas (`mil facturas/mil_facturas_prueba.zip`, 2000 XMLs,
+367MB), midiendo: tiempo de construir el manifiesto (debería bajar de los
+6-8 min documentados a segundos), tiempo por tarea del shard bajo el nuevo
+camino comparado contra `--task-timeout=600` del Job (dato que hoy no
+existe — tratarlo como condición de aprobar/rechazar, no un dato opcional),
+bytes reales transferidos, y 0 errores en los 2000 XMLs. Requiere
+confirmación explícita antes de correr — toca GCP real, aunque sin tráfico
+de usuarios.
+
+**Etapa 3 — push a `origin/main`, con el interruptor apagado en
+producción.** Solo después de que la Etapa 2 salga limpia. Esto dispara
+`deploy-backend.yml` (deploy automático a 100% del tráfico, como cualquier
+push a `main` que toque `backend/**`) — pero como `REMOTE_ZIP_SHARD_READ`
+sigue en `false` por defecto en las variables de entorno del servicio
+principal (solo se puso en `true` en la revisión aislada de la Etapa 2), el
+comportamiento real de producción para usuarios reales **no cambia** con
+este push. Lo que sí queda en producción: el fix del lock de idempotencia
+(ya documentado como desplegado) y todo el código nuevo, listo pero inerte
+hasta que se decida activarlo. Requiere confirmación explícita — es un
+deploy real, aunque de bajo riesgo por el interruptor apagado.
+
+**Etapa 4 (aparte, no parte de este despliegue) — decisión de activar
+`REMOTE_ZIP_SHARD_READ=true` ampliamente en producción**, solo con los
+números reales de la Etapa 2 ya evaluados. No se toma de antemano.
+
+### Etapa 1 — completada (12 de julio de 2026)
+
+Dos pruebas reales (no mocks salvo `generate()`/`trigger_batch_shard_job`,
+que sí se mockearon a propósito para no disparar un Job real ni gastar
+cómputo de PDF en esta etapa), ambas contra el bucket y Redis reales del
+proyecto, usando el código real que correrá en producción
+(`get_gcs_authorized_session`, `RemoteZip`, `_try_remote_manifest_path`,
+`batch_shard_worker.run_shard`):
+
+1. **Construcción del manifiesto** (`_try_remote_manifest_path`): ZIP de
+   prueba real (30 archivos, 5.51 MB, tamaño de archivo igual al promedio
+   real de `mil_facturas_prueba.zip`) → los 30 `job_id` quedaron en
+   `pdf:batch_ids` en Redis, coincidiendo exactamente con lo esperado;
+   `pdf:extracting_total` correcto; `trigger_batch_shard_job` se habría
+   llamado con los argumentos correctos (`batch_id`, total, `gcs_path`); el
+   ZIP original **no se borró** (confirma la decisión de diseño de dejarlo
+   al lifecycle de GCS).
+2. **Lectura remota + subida desde una tarea del shard** (`run_shard` con
+   `ZIP_GCS_PATH`): 5 XMLs de prueba → los 5 PDFs quedaron en `pdfs/` con
+   el contenido esperado, y **cero objetos se crearon en `xml_temp/`** —
+   confirma que el camino nuevo de verdad se salta el paso intermedio.
+
+Con esto, la Etapa 1 queda cerrada — el código funciona de punta a punta
+contra infraestructura real (bucket, Redis), lo único que falta validar es
+el comportamiento bajo el entorno real de cómputo/red de Cloud Run (Etapa
+2, canario), que es justamente donde vivía el problema original.
+
+### Etapa 2 — completada (12/13 de julio de 2026): resultado real, limpio, con el ZIP de 2000 XMLs
+
+**Infraestructura aislada usada, ninguna toca producción:**
+- Imagen construida manualmente (`gcloud builds submit`) desde el código
+  local ya commiteado (`4023015`), **nunca subido a `origin/main`** —
+  `deploy-backend.yml` nunca se disparó, confirmado (`gh run list` sigue
+  mostrando el run anterior a este trabajo).
+- Revisión `cfdi-suite-api-00149-yos`, `--no-traffic --tag=canary-remotezip`,
+  con `REMOTE_ZIP_SHARD_READ=true`, `BATCH_JOB_NAME=cfdi-batch-shard-canary`,
+  `API_URL`/`ALLOWED_ORIGINS` apuntados a su propia URL etiquetada (mismo
+  patrón de aislamiento que canarios anteriores en este proyecto).
+  Confirmado que producción siguió 100% en la revisión anterior
+  (`cfdi-suite-api-00117-rmk`) durante toda la prueba.
+- Job **separado** `cfdi-batch-shard-canary` (clonado de la definición real
+  del Job de producción vía `gcloud run jobs describe --format=export` +
+  reemplazo de nombre/imagen, sin imprimir las credenciales en la
+  transcripción) — el Job de producción `cfdi-batch-shard` nunca se tocó,
+  cero riesgo de que un usuario real cayera en código sin probar.
+
+**El resultado, con el ZIP real (`mil_facturas_prueba.zip`, 2000 XMLs, 367MB):**
+
+| Paso | Camino viejo (documentado) | Camino nuevo (medido hoy) |
+|---|---:|---:|
+| Extracción / manifiesto | 6-8 min (`process_zip_in_background` bajaba todo el ZIP) | **~1.5s** (solo lee el directorio central) |
+| Generación de PDFs (Job, 20 tareas) | 8m43s | ~7m49s de trabajo real por tarea + ~2m35s de arranque en frío de contenedores (imagen recién construida) |
+| **Total de punta a punta** | **16m41s** | **~10m33s** |
+| Errores | 0/2000 | **0/2000** |
+
+- **La construcción del manifiesto pasó de 6-8 minutos a 1.5 segundos —
+  confirmado con logs reales** (`[_try_remote_manifest_path] Job de shards
+  disparado` a 1.5s de recibir la petición). Esto resuelve directamente el
+  hallazgo de esta sesión: nunca se mueve el contenido de los XMLs por la
+  instancia que arma el manifiesto, así que el límite de 600 Mbps de esa
+  instancia deja de importar para este paso.
+- **Tiempo real por tarea del shard: ~7m49s, cómodo dentro del límite de
+  `--task-timeout=600` (10 min).** Esto cierra la incógnita que el plan
+  marcó como condición de aprobar/rechazar — no hubo ninguna tarea cerca
+  del límite.
+- **2000/2000 XMLs procesados, 0 errores, 0 advertencias en todo el Job**
+  (confirmado revisando severity>=WARNING en los logs completos de la
+  ejecución — nada).
+- **Dato que no se pudo medir:** bytes reales de red transferidos por las
+  tareas del shard — Cloud Monitoring no expone métricas de red para Cloud
+  Run Jobs (solo para Services; se confirmó consultando
+  `metricDescriptors` — solo existen contadores de ejecuciones/tareas, no
+  bytes). Queda como comparación cualitativa (se eliminó el viaje redundante
+  de subir a `xml_temp/` y volver a bajar), no cuantitativa.
+- Los ~2m35s de "arranque en frío de contenedores" (`Started deployed
+  execution in 2m35.02s`, reportado por el propio Cloud Run) son costo de
+  que la imagen se acababa de construir — en el camino ya usado en
+  producción hoy este costo también existe (una imagen nueva siempre paga
+  arranque en frío la primera vez), no es específico de este diseño.
+
+**Verificado en vivo, no solo inferido:** las 20 tareas se limpiaron en el
+mismo instante (`02:20:53`, log de "procesando 100 XMLs... lectura remota
+por rango, sin xml_temp/" en las 20), confirmando que sí tomaron el camino
+nuevo — no una mezcla accidental con el camino viejo.
+
+**Conclusión de la Etapa 2: limpia, sin sorpresas negativas.** El diseño
+funciona en el entorno real de Cloud Run, el tiempo total bajó ~37% (de
+16m41s a ~10m33s) contra el camino ya optimizado de la Capa 1, y el paso que
+específicamente causaba el problema (extracción atada al límite de red de
+una instancia) prácticamente desapareció. Sigue pendiente la Etapa 3 (push
+a `origin/main`, interruptor apagado en producción) y la Etapa 4 (decisión
+aparte de activarlo ampliamente).

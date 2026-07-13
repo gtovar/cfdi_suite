@@ -5,9 +5,66 @@
 main
 
 ## Último cambio
-**Auditoría de la regresión de GCS del 12 de julio: la medición de "1.7x más lento" estaba
-contaminada por un bug real de duplicación (nuevo), y ese bug ya se corrigió en código —
-CONSTRUIDO, TESTS PASANDO, Y AHORA DESPLEGADO (2026-07-12).**
+**Causa raíz real del cuello de botella de extracción encontrada (límite de red de 600 Mbps por
+instancia de Cloud Run, confirmado con Cloud Monitoring) y arreglo diseñado + implementado:
+extracción distribuida vía lectura remota por rangos del ZIP (remotezip). CONSTRUIDO, 227/227
+TESTS PASAN, VERIFICADO EN CANARIO REAL CON RESULTADO LIMPIO (2026-07-13). Interruptor
+`REMOTE_ZIP_SHARD_READ` sigue apagado por defecto — NO DESPLEGADO A PRODUCCIÓN TODAVÍA. Detalle
+completo en `docs/propuesta-arquitectura-batch.md`, sección "Lectura por rangos del ZIP: causa
+raíz real, diseño y despliegue".**
+
+- **Etapa 2 (canario real, aislado, 0% tráfico de producción) — completada, resultado limpio:**
+  con el ZIP real de pruebas (2000 XMLs, 367MB), la construcción del manifiesto pasó de los 6-8
+  minutos documentados a **~1.5 segundos** (confirmado con logs reales), y el tiempo total de
+  punta a punta bajó de **16m41s (camino viejo) a ~10m33s (camino nuevo)** — **2000/2000 XMLs
+  procesados, 0 errores, 0 advertencias**. El tiempo real por tarea del shard (~7m49s) quedó
+  cómodo dentro del límite de `--task-timeout=600` (10 min) — la incógnita que el plan marcó como
+  condición de aprobar/rechazar quedó resuelta sin sorpresas. Infraestructura completamente
+  aislada: imagen construida manualmente sin pasar por `origin/main` (nunca disparó
+  `deploy-backend.yml`), revisión canario sin tráfico con `API_URL` apuntada a sí misma, Job de
+  shards **separado** (`cfdi-batch-shard-canary`, clonado del real sin tocarlo). Producción
+  confirmada sin cambios durante toda la prueba.
+
+- **La causa real, con datos de Cloud Monitoring, no teoría:** cada instancia de Cloud Run tiene
+  un límite duro de red de 600 Mbps (1 Gbps con Direct VPC Egress, que este proyecto no tiene
+  configurado). Durante una extracción lenta real de 2000 XMLs (10 min), la CPU nunca pasó de
+  17% mientras la red estuvo saturada todo ese tiempo. Como hoy una sola instancia baja el ZIP
+  completo y sube cada XML a `xml_temp/`, esa extracción está atada al límite de esa única
+  instancia sin importar cuántas más tenga el servicio (`max-instances=10` no ayuda aquí —
+  controla cuántos BATCHES distintos se atienden a la vez, no la velocidad de uno solo).
+- **Se descartaron alternativas con evidencia real, no solo lógica:** Cloud Storage FUSE (mismo
+  límite de red, además mal documentado para muchos archivos chicos, riesgo real de memoria);
+  Direct VPC Egress solo (sube el límite a 1 Gbps pero requiere construir infraestructura VPC
+  desde cero, este proyecto nunca ha usado la API de Compute Engine); "1,600 hilos de
+  `transfer_manager` ahogando el CPU" (hipótesis de la sesión anterior, refutada con una prueba
+  directa: el patrón exacto de producción reproducido en local salió 4.6x más rápido, no más
+  lento).
+- **La solución, verificada antes de construir nada:** el formato ZIP permite leer solo su
+  directorio central (sin bajar el archivo completo) y cada entrada se comprime de forma
+  independiente. Se probó `remotezip` contra el bucket real: listar 50 archivos y leer 1 completo
+  bajó 0.249 MB de un ZIP de 9.18 MB (2.7%), 2 peticiones HTTP — confirma que funciona de verdad.
+- **Implementado (commits locales `e6c27d2`, `1c36c39`, `4023015`, NO subidos a `origin/main`
+  todavía):** `zip_manifest.py` y `gcs_range_auth.py` (nuevos, compartidos entre el constructor
+  del manifiesto y cada tarea del shard, para que nunca calculen listas de job_id distintas —
+  el riesgo real de este diseño). Interruptor `REMOTE_ZIP_SHARD_READ` en `pdf.py` (apagado por
+  defecto). `batch_shard_worker.py` ahora puede leer su porción directo del ZIP original por
+  rango, sin pasar por `xml_temp/`, cuando `ZIP_GCS_PATH` está presente. `trigger_batch_shard_job`
+  propaga esa ruta a cada tarea. El ZIP original ya no se borra en este camino nuevo (N tareas
+  concurrentes, sin momento único de "ya terminé") — se deja al lifecycle de GCS existente (1 día).
+  227/227 tests pasan, incluidas guardas de regresión explícitas de que el camino viejo (flag
+  apagado, o batch chico) queda byte-idéntico.
+- **Pendiente ahora, plan documentado en `docs/propuesta-arquitectura-batch.md`:** Etapas 1
+  (prueba local) y 2 (canario real) ya completadas con resultado limpio. Quedan: **Etapa 3** —
+  push a `origin/main` con el interruptor apagado (deploy real de bajo riesgo, dispara
+  `deploy-backend.yml`, requiere confirmación explícita) — y **Etapa 4**, aparte, con los números
+  reales del canario ya en mano, decidir si activar `REMOTE_ZIP_SHARD_READ=true` ampliamente en
+  producción. Limpieza pendiente sin urgencia: revisión canario (`canary-remotezip`) y Job
+  canario (`cfdi-batch-shard-canary`) siguen existiendo, sin tráfico/sin costo hasta que se
+  disparen — se pueden borrar cuando ya no se necesiten para más pruebas.
+
+## Auditoría del bug de GCS del 12 de julio (cerrado, historial)
+**La medición de "1.7x más lento" estaba contaminada por un bug real de duplicación (nuevo), y ese
+bug ya se corrigió en código — CONSTRUIDO, TESTS PASANDO, Y DESPLEGADO (2026-07-12).**
 
 - Auditando `gcloud logging read` sobre `cfdi-suite-api` en la ventana real de la prueba
   (11:05-11:55 UTC, 2026-07-12) se encontró: la extracción que dio 813s corrió sola durante los
@@ -54,12 +111,31 @@ CONSTRUIDO, TESTS PASANDO, Y AHORA DESPLEGADO (2026-07-12).**
   explicar que producción saliera 618.8s, peor que secuencial. **Ya son 5 reproducciones locales
   distintas (Mac sin límite, Docker 2CPU, Docker 2CPU+carga de CPU simulada, y ahora el patrón
   exacto de chunks) — las 5 coinciden entre sí (paralelo gana) y ninguna reproduce la lentitud
-  real de Cloud Run.** Esto apunta a algo específico del entorno real de Cloud Run (red interna de
-  GCP, el proxy del servicio, egress real de la instancia) que un contenedor local no puede
-  imitar, no a un problema de código. **No vale la pena seguir probando en local** — la única
-  forma de resolver el misterio de verdad sería un canario instrumentado en Cloud Run real (needs
-  confirmación explícita antes de tocar GCP). El código ya está revertido a secuencial (estado
-  seguro y funcionando) — no hay urgencia de resolver esto si no se va a reintentar paralelizar.
+  real de Cloud Run.** Esto apunta a algo específico del entorno real de Cloud Run, no a un
+  problema de código.
+- **CPU descartado con datos reales de Cloud Monitoring (mismo día, sin desplegar nada nuevo) —
+  el cuello de botella es de RED, no de cómputo.** El proyecto ya tiene OpenTelemetry→Cloud Trace y
+  Sentry Performance (`traces_sample_rate=1.0`) instalados; además Cloud Run guarda automáticamente
+  métricas de CPU/red por instancia sin necesitar ningún cambio de código. Se consultaron esas
+  métricas reales (API de Cloud Monitoring) para la revisión `cfdi-suite-api-00115-rmz` durante los
+  10 minutos exactos de la subida paralela lenta (22:36-22:46 UTC): **la CPU nunca pasó de 17% de
+  las 2 vCPUs asignadas** (la mayoría del tiempo entre 1-15%) — descarta de raíz la hipótesis de
+  "1,600 hilos ahogando el CPU". En cambio, **la red de salida (`network/sent_bytes_count`) mostró
+  actividad sostenida y pesada durante los mismos 10 minutos**, cayendo a casi cero justo cuando
+  terminó la subida — la instancia pasó el tiempo esperando en la red, no calculando. Conclusión:
+  el cuello de botella es de red (ancho de banda, latencia de GCS bajo muchas conexiones
+  simultáneas, o throttling de la infraestructura interna de Google), no de CPU.
+- **Instrumentación por chunk agregada al código para acotar más, gated por interruptor apagado
+  por defecto (commit `f8e5484`, desplegado, cero riesgo para producción).**
+  `EXTRACTION_PARALLEL_UPLOAD` (env var, default `false`, mismo patrón que `BATCH_JOB_ENABLED`):
+  apagado, el comportamiento es idéntico al secuencial ya revertido. Activo (solo pensado para un
+  canario aislado sin tráfico real), usa `transfer_manager` y loguea el tiempo de CADA uno de los
+  100 chunks por separado (min/mediana/p90/max al final) — la medición del 12 de julio solo tenía
+  el total (618.8s), no la distribución; esto diría si la lentitud de red es pareja en los 100
+  chunks o se concentra en unos pocos (conexión que se cae y reconecta, por ejemplo). 209/209 tests
+  pasan. **No corrido en Cloud Run todavía** — el hallazgo de Cloud Monitoring (CPU descartado, red
+  como sospechoso) ya es fuerte por sí solo; correr esta instrumentación en un canario real es el
+  siguiente paso si se quiere acotar más, pendiente de decisión.
 
 ## Capa 1 (Cloud Run Job de shards) — CONSTRUIDA, DESPLEGADA Y ACTIVA EN PRODUCCIÓN
 **Permanente desde 2026-07-12. El cuello de botella real que queda no es el procesamiento, es la
