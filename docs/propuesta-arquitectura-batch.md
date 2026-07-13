@@ -1805,6 +1805,53 @@ nuevo — no una mezcla accidental con el camino viejo.
 funciona en el entorno real de Cloud Run, el tiempo total bajó ~37% (de
 16m41s a ~10m33s) contra el camino ya optimizado de la Capa 1, y el paso que
 específicamente causaba el problema (extracción atada al límite de red de
-una instancia) prácticamente desapareció. Sigue pendiente la Etapa 3 (push
-a `origin/main`, interruptor apagado en producción) y la Etapa 4 (decisión
-aparte de activarlo ampliamente).
+una instancia) prácticamente desapareció.
+
+### Etapa 3 — completada (13 de julio de 2026): desplegado a producción, interruptor apagado
+
+Push de los 4 commits locales (`e6c27d2`, `1c36c39`, `4023015`, `53e5871`)
+a `origin/main`. `deploy-backend.yml` corrió y reportó éxito, creando la
+revisión `cfdi-suite-api-00119-n6n` (commit `53e5871`) — confirmado por
+`creationTimestamp` real, no solo por el número de revisión (ver nota
+abajo).
+
+**Se repitió, por cuarta vez en este proyecto, el bug de pin de tráfico ya
+documentado** (ver "Riesgos abiertos" en `PROJECT_STATE.md`): el `gcloud
+run deploy --tag=canary-remotezip --no-traffic` usado para el canario de la
+Etapa 2 dejó el servicio con el tráfico fijado por nombre en vez de seguir
+`LATEST`. El deploy automático de esta Etapa 3 "tuvo éxito" (creó la
+revisión nueva correcta) pero el tráfico real se quedó en la revisión
+anterior (`00117-rmk`) — detectado verificando `status.traffic`
+explícitamente en vez de confiar en el mensaje de éxito de GitHub Actions,
+tal como ya dice la regla documentada. Corregido con confirmación explícita
+del usuario: `gcloud run services update-traffic cfdi-suite-api
+--to-latest`. Verificado después: `latestRevision: True`, 100% en
+`cfdi-suite-api-00119-n6n`, `/docs` → 200.
+
+**Nota sobre los números de revisión:** `cfdi-suite-api-00149-yos` (el
+canario, creado a las 02:05:29) tiene un número de revisión MÁS ALTO que
+`cfdi-suite-api-00119-n6n` (el deploy real de esta etapa, creado después, a
+las 02:37:05) — el contador de revisiones de `gcloud run deploy` manual y
+el de `deploy-cloudrun@v2` (GitHub Actions) no comparten la misma
+secuencia. Confirmar el orden real siempre por `creationTimestamp`, nunca
+por el número de la revisión.
+
+**Estado real de producción tras esta etapa:** el código nuevo está
+desplegado y sirviendo el 100% del tráfico, pero `REMOTE_ZIP_SHARD_READ`
+nunca se puso en `true` en las variables de entorno del servicio principal
+(solo en la revisión aislada del canario) — el comportamiento real para
+usuarios reales **no cambió**: siguen en el camino secuencial de siempre.
+El código nuevo queda listo pero inerte, esperando la Etapa 4.
+
+**Limpieza pendiente, sin urgencia:** la revisión canario (`cfdi-suite-api-
+00149-yos`, tag `canary-remotezip`) y el Job canario (`cfdi-batch-shard-
+canary`) siguen existiendo — sin tráfico y sin costo (Cloud Run Jobs es
+serverless) hasta que se disparen. Se pueden borrar cuando ya no se
+necesiten para más pruebas.
+
+### Etapa 4 — pendiente, decisión aparte
+
+Con los números reales del canario ya en la mesa (Etapa 2), decidir si
+activar `REMOTE_ZIP_SHARD_READ=true` ampliamente en producción. No se toma
+en esta sesión — requiere su propia confirmación explícita cuando se
+retome.

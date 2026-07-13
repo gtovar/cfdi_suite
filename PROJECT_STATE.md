@@ -53,14 +53,23 @@ raíz real, diseño y despliegue".**
   concurrentes, sin momento único de "ya terminé") — se deja al lifecycle de GCS existente (1 día).
   227/227 tests pasan, incluidas guardas de regresión explícitas de que el camino viejo (flag
   apagado, o batch chico) queda byte-idéntico.
-- **Pendiente ahora, plan documentado en `docs/propuesta-arquitectura-batch.md`:** Etapas 1
-  (prueba local) y 2 (canario real) ya completadas con resultado limpio. Quedan: **Etapa 3** —
-  push a `origin/main` con el interruptor apagado (deploy real de bajo riesgo, dispara
-  `deploy-backend.yml`, requiere confirmación explícita) — y **Etapa 4**, aparte, con los números
-  reales del canario ya en mano, decidir si activar `REMOTE_ZIP_SHARD_READ=true` ampliamente en
-  producción. Limpieza pendiente sin urgencia: revisión canario (`canary-remotezip`) y Job
-  canario (`cfdi-batch-shard-canary`) siguen existiendo, sin tráfico/sin costo hasta que se
-  disparen — se pueden borrar cuando ya no se necesiten para más pruebas.
+- **Etapa 3 (push a producción) — completada 2026-07-13, con un incidente encontrado y
+  corregido:** el push disparó `deploy-backend.yml` con éxito (revisión `cfdi-suite-api-00119-n6n`,
+  commit `53e5871`), pero **se repitió, por cuarta vez en este proyecto, el bug de pin de
+  tráfico** — el `--no-traffic --tag` usado para el canario de la Etapa 2 dejó el tráfico fijado
+  por nombre, así que el deploy "exitoso" no movió tráfico real a la revisión nueva. Detectado
+  verificando `status.traffic` explícitamente (no confiando en el mensaje de éxito de GHA, tal
+  como ya decía la regla documentada abajo) y corregido con confirmación explícita:
+  `gcloud run services update-traffic cfdi-suite-api --to-latest`. Verificado:
+  `latestRevision: True`, 100% en la revisión nueva, `/docs` → 200. **`REMOTE_ZIP_SHARD_READ`
+  sigue en `false` en el servicio principal** (solo estuvo en `true` en la revisión aislada del
+  canario) — el comportamiento real para usuarios no cambió con este deploy.
+- **Pendiente: Etapa 4, aparte, sin fecha.** Con los números reales del canario ya en mano
+  (docs/propuesta-arquitectura-batch.md), decidir si activar `REMOTE_ZIP_SHARD_READ=true`
+  ampliamente en producción — requiere su propia confirmación explícita cuando se retome.
+  Limpieza pendiente sin urgencia: revisión canario (`canary-remotezip` → `cfdi-suite-api-
+  00149-yos`) y Job canario (`cfdi-batch-shard-canary`) siguen existiendo, sin tráfico/sin costo
+  hasta que se disparen — se pueden borrar cuando ya no se necesiten para más pruebas.
 
 ## Auditoría del bug de GCS del 12 de julio (cerrado, historial)
 **La medición de "1.7x más lento" estaba contaminada por un bug real de duplicación (nuevo), y ese
@@ -494,6 +503,11 @@ veces con HAR real, ver "Último cambio" arriba.)
   y confirmar que diga `latestRevision: True` — si no, repetir `--to-latest`.
   **Pasó una tercera vez** durante las pruebas de la Capa 1 (2026-07-12), esta vez por el tag
   `test-old-path` usado para la comparación medida — mismo fix, ya corregido y verificado.
+  **Pasó una cuarta vez** el 2026-07-13, por el tag `canary-remotezip` del canario de extracción
+  distribuida — mismo patrón exacto (deploy automático "exitoso" que no movió tráfico real), mismo
+  fix. Cuatro repeticiones del mismo patrón confirman que la regla de verificar `status.traffic`
+  después de CUALQUIER uso de `--tag`/`--no-traffic` (no solo tras promociones manuales) sigue
+  siendo necesaria — no es un caso aislado, es predecible cada vez que se usa un canario.
 - **Paralelizar I/O que perfila rápido en local puede salir más lento en producción — pero la
   medición original de "1.7x más lento" resultó contaminada, no concluyente (actualizado
   2026-07-12).** Paralelizar las subidas de XML a GCS durante la extracción del ZIP perfiló 4.1x
