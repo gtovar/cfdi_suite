@@ -780,6 +780,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
 
     extraction_start = time.perf_counter()
     total_upload_seconds = 0.0
+    chunk_upload_seconds: list[float] = []
     try:
         with zipfile.ZipFile(temp_filename, "r") as z:
             xml_entries = [fi for fi in z.infolist() if _is_valid_xml_entry(fi)]
@@ -799,14 +800,21 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
 
             chunk = []
             CHUNK_SIZE = 20
-            # Nº de hilos para transfer_manager -- valor que ganó en las
-            # pruebas locales (Mac y Docker con --cpus=2 --memory=2g, imitando
-            # la instancia real) sobre max_workers=8, ver
-            # docs/propuesta-arquitectura-batch.md. transfer_manager dimensiona
-            # su propio pool de conexiones acorde a max_workers, a diferencia
-            # del intento anterior con asyncio.gather que compartía el pool
-            # default (pool_maxsize=10) sin coordinarlo con el nº de hilos.
+            # Nº de hilos para transfer_manager -- valor usado en las pruebas
+            # locales (Mac y Docker con --cpus=2 --memory=2g, imitando la
+            # instancia real), ver docs/propuesta-arquitectura-batch.md.
             UPLOAD_MAX_WORKERS = 16
+
+            # Interruptor SOLO para pruebas dirigidas -- apagado por defecto
+            # (mismo patrón que BATCH_JOB_ENABLED). Con esto en false (default
+            # de producción), el comportamiento es idéntico al camino
+            # secuencial ya revertido (85b301b) tras la regresión medida el
+            # 12 de julio (ver PROJECT_STATE.md). Cuando está en true (solo
+            # en un canario aislado, sin tráfico real), usa transfer_manager
+            # E instrumenta el tiempo de cada chunk por separado -- la
+            # medición anterior solo tenía el total (618.8s), no dónde se
+            # concentraba esa lentitud dentro de los 100 chunks.
+            EXTRACTION_PARALLEL_UPLOAD = os.getenv("EXTRACTION_PARALLEL_UPLOAD", "false").lower() == "true"
 
             # Aviso de progreso de EXTRACCIÓN vía Pusher (no solo el polling de
             # 30s a /status) -- throttled cada 5 chunks (100 XMLs), mismo
@@ -846,27 +854,58 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                 except Exception as pusher_err:
                     print(f"Aviso: tick de extracción no publicado para {batch_id}: {pusher_err}")
 
-                # b) Storage: el archivo pesado -- revertido a secuencial.
-                #    (Medido 2026-07-12: el intento con transfer_manager y
-                #    max_workers=16 subió el tiempo de 8min a 10min en
-                #    Cloud Run, demostrando que la contención de red/CPU en el
-                #    contenedor hace que paralelizar sea contraproducente en
-                #    producción, a pesar de perfilar rápido en local. El lock
-                #    de idempotencia garantizó que la medición fue limpia).
+                # b) Storage: el archivo pesado. Secuencial por default --
+                #    (medido 2026-07-12: transfer_manager con max_workers=16
+                #    subió el tiempo de 8min a 10m18s en Cloud Run, mientras
+                #    6 reproducciones locales distintas, incluido el patrón
+                #    EXACTO de producción, no reprodujeron esa lentitud --
+                #    ver PROJECT_STATE.md. Sin explicación confirmada
+                #    todavía). EXTRACTION_PARALLEL_UPLOAD activa el camino
+                #    paralelo instrumentado por chunk, solo para la prueba
+                #    dirigida en canario -- ver nota arriba.
                 nonlocal total_upload_seconds
                 upload_start = time.perf_counter()
-                
+
                 failed_jids: set[str] = set()
-                for jid, xml_data in current_chunk:
-                    try:
-                        blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
-                        await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
-                    except Exception as e:
-                        print(f"Error subiendo XML {jid} a GCS: {e}")
-                        failed_jids.add(jid)
-                        await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
-                        
-                total_upload_seconds += time.perf_counter() - upload_start
+                if EXTRACTION_PARALLEL_UPLOAD:
+                    pairs = [
+                        (io.BytesIO(xml_data), bucket.blob(f"xml_temp/{jid}.xml"))
+                        for jid, xml_data in current_chunk
+                    ]
+                    upload_results = await asyncio.to_thread(
+                        transfer_manager.upload_many,
+                        pairs,
+                        worker_type=transfer_manager.THREAD,
+                        max_workers=UPLOAD_MAX_WORKERS,
+                        upload_kwargs={"content_type": "application/xml"},
+                        raise_exception=False,
+                    )
+                    for (jid, _), result in zip(current_chunk, upload_results):
+                        if isinstance(result, Exception):
+                            print(f"Error subiendo XML {jid} a GCS: {result}")
+                            failed_jids.add(jid)
+                            await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                else:
+                    for jid, xml_data in current_chunk:
+                        try:
+                            blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
+                            await asyncio.to_thread(blob_xml.upload_from_string, xml_data, content_type="application/xml")
+                        except Exception as e:
+                            print(f"Error subiendo XML {jid} a GCS: {e}")
+                            failed_jids.add(jid)
+                            await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+
+                chunk_elapsed = time.perf_counter() - upload_start
+                total_upload_seconds += chunk_elapsed
+                chunk_upload_seconds.append(chunk_elapsed)
+                # Log por chunk -- barato (~100 líneas por batch de 2000) y es
+                # justo el dato que faltó en la medición del 12 de julio: solo
+                # había un total (618.8s), no la distribución. Con esto se
+                # puede saber si la lentitud es pareja en los 100 chunks o se
+                # concentra en unos pocos.
+                print(f"[process_zip_in_background] {batch_id}: chunk #{len(chunk_upload_seconds)} "
+                      f"({len(current_chunk)} XMLs) subida tomó {chunk_elapsed:.2f}s "
+                      f"({'paralelo' if EXTRACTION_PARALLEL_UPLOAD else 'secuencial'})")
 
                 # c) Cloud Tasks: encolamos (solo camino normal — el Job de
                 #    shards procesa su manifiesto directo, sin pasar por Tasks)
@@ -921,7 +960,15 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     finally:
         print(f"[process_zip_in_background] {batch_id}: extracción+subida (sin contar descarga) "
               f"tomó {time.perf_counter() - extraction_start:.1f}s, de los cuales "
-              f"{total_upload_seconds:.1f}s fueron subidas a GCS (transfer_manager)")
+              f"{total_upload_seconds:.1f}s fueron subidas a GCS")
+        if chunk_upload_seconds:
+            sorted_chunks = sorted(chunk_upload_seconds)
+            n = len(sorted_chunks)
+            median = sorted_chunks[n // 2]
+            p90 = sorted_chunks[int(n * 0.9)]
+            print(f"[process_zip_in_background] {batch_id}: distribución por chunk (n={n}): "
+                  f"min={sorted_chunks[0]:.2f}s mediana={median:.2f}s p90={p90:.2f}s "
+                  f"max={sorted_chunks[-1]:.2f}s")
         await redis_client.delete(f"pdf:extracting:{batch_id}")
         await redis_client.delete(lock_key)
         if os.path.exists(temp_filename):

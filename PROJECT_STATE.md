@@ -31,12 +31,35 @@ CONSTRUIDO, TESTS PASANDO, Y AHORA DESPLEGADO (2026-07-12).**
   medición no dependa de un solo número sin desglosar. 209/209 tests pasan (nuevo:
   `test_process_zip_in_background_skips_when_lock_already_held`). **Ya en producción**, se corrigió
   el pin de tráfico que impedía que sirviera peticiones.
-- **Veredicto final sobre subidas paralelas a GCS (2026-07-12):** Al desplegar la subida paralela con
-  `transfer_manager` (protegida por el lock de idempotencia para garantizar una medición limpia), el 
-  tiempo de extracción subió a **~10 minutos** (vs ~8 min secuencial). Esto prueba definitivamente
-  que la contención (red, CPU, o pool de conexiones a GCS) en Cloud Run hace que paralelizar
-  las subidas de XML sea contraproducente en producción, contradiciendo el perfilado local. 
-  **La subida se revirtió a secuencial de forma definitiva**.
+- **Medición limpia en producción (2026-07-12):** con el lock de idempotencia protegiendo la
+  medición (confirmado: un reintento de Cloud Tasks llegó a los 10m05s y se rechazó en 55ms sin
+  duplicar nada), la subida paralela con `transfer_manager` tardó **618.8s (10m18.8s)** en
+  extracción+subida — de los cuales **597.5s (96.6%) fueron literalmente dentro de las llamadas a
+  `transfer_manager`**, no en Redis/Pusher/lectura del ZIP. El mismo día, con el código viejo
+  (secuencial), una extracción comparable tardó 359.87s. **Esta comparación es real y no está
+  contaminada** — la subida sí fue más lenta en producción con paralelización, medido con
+  instrumentación propia, no solo con cronómetro. Por eso se revirtió a secuencial
+  (`85b301b`, ya desplegado) — decisión razonable dado el resultado.
+- **CORRECCIÓN (mismo día, sesión posterior): la explicación causal de "1,600 hilos ahogando el
+  CPU" se probó y NO explica la magnitud de la regresión — descartada como causa suficiente.**
+  Se verificó primero que el mecanismo existe de verdad: `transfer_manager.upload_many` (código
+  fuente instalado, `google-cloud-storage` 3.12.1) crea un `ThreadPoolExecutor` nuevo en cada
+  llamada (`with pool_class(max_workers=...) as executor`), y como `flush_chunk` lo llama una vez
+  por chunk de 20 (no una vez para todo el batch), un batch de 2000 significa ~100 ciclos de
+  crear/destruir un pool de 16 hilos — el mecanismo es código real, no una suposición. Pero al
+  reproducir ese patrón EXACTO en local (Docker `--cpus=2 --memory=2g`, mismo bucket real,
+  N=2000, CHUNK_SIZE=20, MAX_WORKERS=16 — idéntico al código de producción). resultado: **128.0s,
+  4.6x MÁS RÁPIDO que secuencial (587.8s)** — sí hay un costo real por recrear el pool (1.88x más
+  lento que un solo pool persistente, que dio 68.0s), pero ese costo es demasiado pequeño para
+  explicar que producción saliera 618.8s, peor que secuencial. **Ya son 5 reproducciones locales
+  distintas (Mac sin límite, Docker 2CPU, Docker 2CPU+carga de CPU simulada, y ahora el patrón
+  exacto de chunks) — las 5 coinciden entre sí (paralelo gana) y ninguna reproduce la lentitud
+  real de Cloud Run.** Esto apunta a algo específico del entorno real de Cloud Run (red interna de
+  GCP, el proxy del servicio, egress real de la instancia) que un contenedor local no puede
+  imitar, no a un problema de código. **No vale la pena seguir probando en local** — la única
+  forma de resolver el misterio de verdad sería un canario instrumentado en Cloud Run real (needs
+  confirmación explícita antes de tocar GCP). El código ya está revertido a secuencial (estado
+  seguro y funcionando) — no hay urgencia de resolver esto si no se va a reintentar paralelizar.
 
 ## Capa 1 (Cloud Run Job de shards) — CONSTRUIDA, DESPLEGADA Y ACTIVA EN PRODUCCIÓN
 **Permanente desde 2026-07-12. El cuello de botella real que queda no es el procesamiento, es la
