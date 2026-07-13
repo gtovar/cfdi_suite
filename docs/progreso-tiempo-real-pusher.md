@@ -25,7 +25,17 @@ internal_generate_pdf ──────► canal pdf-batch-{id} ─────
 - **Publicación** (`backend/app/services/realtime.py` + `_publish_batch_tick` en `routers/pdf.py`): cada worker, al terminar un PDF, incrementa `pdf:done_count:{batch_id}` (INCR atómico) y publica el avance al canal `pdf-batch-{batch_id}` **cada 5 archivos** y siempre al llegar al total (~400 mensajes por batch de 2,000). Los errores solo se cuentan cuando son definitivos (XML desaparecido) — los transitorios no, porque Cloud Tasks los reintenta y sobrecontarían.
 - **Suscripción** (`frontend/src/lib/pdf-download.ts` → `watchBatchProgress`): el navegador se conecta a Pusher (la conexión persistente vive en la infraestructura de Pusher, no en Cloud Run), se hidrata con un snapshot inicial vía `GET /api/cfdi/pdf/batch/{id}/status`, y reconcilia cada 30s con el mismo endpoint. Guard monotónico: la barra nunca retrocede aunque los eventos lleguen fuera de orden.
 - **Fuente de verdad**: sigue siendo Redis (`_batch_progress_snapshot` calcula el estado exacto con MGET de statuses). Los contadores de Pusher son aproximados para los ticks; el snapshot corrige cualquier deriva en ≤30s.
-- **Fallback**: el endpoint SSE (`/batch/{id}/progress`) sigue vivo, refactorizado sobre el mismo helper. Si Pusher está caído, la reconciliación de 30s mantiene la barra avanzando (lenta pero viva).
+- **Fallback**: el endpoint SSE (`/batch/{id}/progress`) sigue vivo, refactorizado sobre el mismo helper. Si Pusher está caído, la reconciliación mantiene la barra avanzando (lenta pero viva).
+
+**Actualización 2026-07-13:** la reconciliación cada 30s fija descrita arriba
+se cambió por una reconciliación **por sospecha** — un temporizador que se
+reinicia con cada dato real recibido (de Pusher o de un snapshot) y solo
+dispara una consulta si pasan 35s sin ninguna noticia, o de inmediato si
+Pusher reporta `unavailable`. Motivo: el temporizador fijo preguntaba de
+más en el caso común (Pusher funcionando bien), sin necesidad. El
+comportamiento de respaldo (la barra sigue avanzando aunque Pusher esté
+caído) no cambió — solo cuándo se dispara la consulta. Ver `IDLE_SUSPICION_MS`
+en `watchBatchProgress` (`frontend/src/lib/pdf-download.ts`).
 
 ## Por qué no se hizo así desde el principio
 

@@ -574,6 +574,26 @@ si vale la pena arreglarla.
   específico, es una brecha a nivel de cómo se usa la librería de animación
   en todo el proyecto. Encontrado al hacer commit del fix de progreso de
   extracción (2026-07-12), no relacionado con ese cambio.
+- **3 tests más que fallan, encontrados al correr la suite completa del
+  frontend (2026-07-13), no relacionados con el cambio de esa sesión
+  (reconciliación por sospecha en `watchBatchProgress`):**
+  `src/App.test.tsx` ("opens concept detail when the sidebar selects an
+  impacted concept"), `src/lib/cfdi-api-client.test.ts` (2 tests, sobre
+  errores HTTP sin cuerpo contractual y fallback contractual), y
+  `src/components/BatchCompletionModal.test.tsx` ("icono amarillo cuando
+  hay errores pero totalFiles es 0"). Confirmados preexistentes con
+  `git stash` (fallan igual sin el cambio de esa sesión aplicado). No
+  investigados a fondo — se suman a `ExtractWorkspaceToolbar.test.tsx` ya
+  anotado arriba.
+- **`frontend/src/components/ConversionMasivaPage.tsx`** — `react-doctor`
+  (`--scope changed`) reporta 24 hallazgos (componente de +300 líneas,
+  candidato a `useReducer` por 5 `useState` relacionados, llave de
+  `localStorage` sin versión, entre otros) — confirmados preexistentes
+  corriendo `--scope lines` sobre el mismo cambio (2026-07-13): "No issues
+  found!", es decir, el cambio real (un comentario de una línea en ese
+  archivo, más la lógica nueva en `pdf-download.ts`) no introduce nada
+  nuevo — los 24 son deuda ya existente en un archivo grande, capturados
+  solo porque el archivo aparece en el diff.
 
 **Nota para revisar en el futuro**: si esta lista crece mucho, vale la pena
 decidir si alguno de estos vale la pena arreglar, o si se quedan así a

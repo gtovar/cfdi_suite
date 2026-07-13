@@ -198,8 +198,10 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   }
 
   // Escucha el progreso vía Pusher (snapshot inicial + eventos en vivo +
-  // reconciliación cada 30s). No lanza: los cortes de conexión se reportan
-  // en batchError para mostrarse inline, sin alert() bloqueante.
+  // reconciliación por sospecha si no llega nada por un rato, ver
+  // watchBatchProgress en pdf-download.ts). No lanza: los cortes de
+  // conexión se reportan en batchError para mostrarse inline, sin alert()
+  // bloqueante.
   //
   // Los IDs listos para descarga individual viajan dentro de cada tick
   // (progress.readyIds) en vez de pedirse aparte — antes esto disparaba un

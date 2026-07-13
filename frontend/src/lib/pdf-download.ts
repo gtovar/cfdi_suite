@@ -237,10 +237,21 @@ export async function startZipConversion(
 // El SSE anterior retenía una instancia entera de Cloud Run por espectador
 // (concurrency=1, obligatorio por el bug de heap nativo) y consultaba Redis
 // cada segundo. Aquí la conexión persistente vive en la infraestructura de
-// Pusher: cero instancias retenidas y cero polling. Un snapshot inicial
-// hidrata el estado, y una reconciliación cada 30s (request corta a /status)
-// cubre eventos perdidos — si Pusher está caído, la barra sigue avanzando a
-// ritmo de 30s en vez de congelarse.
+// Pusher: cero instancias retenidas y cero polling en el caso normal.
+//
+// Reconciliación por SOSPECHA, no por temporizador fijo (cambiado
+// 2026-07-13): la versión anterior pedía un snapshot cada 30s sin importar
+// si Pusher ya había entregado todo correctamente -- funcionaba, pero
+// preguntaba de más en el caso común (Pusher sano). Aquí, cualquier dato
+// real recibido (evento de Pusher O snapshot) reinicia un temporizador de
+// "sospecha"; solo si pasan IDLE_SUSPICION_MS sin ninguna noticia se pide
+// un snapshot, y también de inmediato si Pusher reporta 'unavailable'. La
+// razón de seguir teniendo ESTE respaldo (no solo confiar en el estado de
+// conexión de Pusher) es que un socket puede seguir "conectado" y aun así
+// perder un mensaje puntual en silencio -- por eso el reloj de sospecha usa
+// como verdad "¿ha llegado algo de verdad?", no solo el estado del socket.
+const IDLE_SUSPICION_MS = 35_000;
+
 export function watchBatchProgress(
   batchId: string,
   onProgress: (data: BatchProgressPayload) => void,
@@ -256,14 +267,14 @@ export function watchBatchProgress(
     let settled = false;
     let maxProcessed = -1;
     let pusher: Pusher | null = null;
-    let snapshotTid: ReturnType<typeof setInterval> | undefined;
+    let idleTid: ReturnType<typeof setTimeout> | undefined;
     let overallTid: ReturnType<typeof setTimeout> | undefined;
 
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (overallTid) clearTimeout(overallTid);
-      if (snapshotTid) clearInterval(snapshotTid);
+      if (idleTid) clearTimeout(idleTid);
       try {
         pusher?.unsubscribe('pdf-batch-' + batchId);
         pusher?.disconnect();
@@ -276,8 +287,28 @@ export function watchBatchProgress(
       2_700_000,
     );
 
+    const fetchSnapshot = async () => {
+      if (settled || document.hidden) return;
+      try {
+        const res = await fetch(statusUrl);
+        if (res.ok) handle(await res.json() as BatchProgressPayload);
+      } catch {
+        // Transitorio: si el snapshot en sí falla (red caída), no dejamos
+        // de vigilar -- se vuelve a intentar cuando el reloj de sospecha
+        // vuelva a cumplirse.
+        resetIdleTimer();
+      }
+    };
+
+    const resetIdleTimer = () => {
+      if (idleTid) clearTimeout(idleTid);
+      if (settled) return;
+      idleTid = setTimeout(() => { void fetchSnapshot(); }, IDLE_SUSPICION_MS);
+    };
+
     const handle = (data: BatchProgressPayload) => {
       if (settled) return;
+      resetIdleTimer(); // cualquier dato real -- de Pusher o de un snapshot -- disipa la sospecha
       const processed = (data.done ?? 0) + (data.error ?? 0);
       // Los ticks de Pusher y los snapshots pueden llegar fuera de orden:
       // nunca retroceder la barra mientras el lote siga en proceso.
@@ -288,21 +319,18 @@ export function watchBatchProgress(
       else if (data.status === 'error') finish(() => reject(new Error(data.message || 'Ocurrió un error crítico en el lote')));
     };
 
-    const fetchSnapshot = async () => {
-      if (settled || document.hidden) return;
-      try {
-        const res = await fetch(statusUrl);
-        if (res.ok) handle(await res.json() as BatchProgressPayload);
-      } catch { /* transitorio: Pusher y el siguiente snapshot siguen vivos */ }
-    };
-
     pusher = new Pusher(key, { cluster, forceTLS: true });
     pusher.connection.bind('connected', () => onStatusChange?.('connected', 0));
-    pusher.connection.bind('unavailable', () => onStatusChange?.('reconnecting', 1));
+    pusher.connection.bind('unavailable', () => {
+      onStatusChange?.('reconnecting', 1);
+      // Señal fuerte y explícita de posible pérdida -- se pide un snapshot
+      // de inmediato en vez de esperar a que se cumpla el reloj de sospecha.
+      void fetchSnapshot();
+    });
     pusher.subscribe('pdf-batch-' + batchId).bind('progress', handle);
 
-    void fetchSnapshot();
-    snapshotTid = setInterval(fetchSnapshot, 30_000);
+    void fetchSnapshot(); // snapshot inicial -- Pusher no cuenta la historia, solo eventos nuevos
+    resetIdleTimer();
   });
 }
 
