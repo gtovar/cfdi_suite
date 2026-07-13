@@ -27,15 +27,37 @@ internal_generate_pdf ──────► canal pdf-batch-{id} ─────
 - **Fuente de verdad**: sigue siendo Redis (`_batch_progress_snapshot` calcula el estado exacto con MGET de statuses). Los contadores de Pusher son aproximados para los ticks; el snapshot corrige cualquier deriva en ≤30s.
 - **Fallback**: el endpoint SSE (`/batch/{id}/progress`) sigue vivo, refactorizado sobre el mismo helper. Si Pusher está caído, la reconciliación mantiene la barra avanzando (lenta pero viva).
 
-**Actualización 2026-07-13:** la reconciliación cada 30s fija descrita arriba
-se cambió por una reconciliación **por sospecha** — un temporizador que se
-reinicia con cada dato real recibido (de Pusher o de un snapshot) y solo
-dispara una consulta si pasan 35s sin ninguna noticia, o de inmediato si
-Pusher reporta `unavailable`. Motivo: el temporizador fijo preguntaba de
-más en el caso común (Pusher funcionando bien), sin necesidad. El
-comportamiento de respaldo (la barra sigue avanzando aunque Pusher esté
-caído) no cambió — solo cuándo se dispara la consulta. Ver `IDLE_SUSPICION_MS`
-en `watchBatchProgress` (`frontend/src/lib/pdf-download.ts`).
+**Actualización 2026-07-13 (primer intento, reemplazado el mismo día — ver
+la segunda actualización abajo):** la reconciliación cada 30s fija descrita
+arriba se cambió por una reconciliación **por sospecha** — un temporizador
+que se reinicia con cada dato real recibido (de Pusher o de un snapshot) y
+solo dispara una consulta si pasan 35s sin ninguna noticia, o de inmediato
+si Pusher reporta `unavailable`. Motivo: el temporizador fijo preguntaba de
+más en el caso común (Pusher funcionando bien), sin necesidad.
+
+**Actualización 2026-07-13 (segunda, la que quedó):** el primer intento de
+arriba nunca llegó a producción — antes de subirlo, una mesa de revisión de
+5 agentes (pedida explícitamente por el dueño del proyecto, porque el
+cambio se codeó sin discutirlo primero) encontró que el temporizador de
+"sospecha" se desarmaba **permanentemente** en tres casos (pestaña oculta,
+respuesta HTTP no exitosa, `fetch` colgado sin timeout) — el diseño viejo
+(`setInterval` fijo) era inmune a esto porque no dependía de que su propio
+callback tuviera éxito para seguir latiendo. Detalle completo del proceso
+de revisión y la lista de hallazgos en `PROJECT_STATE.md`.
+
+Se reemplazó por un enfoque distinto, no un parche: **reconciliar por
+evento terminal, no por sospecha ciega**. Un tick de progreso intermedio
+perdido se autocorrige solo con el siguiente evento de Pusher — lo único
+que de verdad hay que garantizar es que el evento TERMINAL (`done`/`error`)
+nunca se pierda para siempre. Tres piezas independientes logran esto:
+(1) reconciliar en cada transición de estado de Pusher (`state_change`,
+tanto al salir de `connected` como al regresar — el hueco real y
+documentado donde Pusher pierde mensajes), (2) una red de seguridad de
+intervalo FIJO (`setInterval` real, cada 75s, estructuralmente inmune al
+defecto de arriba porque no depende de que su callback tenga éxito), y
+(3) reconciliar al volver la pestaña a primer plano (`visibilitychange`,
+mismo patrón que ya usa `subscribeWithRetry` en el mismo archivo). Ver
+`watchBatchProgress` en `frontend/src/lib/pdf-download.ts`.
 
 ## Por qué no se hizo así desde el principio
 

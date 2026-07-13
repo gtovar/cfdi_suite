@@ -5,6 +5,74 @@
 main
 
 ## Último cambio
+**Mesa de revisión multi-agente (5 agentes) sobre un cambio ya codeado sin discusión previa
+(reconciliación de progreso en `watchBatchProgress`), y rediseño completo a partir de sus
+hallazgos. CONSTRUIDO, 13/13 tests nuevos pasan, `react-doctor --scope lines` 100/100. NO
+DESPLEGADO A PRODUCCIÓN TODAVÍA — commits solo locales.**
+
+**Por qué existe esto:** en la misma sesión se había implementado un cambio (reemplazar el
+polling fijo de 30s de `watchBatchProgress` por un "reloj de sospecha" de 35s) directamente,
+sin pausar a diseñarlo con el usuario primero. El usuario lo notó y lo dijo explícitamente
+("te agarraste a codear... no rebotamos nada, no pivoteamos nada") y pidió una mesa de
+revisión antes de seguir. Esta entrada documenta ese proceso completo porque el proceso en sí
+es el hallazgo más importante, no solo el bug que encontró.
+
+**La mesa — 5 agentes, cada uno con un mandato distinto, corridos en paralelo donde no
+dependían entre sí:**
+- **Destructor** (revisión adversarial de código): encontró el defecto raíz con línea exacta.
+- **Arquitecto**: evaluó si el diseño encajaba con el resto del archivo — encontró el mismo
+  defecto por su cuenta, sin ver el reporte del destructor.
+- **Producto**: evaluó si el cambio resolvía un problema real — también llegó al mismo defecto
+  técnico por un camino completamente distinto (leyendo el código para evaluar riesgo/beneficio,
+  no buscando bugs a propósito), y agregó que nunca hubo evidencia de que el polling de 30s le
+  doliera a nadie.
+- **decision-expander** (skill ya existente en el proyecto, invocado por el agente): expandió la
+  decisión en sí — encontró que la justificación técnica original ("un socket sano puede perder
+  un mensaje en silencio") no es el modo de falla real y documentado de Pusher (que es el hueco
+  de reconexión), y propuso el reencuadre que terminó ganando: no todo silencio es igual de
+  peligroso, solo perder el evento TERMINAL es fatal.
+- **Árbitro**: no repitió la revisión, la juzgó — verificó cada hallazgo del destructor línea por
+  línea, recalibró severidades (subió uno de MEDIA a bloqueador, bajó otro de MEDIA a no
+  bloqueante), y dio el veredicto que unificó la mesa.
+
+**El defecto raíz que 4 de 5 agentes encontraron de forma independiente:** el reloj de
+"sospecha" (una cadena de `setTimeout` que se reprograma sola con cada dato recibido) se
+desarmaba **permanentemente** en tres rutas — pestaña oculta, respuesta HTTP no exitosa (no
+una excepción, solo `res.ok: false` — la ruta más probable en producción según el árbitro,
+porque esta app ya está documentada como propensa a 429/503 bajo carga), y un `fetch` colgado
+sin timeout. El `setInterval` fijo que reemplazaba era inmune a esto porque no dependía de que
+su propio callback tuviera éxito para seguir latiendo. Los 10 tests que acompañaban el cambio
+original no podían detectar ninguna de estas tres rutas (mocks con `document.hidden` fijo en
+`false` y respuestas siempre exitosas) — el árbitro lo llamó compuerta obligatoria, no nota al
+pie.
+
+**Decisión del usuario, viendo la lista completa de 13 hallazgos:** en vez del parche mínimo que
+recomendaba el árbitro (rearmar el reloj siempre, agregar timeout), eligió el rediseño completo
+que proponía decision-expander — reencuadrar el problema por "garantizar el evento terminal", no
+"cualquier silencio es sospechoso".
+
+**Diseño final implementado (`frontend/src/lib/pdf-download.ts`, función `watchBatchProgress`):**
+tres piezas independientes reemplazan el reloj de sospecha:
+1. Reconciliar en cada transición de estado de Pusher (`state_change`, verificado contra el
+   código fuente instalado de `pusher-js` — API real, no supuesta) — ataca el hueco de
+   reconexión real, no un socket sano perdiendo mensajes sueltos.
+2. Red de seguridad de intervalo FIJO (`setInterval` real, 75s, deliberadamente largo porque
+   Pusher publica por conteo — cada 5 archivos, `PUBLISH_EVERY_N_JOBS` en
+   `backend/app/services/batch_progress.py:26` — no por tiempo) — estructuralmente inmune al
+   defecto raíz porque no depende de que su callback tenga éxito.
+3. Reconciliar al volver la pestaña a primer plano (`visibilitychange`, mismo patrón ya usado en
+   `subscribeWithRetry`, mismo archivo — reutilizado, no reinventado).
+
+**13 tests nuevos, reemplazando los 10 anteriores** — incluyen las dos pruebas de regresión
+directa que antes no existían: la red de seguridad sobrevive a una respuesta no exitosa, y
+sobrevive a la pestaña oculta (ambas fallarían con el diseño anterior, confirmando que el
+rediseño sí cierra el defecto). `react-doctor --scope lines`: 100/100, sin hallazgos nuevos.
+Detalle completo del proceso y el diseño: `docs/progreso-tiempo-real-pusher.md`.
+
+**Sigue sin desplegarse** — commits locales, a la espera de confirmación explícita del usuario
+para subir a `origin/main` (lo que dispararía `deploy-frontend.yml`/Vercel).
+
+## Extracción distribuida vía remotezip (cerrado, ver historial abajo)
 **Causa raíz real del cuello de botella de extracción encontrada (límite de red de 600 Mbps por
 instancia de Cloud Run, confirmado con Cloud Monitoring) y arreglo diseñado + implementado:
 extracción distribuida vía lectura remota por rangos del ZIP (remotezip). CONSTRUIDO, 227/227

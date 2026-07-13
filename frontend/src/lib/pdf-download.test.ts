@@ -6,7 +6,7 @@ import { downloadWithProgress, fetchZipEstimatedSize, watchBatchProgress } from 
 // subscribe().bind(), unsubscribe, disconnect) para poder disparar eventos
 // de progreso y de conexión manualmente desde cada prueba.
 const mockChannelHandlers: Record<string, (data: unknown) => void> = {};
-const mockConnectionHandlers: Record<string, () => void> = {};
+const mockConnectionHandlers: Record<string, (data?: unknown) => void> = {};
 const mockPusherInstance = {
   connection: {
     bind: vi.fn((event: string, cb: () => void) => {
@@ -88,6 +88,17 @@ describe('downloadWithProgress', () => {
 });
 
 describe('watchBatchProgress', () => {
+  // Este archivo corre en entorno "node" (no jsdom); se stubea un `document`
+  // mínimo con hidden + addEventListener/removeEventListener reales (no
+  // no-ops) para poder simular visibilitychange desde las pruebas.
+  let mockDocument: { hidden: boolean; addEventListener: ReturnType<typeof vi.fn>; removeEventListener: ReturnType<typeof vi.fn> };
+  let visibilityListeners: Array<() => void>;
+
+  const fireVisibilityChange = (hidden: boolean) => {
+    mockDocument.hidden = hidden;
+    for (const cb of visibilityListeners) cb();
+  };
+
   beforeEach(() => {
     for (const k of Object.keys(mockChannelHandlers)) delete mockChannelHandlers[k];
     for (const k of Object.keys(mockConnectionHandlers)) delete mockConnectionHandlers[k];
@@ -97,10 +108,21 @@ describe('watchBatchProgress', () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ status: 'processing', total: 10, done: 0, error: 0, converting: 0, pending: 10, percentage: 0 }), { status: 200 }),
     );
-    // Este archivo corre en entorno "node" (no jsdom); fetchSnapshot revisa
-    // document.hidden para no consultar mientras la pestaña está oculta --
-    // se stubea el mínimo necesario en vez de traer un entorno DOM completo.
-    vi.stubGlobal('document', { hidden: false });
+
+    visibilityListeners = [];
+    mockDocument = {
+      hidden: false,
+      addEventListener: vi.fn((event: string, cb: () => void) => {
+        if (event === 'visibilitychange') visibilityListeners.push(cb);
+      }),
+      removeEventListener: vi.fn((event: string, cb: () => void) => {
+        if (event === 'visibilitychange') {
+          const idx = visibilityListeners.indexOf(cb);
+          if (idx >= 0) visibilityListeners.splice(idx, 1);
+        }
+      }),
+    };
+    vi.stubGlobal('document', mockDocument);
     vi.useFakeTimers();
   });
 
@@ -115,42 +137,85 @@ describe('watchBatchProgress', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('NO pide snapshots extra mientras Pusher siga entregando eventos dentro de la ventana de sospecha', async () => {
+  it('la red de seguridad SOBREVIVE a una respuesta no exitosa -- vuelve a dispararse en su propio reloj', async () => {
+    // Regresión directa del defecto que motivó el rediseño: con el diseño
+    // anterior, una sola respuesta no-ok desarmaba el mecanismo para
+    // siempre. Aquí el setInterval es independiente del resultado de
+    // cualquier intento individual.
     watchBatchProgress('batch-1', () => {});
-    await vi.advanceTimersByTimeAsync(0); // snapshot inicial
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial (call #1, ok)
 
-    // Pusher entrega un tick cada 20s -- por debajo de los 35s de sospecha.
-    for (let i = 0; i < 4; i++) {
-      await vi.advanceTimersByTimeAsync(20_000);
-      mockChannelHandlers['progress']?.({ status: 'processing', total: 10, done: i + 1, error: 0, converting: 0, pending: 10 - i - 1, percentage: (i + 1) * 10 });
-    }
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await vi.advanceTimersByTimeAsync(75_000); // primer disparo de la red de seguridad (call #2, no-ok)
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
 
-    // Solo el snapshot inicial -- ningún poll de sospecha se disparó porque
-    // siempre llegó algo antes de que se cumplieran los 35s.
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(75_000); // segundo disparo -- debe seguir latiendo
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
   });
 
-  it('SÍ pide un snapshot si no llega nada de Pusher por más de la ventana de sospecha', async () => {
+  it('la red de seguridad SOBREVIVE a la pestaña oculta -- vuelve a dispararse en su propio reloj', async () => {
     watchBatchProgress('batch-1', () => {});
-    await vi.advanceTimersByTimeAsync(0); // snapshot inicial
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial (call #1)
 
-    // Silencio total de Pusher por 36s -- debe disparar la sospecha.
-    await vi.advanceTimersByTimeAsync(36_000);
+    mockDocument.hidden = true;
+    await vi.advanceTimersByTimeAsync(75_000); // primer disparo: sale temprano por hidden, sin fetch nuevo
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
 
+    mockDocument.hidden = false;
+    await vi.advanceTimersByTimeAsync(75_000); // segundo disparo: el intervalo nunca se detuvo
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('pide un snapshot de inmediato si Pusher reporta "unavailable", sin esperar la ventana de sospecha', async () => {
+  it('un state_change que sale de "connected" dispara una reconciliación inmediata', async () => {
     watchBatchProgress('batch-1', () => {});
     await vi.advanceTimersByTimeAsync(0); // snapshot inicial
 
-    mockConnectionHandlers['unavailable']?.();
+    mockConnectionHandlers['state_change']?.({ previous: 'connected', current: 'unavailable' });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('resuelve y deja de vigilar cuando el batch termina', async () => {
+  it('un state_change que REGRESA a "connected" también dispara una reconciliación (el hueco real de pérdida de Pusher)', async () => {
+    watchBatchProgress('batch-1', () => {});
+    await vi.advanceTimersByTimeAsync(0);
+
+    mockConnectionHandlers['state_change']?.({ previous: 'unavailable', current: 'connected' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('volver a primer plano (visibilitychange) dispara una reconciliación inmediata', async () => {
+    watchBatchProgress('batch-1', () => {});
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial
+
+    fireVisibilityChange(true); // se oculta -- no debe disparar nada
+    await vi.advanceTimersByTimeAsync(0);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    fireVisibilityChange(false); // vuelve a primer plano -- sí reconcilia
+    await vi.advanceTimersByTimeAsync(0);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('NO pide snapshots extra mientras Pusher solo entregue ticks normales de progreso', async () => {
+    watchBatchProgress('batch-1', () => {});
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial
+
+    // 3 ticks de 20s = 60s transcurridos, por debajo del primer disparo de
+    // la red de seguridad (75s) -- confirma que los ticks de progreso en sí
+    // mismos no generan ninguna llamada a fetch, sin cruzar el reloj
+    // independiente de la red de seguridad (probado aparte).
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(20_000);
+      mockChannelHandlers['progress']?.({ status: 'processing', total: 10, done: i + 1, error: 0, converting: 0, pending: 10 - i - 1, percentage: (i + 1) * 10 });
+    }
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('resuelve y deja de vigilar (incluida la red de seguridad y el listener de visibilitychange) cuando el batch termina', async () => {
     const promise = watchBatchProgress('batch-1', () => {});
     await vi.advanceTimersByTimeAsync(0);
 
@@ -158,8 +223,15 @@ describe('watchBatchProgress', () => {
     await expect(promise).resolves.toBeUndefined();
 
     const callsAtFinish = vi.mocked(globalThis.fetch).mock.calls.length;
-    await vi.advanceTimersByTimeAsync(60_000); // mucho más que la ventana de sospecha
-    expect(globalThis.fetch).toHaveBeenCalledTimes(callsAtFinish); // sin más llamadas después de terminar
+    await vi.advanceTimersByTimeAsync(200_000); // varias veces el intervalo de la red de seguridad
+    expect(globalThis.fetch).toHaveBeenCalledTimes(callsAtFinish);
+
+    // El listener de visibilitychange también se limpia -- una reconciliación
+    // manual después de terminar no debería hacer nada.
+    fireVisibilityChange(true);
+    fireVisibilityChange(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(callsAtFinish);
   });
 });
 
