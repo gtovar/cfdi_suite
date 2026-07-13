@@ -594,6 +594,14 @@ si vale la pena arreglarla.
   archivo, más la lógica nueva en `pdf-download.ts`) no introduce nada
   nuevo — los 24 son deuda ya existente en un archivo grande, capturados
   solo porque el archivo aparece en el diff.
+- **`frontend/src/lib/pdf-download.ts:220`** — `react-doctor` marca un
+  `await` antes de una guarda de retorno anticipado (`async-defer-await`)
+  dentro de `processGcsZip`/`startPdfZipGcs` (función existente, no tocada
+  en la sesión del 2026-07-13). Probable falso positivo (el valor sí se usa,
+  en el `throw` de las líneas siguientes) — no investigado a fondo, mismo
+  patrón que los hallazgos de `ConversionMasivaPage.tsx`: aparece solo
+  porque el archivo tiene otro cambio real más abajo, confirmado ajeno con
+  `--scope lines`.
 
 **Nota para revisar en el futuro**: si esta lista crece mucho, vale la pena
 decidir si alguno de estos vale la pena arreglar, o si se quedan así a
