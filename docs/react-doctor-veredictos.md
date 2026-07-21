@@ -432,14 +432,61 @@ agente pensó en su momento.
   regla tiene razón técnica), pero es una barra decorativa pequeña, 0.15s,
   de uso poco frecuente; migrar a `transform: scaleX` requeriría
   reestructurar el posicionamiento para un beneficio perceptualmente nulo.
-- **`no-transition-all`, `js-combine-iterations`, `js-flatmap-filter`,
-  `use-lazy-motion` — no re-verificados línea por línea en esta pasada**
-  (30, 15, 2 y 2 hallazgos respectivamente en el escaneo actual). La lógica
-  de los veredictos existentes (mayoría en cluster Editor o código de
-  cálculo/parsing donde el riesgo de tocar supera la ganancia) es plausible
-  pero queda marcada `pendiente de re-verificación individual` si se retoma
-  esta familia — no se quiere repetir el error de transcribir un veredicto
-  sin leer el código correspondiente.
+- **`no-transition-all` (30) — confirmado `mejorable/diseño`, cerrado.**
+  De los 30, solo 3 son vivos (`InvoiceDesigner.jsx:819,882,1529`), los 27
+  restantes son cluster Editor. Los 3 leídos: `transition: 'all 0.15s'` /
+  `'0.12s'` en un tab de sidebar, un botón "Guardar todo" y una tarjeta de
+  densidad — animan `background`/`color`/`border`, propiedades baratas (no
+  layout), duración corta. `transition: all` es impreciso pero el costo real
+  aquí es mínimo. Cerrado, no urge.
+- **`js-combine-iterations` (15) — confirmado `mejorable`, cerrado.** 13
+  vivos, 2 cluster (`editor/Toolbar.jsx`). Leídos `cfdiAnalysisAdapter.ts`
+  (18-25, 47-53, 133-140) y `useFindingContexts.ts` (200-235): son
+  transformaciones de `conceptos`/`impuestos` de un CFDI — arreglos de
+  líneas de factura, típicamente decenas de elementos, nunca miles — dentro
+  de código de **cálculo fiscal** (`sumSafe`, `roundCurrency`,
+  `totalCalculado`). Tocar esto para ahorrar una pasada de iteración es
+  riesgo real (introducir un bug de redondeo/suma) por una ganancia
+  imperceptible. `BatchAnalysisPage.tsx` (619, 994, 1115): los 3 corren
+  dentro de `useMemo` o handlers de click, no en un loop de render caliente.
+  Confirmado, cerrado.
+- **`js-flatmap-filter` (2) — confirmado `mejorable`, cerrado.**
+  `useDiagnoseState.ts:43` (mismo patrón de arreglo de conceptos acotado que
+  arriba) y `BatchAnalysisPage.tsx:1478` (dentro de un handler de click de
+  fila de tabla). Ambos arreglos pequeños, fuera de loop caliente. Cerrado.
+- **`use-lazy-motion` (2) — confirmado `mejorable`, con un hallazgo nuevo
+  relevante.** `ConceptDetailModal.tsx:1` y `FileUpload.tsx:9` importan
+  `{ motion }`/`{ AnimatePresence, motion }` completo (no la variante
+  `{ m }` con `LazyMotion`). Verificado que existe un tercer import vivo,
+  `src/main.tsx:3`, que **ya tiene `<MotionConfig reducedMotion="user">`
+  envolviendo toda la app** (línea 22). Esto confirma que el punto de
+  coordinación que pedía el veredicto original (envolver en `main.tsx`) ya
+  existe parcialmente — falta agregar `<LazyMotion features={domAnimation}>`
+  ahí mismo y cambiar los 2 imports vivos a `{ m }`. Sigue siendo un cambio
+  coordinado (no basta con tocar un solo archivo), pero ahora con el punto
+  exacto identificado. Mejorable, no urgente (~30kb de bundle, no rompe
+  nada).
+- **Hallazgo nuevo, fuera de las 53 familias originales — corrige un
+  "hallazgo preexistente" documentado incorrectamente en `PROJECT_STATE.md`
+  el 2026-07-12: el aviso de `require-reduced-motion` del hook de
+  pre-commit ("Project uses a motion library but has no
+  prefers-reduced-motion handling") es un FALSO POSITIVO, no una brecha
+  real.** Se leyó la implementación de la regla en
+  `node_modules/react-doctor/dist/index.js` (`checkReducedMotion`): busca
+  con `git grep` en todo el árbol los patrones
+  `prefers-reduced-motion|useReducedMotion|MotionConfig|reducedMotion`, y si
+  encuentra CUALQUIERA de esos en CUALQUIER archivo del proyecto, no
+  reporta el hallazgo. `main.tsx:22` (`<MotionConfig reducedMotion="user">`)
+  cumple exactamente ese patrón — es la forma correcta y documentada de
+  Motion/Framer Motion de respetar la preferencia de accesibilidad del
+  sistema operativo del usuario para todas las animaciones. Confirmado con
+  dos escaneos completos (`--verbose`, sin `--staged`) corridos hoy: el
+  aviso **nunca aparece** en modo completo, solo apareció una vez, el
+  2026-07-12, corriendo en modo `--staged` (el que usa el hook de commit) —
+  la explicación más probable es que ese modo no incluyó `main.tsx` en su
+  barrido de `git grep` por no estar entre los archivos de aquel commit. La
+  brecha de accesibilidad real (WCAG 2.3.3) **no existe** — el proyecto ya
+  la resuelve. Corregido en `PROJECT_STATE.md`.
 
 ### 10. Accesibilidad — familia completa (`control-has-associated-label`, `no-tiny-text`, `label-has-associated-control`, `no-static-element-interactions`, `click-events-have-key-events`, `no-outline-none`, `no-autofocus`, `prefer-tag-over-role`) — **re-verificado 2026-07-21**
 
@@ -463,10 +510,21 @@ agente pensó en su momento.
   `ConsultasSATPage.tsx` (zona de drop de archivo), `InvoiceDesigner.jsx`
   `SectionZone` y `ToggleRow` — los tres recibieron `role`, `tabIndex={0}`,
   `aria-label`/`aria-pressed`/`aria-checked` y un `onKeyDown` que dispara la
-  misma acción que el click con Enter/Espacio. Quedan 4 sitios vivos sin
-  tocar (`App.tsx`, `ExtractWorkspaceTable.tsx`, `InvoiceDesigner.jsx` un
-  sitio adicional, `PdfTemplateBuilder.tsx`) — no confirmados uno por uno en
-  esta pasada, quedan `mejorable`.
+  misma acción que el click con Enter/Espacio. **Los 4 sitios vivos
+  restantes sí se leyeron hoy — la nota original ("4 backdrops de modal")
+  era parcialmente imprecisa:** `App.tsx:329` (overlay del menú móvil),
+  `InvoiceDesigner.jsx:932` (backdrop del mini-modal de nombrar plantilla) y
+  `PdfTemplateBuilder.tsx:223` (backdrop del preview de PDF) sí son
+  backdrops que cierran al hacer click — pero el fix idiomático ahí no es
+  hacer el backdrop enfocable por Tab (no tiene sentido darle foco a un
+  fondo invisible de pantalla completa), sino un listener de tecla Escape
+  en el modal mismo, patrón distinto al que se aplicó en los 3 sitios de
+  arriba. El cuarto, `ExtractWorkspaceTable.tsx:99`, **no es un backdrop**:
+  es el handle de arrastre para redimensionar una columna
+  (`onMouseDown`/`onTouchStart`). Su equivalente por teclado (cambiar el
+  ancho con flechas) es una feature nueva, no un fix mecánico de una línea —
+  distinto nivel de esfuerzo a los otros tres. Los 4 quedan `mejorable`, con
+  la nota corregida sobre qué tipo de fix necesita cada uno.
 - **`prefer-tag-over-role` (2, nueva) — confirmado que apareció por los
   fixes de hoy, con la razón correcta.** Los 2 hallazgos son exactamente los
   2 `div role="button"` que se acaban de agregar (`ConsultasSATPage.tsx:140`,
@@ -483,13 +541,26 @@ agente pensó en su momento.
   `outline: 'none'` sin ningún indicador de foco alternativo — invisibles
   para navegación por teclado. Se quitó la propiedad, queda el outline
   nativo del navegador.
-- **`no-autofocus` (1) — no re-verificado en detalle.** `InvoiceDesigner.jsx:959`.
-  El veredicto original ("falta un componente Modal accesible completo,
-  fuera de alcance") es plausible pero no se leyó el código en esta pasada —
-  queda `pendiente de re-verificación` si se retoma.
-- **`no-tiny-text` (68) — no re-verificado línea por línea.** Mismo
-  criterio que el resto de "no re-verificado": requiere QA visual real en
-  navegador, no solo lectura de código, y no se hizo en esta pasada.
+- **`no-autofocus` (1) — confirmado, cerrado.** `InvoiceDesigner.jsx:959`:
+  `<input autoFocus>` dentro del mini-modal de nombrar plantilla nueva/
+  duplicada. Es un patrón de UX estándar y generalmente aceptado (WAI-ARIA
+  APG lo recomienda para diálogos con un control primario de texto) —
+  el problema de fondo no es el `autoFocus` en sí, es que el `<div>` que
+  hace de modal no tiene `role="dialog"`, `aria-modal`, ni gestiona el foco
+  al cerrarse (devolverlo a quien abrió el modal). Confirmado que el
+  veredicto original apuntaba al problema correcto: se necesita un
+  componente Modal accesible completo, no remover una línea de `autoFocus`.
+  Fuera de alcance de un fix puntual, queda agendado.
+- **`no-tiny-text` (68) — distribución confirmada, no leído cada sitio
+  individual.** 43 de 68 en `InvoiceDesigner.jsx` (vivo), 25 en cluster
+  Editor. Muestreadas 3 de las 43 (líneas 765, 862, 1102): valores reales de
+  `0.66rem` (≈10.56px), `0.72rem` (≈11.52px) y `10px` literal — genuinamente
+  por debajo del mínimo de 12px, en el panel de propiedades (toolbar denso
+  de controles). Confirma que la descripción del veredicto original
+  ("mayoría en InvoiceDesigner, toolbar denso") es correcta. No se leyeron
+  las 40 restantes una por una — el veredicto de "requiere QA visual en
+  navegador antes de tocar" ya lo dejaba correctamente fuera de un fix
+  mecánico de todas formas, así que no cambia la conclusión.
 
 ## Relación con "Hallazgos preexistentes" (PROJECT_STATE.md)
 

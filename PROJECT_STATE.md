@@ -645,15 +645,25 @@ worktrees (comparado archivo por archivo, sin pérdidas) antes de borrarlos.
 Al re-derivar la evidencia contra el código real se encontraron y
 corrigieron 3 errores en la tabla original: conteo de `button-has-type`
 (decía 15 vivos corregidos, son 14), y `control-has-associated-label` /
-`label-has-associated-control` con vivo/cluster invertidos. Detalle completo
-en `docs/react-doctor-veredictos.md` §Veredictos 7-10. Quedan marcadas
-`pendiente de re-verificación individual` (veredicto plausible pero no
-releído contra código en esta pasada): `no-transition-all`,
-`js-combine-iterations`, `js-flatmap-filter`, `use-lazy-motion`,
-`no-autofocus`, `no-tiny-text`, y 4 sitios vivos de
-`no-static-element-interactions`/`click-events-have-key-events`. El resto de
-las 48 familias originales sigue sin veredicto (`pendiente`, nunca tocado
-por esta escalada) — nueva escalada futura se decide con el usuario.
+`label-has-associated-control` con vivo/cluster invertidos.
+
+**Cierre completo 2026-07-21 (segunda pasada, mismo día):** las 7 familias
+que habían quedado `pendiente de re-verificación individual` (`no-transition-
+all`, `js-combine-iterations`, `js-flatmap-filter`, `use-lazy-motion`,
+`no-autofocus`, `no-tiny-text`, y los 4 sitios vivos de
+`no-static-element-interactions`/`click-events-have-key-events`) ya se
+releyeron contra el código real — todas confirmadas, con una corrección de
+detalle (los "4 backdrops de modal" eran en realidad 3 backdrops + 1 handle
+de resize de columna, que necesita un fix distinto). Como parte de esta
+pasada se encontró y corrigió además un hallazgo que **no** era parte de las
+53 familias originales: el aviso de `require-reduced-motion` del hook de
+pre-commit (documentado como brecha real más abajo en "Hallazgos
+preexistentes") resultó ser un **falso positivo** — `main.tsx` ya tiene
+`<MotionConfig reducedMotion="user">`, la regla solo no lo vio en modo
+`--staged`. Sin pendientes de esta escalada. Detalle completo en
+`docs/react-doctor-veredictos.md` §Veredictos 7-10. El resto de las 48
+familias originales (fuera de esta escalada de 5 agentes) sigue sin
+veredicto (`pendiente`) — nueva escalada futura se decide con el usuario.
 
 ## Hallazgos preexistentes encontrados al pasar (no arreglados, solo anotados)
 
@@ -690,12 +700,22 @@ si vale la pena arreglarla.
   masivo). Sugiere que el componente cambió de texto/comportamiento y el
   test no se actualizó, o viceversa — no investigado cuál de los dos está
   "mal".
-- **Accesibilidad, proyecto completo**: el hook de pre-commit `react-doctor`
+- ~~**Accesibilidad, proyecto completo**: el hook de pre-commit `react-doctor`
   reporta "Project uses a motion library but has no prefers-reduced-motion
-  handling — required for accessibility (WCAG 2.3.3)" — no es de un archivo
-  específico, es una brecha a nivel de cómo se usa la librería de animación
-  en todo el proyecto. Encontrado al hacer commit del fix de progreso de
-  extracción (2026-07-12), no relacionado con ese cambio.
+  handling — required for accessibility (WCAG 2.3.3)"~~ **FALSO POSITIVO,
+  cerrado 2026-07-21.** `main.tsx:22` ya tiene
+  `<MotionConfig reducedMotion="user">` envolviendo toda la app — la forma
+  correcta y documentada de Motion de respetar la preferencia de
+  accesibilidad del sistema operativo. Confirmado leyendo la implementación
+  real de la regla (`checkReducedMotion` en
+  `node_modules/react-doctor/dist/index.js`): busca ese patrón exacto en
+  todo el árbol vía `git grep` y, si lo encuentra en cualquier archivo, no
+  reporta nada. Dos escaneos completos (`--verbose`, sin `--staged`)
+  corridos el 2026-07-21 nunca mostraron este aviso; solo apareció una vez,
+  en modo `--staged` del hook de commit — el modo usado por el pre-commit
+  parece no incluir `main.tsx` en su barrido cuando ese archivo no es parte
+  del commit. La brecha de WCAG 2.3.3 no existe; el proyecto ya la resuelve.
+  Detalle en `docs/react-doctor-veredictos.md` §Veredictos 9.
 - **3 tests más que fallan, encontrados al correr la suite completa del
   frontend (2026-07-13), no relacionados con el cambio de esa sesión
   (reconciliación por sospecha en `watchBatchProgress`):**
