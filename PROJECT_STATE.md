@@ -612,6 +612,26 @@ veces con HAR real, ver "Último cambio" arriba.)
 - `~/.cfdi-suite/secret.key` es la llave maestra; si se pierde, las credenciales guardadas no son recuperables
 - Token personal de Sentry generado en una sesión anterior quedó expuesto en el chat — recomendado revocarlo desde Sentry (Settings → Developer Settings → Personal Tokens) una vez cerrado el diagnóstico de signal 6.
 
+## Iniciativa react-doctor — veredictos por familia (iniciada 2026-07-13)
+
+Fuente de verdad: **`docs/react-doctor-veredictos.md`**. Baseline congelada
+34/100 con 840 hallazgos en 53 reglas (post-piloto: 36/100 con 921 — el fix
+del parse error de `DocumentSettings.jsx` destapó ~91 hallazgos invisibles).
+Regla central: ningún hallazgo se arregla a ciegas — veredicto razonado por
+familia (tiene-razón-de-ser / error-real / mejorable / falso-positivo).
+
+Estado del piloto (completado): 6 familias veredictadas — 3 falsos positivos
+suprimidos en `frontend/doctor.config.ts` (con justificación), 1 mejorable
+agendado (iframe sandbox, requiere prueba en navegador), los 19 archivos
+"unused" clasificados con investigación de propósito (1 resultó ser crítico
+para el backend y su ruta rota se corrigió; 4 se borraron con confirmación
+del usuario; 14 se conservan como feature Editor pausada), y el error TS
+preexistente corregido (lint verde). Post-borrados: 36/100, 877. Política
+anti-preexistentes y de código no usado ahora en `AGENTS.md`. Script
+`npm run doctor` fijado a la versión local (antes `@latest`, scores no
+comparables). Pendiente: 48 familias con veredicto `pendiente`; la escalada
+a team agents por familia se decide con el usuario.
+
 ## Hallazgos preexistentes encontrados al pasar (no arreglados, solo anotados)
 
 Esta sección existe porque, en la sesión del 2026-07-12 (batch masivo/Cloud
@@ -622,12 +642,23 @@ documento. A partir de ahora, cualquier cosa que se encuentre rota "de paso"
 con evidencia (no solo "creo que ya estaba así"), para poder decidir después
 si vale la pena arreglarla.
 
-- **`frontend/src/components/editor/DocumentSettings.jsx:295`** — error de
-  TypeScript (`TS1005: '...' expected`) que hace fallar `npm run lint`
-  (`tsc --noEmit`) para todo el proyecto. Confirmado preexistente con
-  `git stash` (el error persiste sin ningún cambio de la sesión del
-  2026-07-12 aplicado). No investigado a fondo — no se sabe si el archivo
-  se usa en producción o es código en desarrollo.
+- ~~**`frontend/src/components/editor/DocumentSettings.jsx:295`** — error de
+  TypeScript (`TS1005: '...' expected`) que hace fallar `npm run lint`~~
+  **RESUELTO 2026-07-13** (piloto react-doctor): era un comentario JSX en
+  posición de atributo. Corregido junto con la creación del
+  `src/vite-env.d.ts` faltante — `npx tsc --noEmit` en verde por primera
+  vez. El archivo resultó ser parte del cluster Editor desconectado (feature
+  pausada). Detalle en `docs/react-doctor-veredictos.md` §Veredictos 6.
+- ~~**`backend/app/providers/current_ts.py:19` — ruta rota al wrapper del
+  provider fallback `current-ts`**~~ **RESUELTO 2026-07-13** (mismo día en
+  que se encontró, con confirmación del usuario): `WRAPPER_PATH` apuntaba a
+  `<repo>/src/...` pero el archivo vive en `<repo>/frontend/src/...` desde
+  el movimiento del frontend (2026-06-03) — el provider fallback tronaba en
+  silencio desde entonces. Corregidos `WRAPPER_PATH` y `cwd` (tsx vive en
+  `frontend/node_modules`); probado de punta a punta con
+  `CurrentTsProvider().analyze()`. Encontrado gracias a la política de
+  código no usado: react-doctor marcaba el wrapper como "unused file" y la
+  investigación de propósito reveló al consumidor del backend.
 - **`frontend/src/components/extract-workspace/ExtractWorkspaceToolbar.test.tsx`**
   — 2 de sus tests fallan (`shows the no-search summary when the global
   search is empty` y otro similar): esperan el texto "sin busqueda global

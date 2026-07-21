@@ -25,6 +25,7 @@ export default function AppHeader({ activeView, onToggleSidebar }: AppHeaderProp
     <header className="sticky top-0 z-20 flex h-[65px] shrink-0 items-center justify-between border-b border-gray-200 bg-white/80 px-4 backdrop-blur-sm backdrop-saturate-150">
       <div className="flex items-center gap-3">
         <button
+          type="button"
           onClick={onToggleSidebar}
           className={clsx(
             'flex size-8 items-center justify-center rounded-lg text-gray-600',

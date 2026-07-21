@@ -189,6 +189,39 @@ const RULE_SWATCHES = [
   { color: '#A0AEC0', label: 'Gris' },
 ]
 
+// Densidades de tabla (TableControls). No dependen de props/estado.
+const TABLE_DENSITY_OPTS = [
+  { value: 'compact',     label: 'Compacto',  desc: 'Más filas por página (mejor para facturas largas)' },
+  { value: 'normal',      label: 'Normal',    desc: 'Tamaño estándar, equilibrado' },
+  { value: 'comfortable', label: 'Cómodo',    desc: 'Más espacio entre líneas, fácil de leer' },
+]
+
+// Estilo compartido de los <select> de una regla (RuleRow). Estático.
+const RULE_ROW_SELECT_STYLE = {
+  padding: '0.25rem 0.4rem', fontSize: '0.78rem', borderRadius: 6,
+  border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))',
+  color: 'hsl(var(--foreground))', outline: 'none',
+}
+
+// Elementos togglables del pie de página (TotalsControls). No dependen de props/estado.
+const TOTALS_FOOTER_ITEMS = [
+  {
+    key: 'show_uuid',
+    label: 'Folio Fiscal (UUID)',
+    desc: 'Imprime el identificador único del timbre fiscal digital',
+  },
+  {
+    key: 'show_fecha_timbrado',
+    label: 'Fecha de timbrado',
+    desc: 'Muestra la fecha y el número de certificado SAT',
+  },
+  {
+    key: 'show_disclaimer',
+    label: 'Leyenda de representación impresa',
+    desc: '"Este documento es una representación impresa de un CFDI"',
+  },
+]
+
 function reorder(arr, from, to) {
   if (to < 0 || to >= arr.length) return arr
   const next = arr.slice()
@@ -203,6 +236,12 @@ function operatorsForFormat(format) {
 
 function friendlyField(field, labels) {
   return (labels && labels[field]) || FIELD_LABELS[field] || field
+}
+
+// El backend devuelve nombre="default" (fallback al id) para la predeterminada;
+// la mostramos con una etiqueta amable en vez del slug.
+function displayName(d) {
+  return d.id === 'default' && d.nombre === 'default' ? 'Predeterminada' : d.nombre
 }
 
 // Validación en vivo de columnas (contrato Fase 0, §4.4). Espeja la validación
@@ -288,11 +327,17 @@ export default function InvoiceDesigner({ templateId = 'default', onTemplateIdCh
 
   // Cargar configuración al inicio
   useEffect(() => {
+    // Guard contra respuestas fuera de orden: si el usuario cambia de
+    // plantilla antes de que resuelva el fetch anterior, esa respuesta vieja
+    // no debe pisar el estado de la plantilla actual (mismo problema que ya
+    // se resuelve para el preview de tabla con previewReqIdRef, ver abajo).
+    let cancelled = false
     Promise.all([
       fetch(`/api/templates/${templateId}/design`).then(r => r.json()),
       fetch(`/api/templates/${templateId}/html`).then(r => r.json()),
       fetch('/api/templates/design-defaults').then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([design, htmlData, defaults]) => {
+      if (cancelled) return
       designMetaRef.current = {
         nombre:        design.nombre,
         es_referencia: design.es_referencia,
@@ -321,7 +366,8 @@ export default function InvoiceDesigner({ templateId = 'default', onTemplateIdCh
       setReglasRaw(Array.isArray(tabla.reglas) ? tabla.reglas.map(r => ({ ...r })) : [])
       setHtmlTemplateRaw(htmlData.html || '')
       setDirty(false)
-    }).catch(() => {}).finally(() => setLoading(false))
+    }).catch(() => {}).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [templateId])
 
   const colors = useMemo(() => deriveColors(brandColor), [brandColor])
@@ -654,10 +700,6 @@ export default function InvoiceDesigner({ templateId = 'default', onTemplateIdCh
     : isReference
       ? 'Las plantillas de referencia no se pueden eliminar.'
       : 'Eliminar la plantilla actual.'
-  // El backend devuelve nombre="default" (fallback al id) para la predeterminada;
-  // la mostramos con una etiqueta amable en vez del slug.
-  const displayName = d => (d.id === 'default' && d.nombre === 'default' ? 'Predeterminada' : d.nombre)
-
   if (loading) return (
     <div style={{ padding: '2rem', color: 'hsl(var(--muted-foreground))' }}>
       Cargando diseño...
@@ -1027,6 +1069,10 @@ function SectionZone({ id, label, active, onSelect, accentColor, children }) {
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={isActive}
+      aria-label={`Editar sección: ${label}`}
       style={{
         position: 'relative',
         cursor: 'pointer',
@@ -1036,6 +1082,12 @@ function SectionZone({ id, label, active, onSelect, accentColor, children }) {
         transition: 'outline 0.12s',
       }}
       onClick={() => onSelect(id)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect(id)
+        }
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -1322,7 +1374,6 @@ function HeaderControls({ brandColor, onBrandColor, logoUrl, onLogoUrl, htmlTemp
               borderRadius: 6,
               background: 'hsl(var(--card))',
               color: 'hsl(var(--foreground))',
-              outline: 'none',
             }}
           />
           <div style={{ width: 38, height: 38, borderRadius: 6, background: brandColor, border: '1px solid hsl(var(--border))' }} />
@@ -1349,7 +1400,6 @@ function HeaderControls({ brandColor, onBrandColor, logoUrl, onLogoUrl, htmlTemp
             borderRadius: 6,
             background: 'hsl(var(--card))',
             color: 'hsl(var(--foreground))',
-            outline: 'none',
             boxSizing: 'border-box',
           }}
         />
@@ -1421,7 +1471,6 @@ function HeaderControls({ brandColor, onBrandColor, logoUrl, onLogoUrl, htmlTemp
                 padding: '0.6rem',
                 background: 'hsl(var(--card))',
                 color: 'hsl(var(--foreground))',
-                outline: 'none',
                 boxSizing: 'border-box',
               }}
             />
@@ -1457,11 +1506,7 @@ function PaletteSwatch({ brandColor }) {
 }
 
 function TableControls({ density, onDensity, tableProps }) {
-  const opts = [
-    { value: 'compact',     label: 'Compacto',  desc: 'Más filas por página (mejor para facturas largas)' },
-    { value: 'normal',      label: 'Normal',    desc: 'Tamaño estándar, equilibrado' },
-    { value: 'comfortable', label: 'Cómodo',    desc: 'Más espacio entre líneas, fácil de leer' },
-  ]
+  const opts = TABLE_DENSITY_OPTS
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.4rem' }}>
       <ControlGroup label="Densidad de filas">
@@ -1668,7 +1713,7 @@ function ColumnRow({
           style={{
             flex: 1, minWidth: 0, padding: '0.25rem 0.4rem', fontSize: '0.8rem',
             border: '1px solid hsl(var(--border))', borderRadius: 6,
-            background: 'hsl(var(--card))', color: 'hsl(var(--foreground))', outline: 'none',
+            background: 'hsl(var(--card))', color: 'hsl(var(--foreground))',
           }}
         />
 
@@ -1753,7 +1798,7 @@ function ColumnRow({
               style={{
                 width: 70, padding: '0.2rem 0.4rem', fontSize: '0.78rem',
                 border: `1px solid ${badWidth ? '#C53030' : 'hsl(var(--border))'}`,
-                borderRadius: 6, background: 'hsl(var(--card))', color: 'hsl(var(--foreground))', outline: 'none',
+                borderRadius: 6, background: 'hsl(var(--card))', color: 'hsl(var(--foreground))',
               }}
             />
             <span style={{ fontSize: '0.72rem', color: 'hsl(var(--muted-foreground))' }}>pt</span>
@@ -1863,11 +1908,7 @@ function RuleRow({ rule, idx, isFirst, isLast, columns, fieldLabels, onMove, onC
   const hiddenCellWarning = rule.scope === 'cell' && refCol && !refCol.visible
   const valueEmpty = !String(rule.valor ?? '').trim()
 
-  const selStyle = {
-    padding: '0.25rem 0.4rem', fontSize: '0.78rem', borderRadius: 6,
-    border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))',
-    color: 'hsl(var(--foreground))', outline: 'none',
-  }
+  const selStyle = RULE_ROW_SELECT_STYLE
 
   const chevBtn = (dir, disabled, glyph) => (
     <button
@@ -1979,23 +2020,7 @@ function RuleRow({ rule, idx, isFirst, isLast, columns, fieldLabels, onMove, onC
 }
 
 function TotalsControls({ cierre, onCierre }) {
-  const items = [
-    {
-      key: 'show_uuid',
-      label: 'Folio Fiscal (UUID)',
-      desc: 'Imprime el identificador único del timbre fiscal digital',
-    },
-    {
-      key: 'show_fecha_timbrado',
-      label: 'Fecha de timbrado',
-      desc: 'Muestra la fecha y el número de certificado SAT',
-    },
-    {
-      key: 'show_disclaimer',
-      label: 'Leyenda de representación impresa',
-      desc: '"Este documento es una representación impresa de un CFDI"',
-    },
-  ]
+  const items = TOTALS_FOOTER_ITEMS
 
   return (
     <ControlGroup label="Elementos del pie">
@@ -2042,8 +2067,18 @@ function ControlGroup({ label, children }) {
 function ToggleRow({ label, desc, value, onChange }) {
   return (
     <div
+      role="switch"
+      tabIndex={0}
+      aria-checked={value}
+      aria-label={label}
       style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer' }}
       onClick={() => onChange(!value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onChange(!value)
+        }
+      }}
     >
       {/* Toggle pill */}
       <div style={{

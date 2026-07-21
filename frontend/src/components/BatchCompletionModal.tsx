@@ -207,6 +207,7 @@ export default function BatchCompletionModal({
         <div className="flex gap-2">
           {(conErrores > 0 || errors > 0) && (
             <button
+              type="button"
               onClick={handleViewTriage}
               className="flex-1 rounded-lg bg-primary-600 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-700"
             >
@@ -214,6 +215,7 @@ export default function BatchCompletionModal({
             </button>
           )}
           <button
+            type="button"
             onClick={onClose}
             className="flex-1 rounded-lg border border-gray-200 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
           >

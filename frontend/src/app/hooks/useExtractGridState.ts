@@ -56,10 +56,10 @@ export function useExtractGridState(params: {
   const [pagoColumnOrder, setPagoColumnOrder] = useState<string[]>([]);
   const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
 
-  const activeExtractBaseRows = useMemo(
-    () => (activeDatasetType === 'ingresos' ? ingresoRows : pagoRows),
-    [activeDatasetType, ingresoRows, pagoRows],
-  );
+  // react-doctor no-usememo-simple-expression: es una lectura simple (ternario sobre
+  // referencias existentes), memoizarla cuesta más que evaluarla — mismo resultado
+  // referencial en cada render sin el overhead de useMemo.
+  const activeExtractBaseRows = activeDatasetType === 'ingresos' ? ingresoRows : pagoRows;
   const activeExtractRows = useMemo(
     () => activeExtractBaseRows.map((row) => asRecord(row)),
     [activeExtractBaseRows],

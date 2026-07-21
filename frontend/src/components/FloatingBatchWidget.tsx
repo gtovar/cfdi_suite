@@ -18,8 +18,9 @@ export default function FloatingBatchWidget({ status, onNavigate, onDismiss }: F
   return (
     <div className="float-widget-in fixed bottom-5 right-5 z-40 w-72 rounded-xl border border-gray-200 bg-white shadow-2xl">
       <button
+        type="button"
         onClick={onNavigate}
-        className="block w-full rounded-xl p-3 text-left transition-colors hover:bg-gray-50"
+        className="block w-full rounded-xl p-3 pr-8 text-left transition-colors hover:bg-gray-50"
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -34,12 +35,6 @@ export default function FloatingBatchWidget({ status, onNavigate, onDismiss }: F
                 : 'Lote completado'}
             </span>
           </div>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-            className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-          >
-            <X size={12} />
-          </button>
         </div>
 
         <div className="mt-2">
@@ -60,6 +55,14 @@ export default function FloatingBatchWidget({ status, onNavigate, onDismiss }: F
             Clic para ver el progreso en detalle →
           </p>
         )}
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Cerrar"
+        className="absolute top-3 right-3 rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+      >
+        <X size={12} />
       </button>
     </div>
   );

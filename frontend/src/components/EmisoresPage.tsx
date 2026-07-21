@@ -93,8 +93,9 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
         {/* Modal body */}
         <form onSubmit={handleSubmit} className="space-y-4 p-5">
           <div>
-            <label className={labelClass}>RFC Emisor *</label>
+            <label className={labelClass} htmlFor="emisor-rfc">RFC Emisor *</label>
             <input
+              id="emisor-rfc"
               ref={firstRef}
               value={rfc}
               onChange={(e) => setRfc(e.target.value)}
@@ -105,8 +106,9 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
           </div>
 
           <div>
-            <label className={labelClass}>Credential ID *</label>
+            <label className={labelClass} htmlFor="emisor-credential-id">Credential ID *</label>
             <input
+              id="emisor-credential-id"
               value={credentialId}
               onChange={(e) => setCredentialId(e.target.value)}
               className={inputClass}
@@ -183,8 +185,12 @@ function EmisorModal({ initial, onSave, onClose }: ModalProps) {
 function FielCard() {
   const [status, setStatus] = useState<FielStatus | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [cerFile, setCerFile] = useState<File | null>(null);
-  const [keyFile, setKeyFile] = useState<File | null>(null);
+  // react-doctor rerender-state-only-in-handlers: los <input type="file"> son
+  // no-controlados (el navegador no permite bindear `value` a un File), y estos
+  // valores solo se leen dentro de handleSave — useRef evita re-renders del
+  // formulario en cada selección de archivo sin cambiar ningún comportamiento visible.
+  const cerFileRef = useRef<File | null>(null);
+  const keyFileRef = useRef<File | null>(null);
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -197,6 +203,8 @@ function FielCard() {
 
   async function handleSave(e: { preventDefault: () => void }) {
     e.preventDefault();
+    const cerFile = cerFileRef.current;
+    const keyFile = keyFileRef.current;
     if (!cerFile || !keyFile || !password) {
       setFormError('Todos los campos son obligatorios');
       return;
@@ -286,7 +294,7 @@ function FielCard() {
               <input
                 type="file"
                 accept=".cer"
-                onChange={(e) => setCerFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => { cerFileRef.current = e.target.files?.[0] ?? null; }}
                 className={inputClass}
               />
             </div>
@@ -297,7 +305,7 @@ function FielCard() {
               <input
                 type="file"
                 accept=".key"
-                onChange={(e) => setKeyFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => { keyFileRef.current = e.target.files?.[0] ?? null; }}
                 className={inputClass}
               />
             </div>

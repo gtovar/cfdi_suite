@@ -136,6 +136,7 @@ export default function InspectorHeader({
       {/* Izquierda: nav + título */}
       <div className="flex items-center gap-3 min-w-0">
         <button
+          type="button"
           onClick={onReset}
           className={clsx(
             'flex shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition-colors duration-200 hover:border-gray-300 hover:bg-gray-100 hover:text-gray-700',

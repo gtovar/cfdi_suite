@@ -292,7 +292,7 @@ function SignatureSettings({ config, onChange }) {
                 <textarea
                     value={config.privateKeyPem || ''}
                     onChange={(e) => handleChange('privateKeyPem', e.target.value)}
-                    placeholder="-----BEGIN PRIVATE KEY-----..." {/* pragma: allowlist secret */}
+                    placeholder={"-----BEGIN PRIVATE KEY-----..." /* pragma: allowlist secret */}
                     rows={3}
                     style={{ width: '100%', padding: '0.4rem', fontSize: '0.75rem', fontFamily: 'monospace', border: '1px solid hsl(var(--border))', borderRadius: '4px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', resize: 'vertical' }}
                 />

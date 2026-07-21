@@ -28,6 +28,7 @@ export default function ConceptDetailModal({
         >
           <div className="flex items-center justify-between mb-8">
             <button
+              type="button"
               onClick={onClose}
               className="flex items-center gap-2 text-xs font-mono uppercase tracking-widest hover:underline"
             >

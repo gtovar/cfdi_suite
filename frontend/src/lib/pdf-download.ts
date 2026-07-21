@@ -217,13 +217,15 @@ export async function startZipConversion(
   });
   
   if (!resProcess.ok) {
-    const errorText = await resProcess.text().catch(() => 'Error desconocido');
-    
     // AQUÍ CACHAMOS EL MICRO-PASO 1 DEL BACKEND
+    // react-doctor async-defer-await: el 429 no usa el body de la respuesta, así que
+    // se revisa el status ANTES de leerlo — evita esperar un .text() que se iba a
+    // descartar, sin cambiar el mensaje ni el tipo de error en ningún caso.
     if (resProcess.status === 429) {
       throw new Error("El motor de procesamiento está a máxima capacidad. Por favor, espera unos minutos e intenta de nuevo.");
     }
-    
+
+    const errorText = await resProcess.text().catch(() => 'Error desconocido');
     throw new Error(`Error al iniciar la descompresión interna: ${errorText}`);
   }
 

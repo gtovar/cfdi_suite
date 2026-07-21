@@ -61,6 +61,7 @@ export default function RfcValidationPanel({
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-gray-700">Formato local</span>
           <button
+            type="button"
             onClick={onValidateFormat}
             disabled={formatLoading}
             className="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50 flex items-center gap-1"

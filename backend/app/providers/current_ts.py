@@ -16,7 +16,10 @@ from .base import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-WRAPPER_PATH = REPO_ROOT / "src" / "cfdi" / "engine" / "current-ts-wrapper.ts"
+# El wrapper vive bajo frontend/ desde el movimiento del 2026-06-03; el cwd
+# también debe ser frontend/ para que node resuelva tsx desde su node_modules.
+FRONTEND_ROOT = REPO_ROOT / "frontend"
+WRAPPER_PATH = FRONTEND_ROOT / "src" / "cfdi" / "engine" / "current-ts-wrapper.ts"
 
 
 class CurrentTsProviderError(RuntimeError):
@@ -35,7 +38,7 @@ class CurrentTsProvider(CfdiAnalysisProvider):
                 input=xml,
                 capture_output=True,
                 text=True,
-                cwd=REPO_ROOT,
+                cwd=FRONTEND_ROOT,
                 check=False,
                 timeout=ANALYZE_CFDI_PROVIDER_TIMEOUT_SECONDS,
             )

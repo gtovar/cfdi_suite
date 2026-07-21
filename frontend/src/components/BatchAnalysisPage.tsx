@@ -329,6 +329,7 @@ function TriageHeader({
       {/* Status boxes — clicables para filtrar */}
       <div className="flex gap-3">
         <button
+          type="button"
           onClick={() => onFilter(filterStatus === 'ok' ? 'all' : 'ok')}
           className={clsx(
             'flex-1 rounded-xl border px-4 py-3 text-left transition-all duration-150',
@@ -569,7 +570,9 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const [files, setFiles] = useState<File[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
-  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
+  // react-doctor rerender-state-only-in-handlers: nunca se lee en el render, solo se
+  // escribe una vez al restaurar el lote desde localStorage → useRef en vez de useState.
+  const activeBatchIdRef = useRef<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightSummary | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
@@ -739,7 +742,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   useEffect(() => {
     const savedBatchId = localStorage.getItem('cfdi_active_batch_id');
     if (savedBatchId) {
-      setActiveBatchId(savedBatchId);
+      activeBatchIdRef.current = savedBatchId;
       setPhase('processing');
       setProcessStartTime(Date.now());
       setWasRestored(true);
@@ -1536,8 +1539,9 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
               <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Reportes</p>
               <div className="flex flex-wrap items-end gap-3">
                 <div className="flex flex-col gap-1">
-                  <label className="text-tiny font-medium text-gray-500">Mes</label>
+                  <label className="text-tiny font-medium text-gray-500" htmlFor="diot-mes">Mes</label>
                   <select
+                    id="diot-mes"
                     value={diotMonth}
                     onChange={(e) => { setDiotMonth(Number(e.target.value)); setDiotHalves(null); setDiotError(null); }}
                     className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
@@ -1557,8 +1561,9 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
                   />
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-tiny font-medium text-gray-500">RFC presentante</label>
+                  <label className="text-tiny font-medium text-gray-500" htmlFor="diot-rfc">RFC presentante</label>
                   <input
+                    id="diot-rfc"
                     type="text"
                     value={diotRfc}
                     onChange={(e) => setDiotRfc(e.target.value.toUpperCase())}

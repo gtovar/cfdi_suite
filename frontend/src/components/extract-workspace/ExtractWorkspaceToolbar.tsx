@@ -70,6 +70,7 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
 
           <input
             type="text"
+            aria-label={`Buscar en ${searchScopeLabel}`}
             placeholder={`Buscar en ${searchScopeLabel}…`}
             value={extractSearchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -102,6 +103,7 @@ export default function ExtractWorkspaceToolbar({ grid }: ExtractWorkspaceToolba
 
           <div className="relative" ref={colsRef}>
             <button
+              type="button"
               onClick={() => setColsOpen((v) => !v)}
               className={clsx(
                 'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors duration-200',

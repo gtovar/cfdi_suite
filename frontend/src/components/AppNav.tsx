@@ -93,6 +93,7 @@ export default function AppSidebar({
                 return (
                   <button
                     key={item.id}
+                    type="button"
                     disabled={item.disabled}
                     onClick={() => { if (!item.disabled) { onViewChange(item.id); onMobileClose(); } }}
                     title={collapsed ? item.label : item.hint}
@@ -139,6 +140,7 @@ export default function AppSidebar({
       {/* Collapse toggle */}
       <div className="shrink-0 border-t border-gray-200 p-3">
         <button
+          type="button"
           onClick={onToggleCollapse}
           title={collapsed ? 'Expandir sidebar' : 'Colapsar sidebar'}
           className={clsx(

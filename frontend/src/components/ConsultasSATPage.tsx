@@ -22,10 +22,13 @@ export default function ConsultasSATPage() {
   const [phase, setPhase] = useState<Phase>('idle');
   const [processed, setProcessed] = useState(0);
   const [total, setTotal] = useState(0);
-  const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // react-doctor rerender-state-only-in-handlers: solo se lee/escribe dentro de
+  // handlers (handleStart/handleDownload/handleReset), nunca se renderiza — useRef
+  // evita los re-renders de setJobId que no pintaban nada distinto.
+  const jobIdRef = useRef<string | null>(null);
 
   function handleFileDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -43,7 +46,7 @@ export default function ConsultasSATPage() {
     setPhase('processing');
     setProcessed(0);
     setTotal(0);
-    setJobId(null);
+    jobIdRef.current = null;
     setError(null);
 
     const abort = new AbortController();
@@ -57,7 +60,7 @@ export default function ConsultasSATPage() {
             setProcessed(event.processed);
             setTotal(event.total);
           } else if (event.type === 'done') {
-            setJobId(event.job_id);
+            jobIdRef.current = event.job_id;
             setTotal(event.total);
             setPhase('done');
           }
@@ -78,10 +81,11 @@ export default function ConsultasSATPage() {
   }
 
   async function handleDownload() {
-    if (!jobId) return;
+    const currentJobId = jobIdRef.current;
+    if (!currentJobId) return;
     try {
-      await downloadBatchResult(jobId);
-      setJobId(null);
+      await downloadBatchResult(currentJobId);
+      jobIdRef.current = null;
       setFile(null);
       setPhase('idle');
     } catch (err) {
@@ -93,7 +97,7 @@ export default function ConsultasSATPage() {
     setFile(null);
     setPhase('idle');
     setError(null);
-    setJobId(null);
+    jobIdRef.current = null;
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -133,9 +137,18 @@ export default function ConsultasSATPage() {
           <div className="p-5 space-y-4">
             {/* Drop zone */}
             <div
+              role="button"
+              tabIndex={0}
+              aria-label="Seleccionar archivo Excel para el batch"
               onDragOver={(e) => e.preventDefault()}
               onDrop={handleFileDrop}
               onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
               className={clsx(
                 'cursor-pointer rounded-lg border-2 border-dashed p-8 text-center transition-colors duration-200',
                 file
@@ -189,6 +202,7 @@ export default function ConsultasSATPage() {
               <div className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
                 <span className="text-sm text-emerald-700 font-medium">{total} CFDIs consultados</span>
                 <button
+                  type="button"
                   onClick={handleDownload}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors duration-200 hover:bg-emerald-700"
                 >

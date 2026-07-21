@@ -68,6 +68,7 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
               <th className="w-10 px-2 py-2.5 font-normal">
                 <input
                   type="checkbox"
+                  aria-label="Seleccionar todas las filas"
                   checked={table.getIsAllPageRowsSelected()}
                   ref={(node) => {
                     if (node) node.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected();
@@ -125,6 +126,7 @@ export default function ExtractWorkspaceTable({ activeDatasetType, grid }: Extra
               <td className="px-2 py-2 text-center">
                 <input
                   type="checkbox"
+                  aria-label="Seleccionar fila"
                   checked={row.getIsSelected()}
                   onChange={row.getToggleSelectedHandler()}
                 />
