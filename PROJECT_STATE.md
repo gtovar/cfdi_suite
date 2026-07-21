@@ -629,8 +629,31 @@ del usuario; 14 se conservan como feature Editor pausada), y el error TS
 preexistente corregido (lint verde). Post-borrados: 36/100, 877. Política
 anti-preexistentes y de código no usado ahora en `AGENTS.md`. Script
 `npm run doctor` fijado a la versión local (antes `@latest`, scores no
-comparables). Pendiente: 48 familias con veredicto `pendiente`; la escalada
-a team agents por familia se decide con el usuario.
+comparables).
+
+**Escalada a team agents (5 worktrees, una familia por agente) — código
+mezclado y en producción, documentación cerrada 2026-07-21 tras quedar
+incompleta por corte de contexto.** La sesión coordinadora que mezcló el
+trabajo de los 5 agentes a `main` se quedó sin tokens antes de: (a) limpiar
+los 5 worktrees/ramas huérfanas (`.claude/worktrees/agent-*`,
+`worktree-agent-*`) y (b) escribir la evidencia de las secciones
+"§Veredictos 7-10" que la tabla de `docs/react-doctor-veredictos.md` ya
+referenciaba — la tabla tenía veredictos y números, pero las secciones de
+evidencia no existían en ningún lado (ni en main, ni en los 5 worktrees).
+Verificado 2026-07-21 que el código de main es un superset exacto de los 5
+worktrees (comparado archivo por archivo, sin pérdidas) antes de borrarlos.
+Al re-derivar la evidencia contra el código real se encontraron y
+corrigieron 3 errores en la tabla original: conteo de `button-has-type`
+(decía 15 vivos corregidos, son 14), y `control-has-associated-label` /
+`label-has-associated-control` con vivo/cluster invertidos. Detalle completo
+en `docs/react-doctor-veredictos.md` §Veredictos 7-10. Quedan marcadas
+`pendiente de re-verificación individual` (veredicto plausible pero no
+releído contra código en esta pasada): `no-transition-all`,
+`js-combine-iterations`, `js-flatmap-filter`, `use-lazy-motion`,
+`no-autofocus`, `no-tiny-text`, y 4 sitios vivos de
+`no-static-element-interactions`/`click-events-have-key-events`. El resto de
+las 48 familias originales sigue sin veredicto (`pendiente`, nunca tocado
+por esta escalada) — nueva escalada futura se decide con el usuario.
 
 ## Hallazgos preexistentes encontrados al pasar (no arreglados, solo anotados)
 
