@@ -5,6 +5,69 @@
 main
 
 ## Último cambio
+**2026-07-22: Etapa 4 de remotezip cerrada de verdad en producción, con dos bugs reales
+encontrados y corregidos en el camino, más ajuste de `SHARD_SIZE`/`THRESHOLD` y una prueba de
+contención de cupo entre batches concurrentes. Detalle completo en "Extracción distribuida vía
+remotezip" → "Etapa 4" y "Prueba de contención de cupo entre batches concurrentes" más abajo.**
+
+Resumen: al pedir confirmación para "activar" `REMOTE_ZIP_SHARD_READ`, se descubrió que ya estaba
+activo desde el 13 de julio sin documentar (variable pegada de un deploy de canario), y que el Job
+real (`cfdi-batch-shard`) nunca se había actualizado con el código que lo soporta — un batch real
+de 2000 XMLs falló 2000/2000 al probarlo. Ambos bugs corregidos y reverificados con éxito
+(0 errores, PDFs reales). Después, por pedido del usuario: `BATCH_JOB_SHARD_SIZE` bajado de 100 a
+20 (~3.4x más rápido, 9m38s→2m53s), `BATCH_JOB_THRESHOLD` subido de 1 a 500 (con el cruce
+matemático real calculado en N≈288, umbral puesto con margen arriba de eso a propósito), y una
+prueba real de 4 ejecuciones concurrentes confirmó que Cloud Run reparte el cupo de CPU de forma
+justa entre "usuarios" distintos, sin acaparamiento.
+
+**Pendiente sin resolver, abierto por el usuario, investigado pero no arreglado**: qué pasa si se
+agota el plan gratuito de Redis (Upstash) — investigación completa hecha (agente Explore), con
+hallazgo real: la fase de extracción y las tareas del Job de shards pueden perder trabajo o
+tumbarse completas si Redis falla a mitad de proceso (varios call sites sin `try/except`, y el
+propio aviso de error también depende de Redis — puede fallar en silencio). Detalle completo,
+citas de línea exactas, y qué se vería el usuario en cada camino: ver conversación 2026-07-22
+completa. **Diagnosticado, no arreglado** — decisión pendiente de si vale la pena la inversión.
+
+**Fix real aplicado 2026-07-22, además de lo de Etapa 4**: `PDF_PROCESS_POOL`
+(`backend/app/services/pdf_pipeline.py`) usaba `min(8, cpu_count())` para decidir cuántos procesos
+crear — encontrado con una prueba de carga real (`curl` concurrente contra
+`/api/internal/generate-pdf`, con `x-cloudtasks-queuename` simulado) que esto está mal fundamentado:
+`cpu_count()` reporta 4 en una instancia con `--cpu=2` real (confirmado con un Job de diagnóstico
+desechable, 3 formas de medirlo coinciden en 4) — `cpu_count()` refleja afinidad de CPU (cuántos
+núcleos VE el proceso), no la cuota real de cómputo que Cloud Run factura y limita (cgroups). Con
+carga real, solo ~2 peticiones corren a velocidad normal por instancia; más que eso no hace fila
+ordenada, degrada TODAS las peticiones en vuelo (~4x más lentas) en vez de encolar limpio.
+Corregido: nueva variable explícita `PDF_POOL_WORKERS` (default `2`, mismo patrón que
+`BATCH_JOB_SHARD_SIZE`/`THRESHOLD` — se fija a mano para que coincida con el `--cpu` real del
+deploy, no se adivina en código). Aplica tanto a `PDF_PROCESS_POOL` como al `n_workers` interno de
+`generate_from_data` (facturas >2000 conceptos), que tenía el mismo problema. 219/227 tests
+backend pasan (8 fallos confirmados preexistentes, no relacionados — ver "Hallazgos preexistentes"
+más abajo). **`maxConcurrentDispatches` de la cola `pdf-generator-queue` subido de 8 a 20**
+(`gcloud tasks queues update`), con este número real como base (10 instancias × ~2 workers reales).
+Además, `REMOTE_ZIP_SHARD_READ`, `BATCH_JOB_ENABLED`, `BATCH_JOB_THRESHOLD`,
+`BATCH_JOB_SHARD_SIZE`, `BATCH_JOB_NAME` — que solo existían como variables puestas a mano con
+`gcloud`, el mismo patrón de fuga que causó el bug de Etapa 4 — se agregaron a `env_vars` en
+`.github/workflows/deploy-backend.yml` para que queden versionadas.
+
+**Mejora adicional el mismo día, a petición del usuario**: en vez de dejar `PDF_POOL_WORKERS=2`
+fijo a mano (mismo riesgo de "hay que acordarse de cambiarlo el día que suba el `--cpu`"), se
+investigó si se puede autodetectar la cuota real de CPU en vez de adivinar con `cpu_count()`.
+**Verificado en vivo con otro Job de diagnóstico desechable**: Cloud Run usa cgroup v1 (no v2,
+`/sys/fs/cgroup/cpu.max` no existe); `cpu.cfs_quota_us`/`cpu.cfs_period_us` sí son legibles y dieron
+`161200/100000 = 1.612` → redondea a 2, coincidiendo con lo medido en la prueba de carga real.
+`pdf_pipeline.py` ahora tiene `_detect_real_cpu_quota()` (lee cgroup v2 primero, cae a v1, devuelve
+`None` si no puede leer o no hay límite) y `_default_pool_workers()` (redondea la cuota, respaldo
+de `2` si la detección falla). `PDF_POOL_WORKERS` sigue siendo una variable de entorno explícita
+para poder forzar un valor a mano si algún día la autodetección no aplica, pero ya NO se fija en
+`deploy-backend.yml` — así no hay dos números que sincronizar manualmente el día que cambie el
+`--cpu` del servicio, solo uno (y ese uno ahora se autoajusta). Probado en Mac local (sin cgroups
+de Linux): la detección devuelve `None` correctamente y cae al respaldo de 2 sin tronar. Mismos
+8 tests preexistentes fallan (no relacionados, confirmado con y sin este cambio).
+
+**Pendiente de desplegar**: cambio de código listo en local, no subido a `origin/main` todavía —
+requiere confirmación explícita antes del push (dispara `deploy-backend.yml`).
+
+## Historial: mesa de revisión watchBatchProgress (2026-07-21, previo a lo de arriba)
 **Mesa de revisión multi-agente (5 agentes) sobre un cambio ya codeado sin discusión previa
 (reconciliación de progreso en `watchBatchProgress`), y rediseño completo a partir de sus
 hallazgos. CONSTRUIDO, 13/13 tests nuevos pasan, `react-doctor --scope lines` 100/100. NO
@@ -132,12 +195,102 @@ raíz real, diseño y despliegue".**
   `latestRevision: True`, 100% en la revisión nueva, `/docs` → 200. **`REMOTE_ZIP_SHARD_READ`
   sigue en `false` en el servicio principal** (solo estuvo en `true` en la revisión aislada del
   canario) — el comportamiento real para usuarios no cambió con este deploy.
-- **Pendiente: Etapa 4, aparte, sin fecha.** Con los números reales del canario ya en mano
-  (docs/propuesta-arquitectura-batch.md), decidir si activar `REMOTE_ZIP_SHARD_READ=true`
-  ampliamente en producción — requiere su propia confirmación explícita cuando se retome.
-  Limpieza pendiente sin urgencia: revisión canario (`canary-remotezip` → `cfdi-suite-api-
-  00149-yos`) y Job canario (`cfdi-batch-shard-canary`) siguen existiendo, sin tráfico/sin costo
-  hasta que se disparen — se pueden borrar cuando ya no se necesiten para más pruebas.
+- **Etapa 4 — CERRADA 2026-07-22, con un bug real encontrado y corregido en el camino.** Al
+  auditar el estado real antes de "activar" el interruptor, se descubrió que
+  `REMOTE_ZIP_SHARD_READ=true` **ya estaba activo en el servicio principal desde el 13 de julio**
+  (confirmado leyendo directamente la revisión que servía el 100% del tráfico) — esta nota decía
+  lo contrario ("sigue en false") y estaba desactualizada desde ese mismo día. Causa: el deploy
+  manual del canario (`gcloud run deploy --tag=canary-remotezip --no-traffic
+  --update-env-vars=...`) modificó la plantilla base del servicio, no solo la revisión etiquetada
+  sin tráfico — como `deploy-backend.yml` usa `env_vars` en modo merge (no reemplaza la lista
+  completa), esa variable de prueba quedó pegada en cada deploy automático posterior, sin que
+  nadie lo notara, durante 8+ días.
+  - **Bug real encontrado en la misma auditoría (más serio que el interruptor mal documentado):**
+    `BATCH_JOB_NAME` en el servicio principal apuntaba a `cfdi-batch-shard-canary` (el Job de
+    pruebas, imagen `:canary-remotezip` sin mantener desde el 13 de julio) en vez de
+    `cfdi-batch-shard` (el Job real). Mismo mecanismo de fuga que el interruptor: el deploy manual
+    del canario dejó esa variable pegada en la plantilla base. Cualquier ZIP grande subido en esos
+    8+ días se habría despachado al Job canario, no al real — sin que hubiera tráfico de ese tipo
+    en la ventana para que se notara (los únicos logs de `_try_remote_manifest_path` en producción
+    son 3, todos del 13 de julio, día del propio canario).
+  - **Corregido** con `gcloud run services update --update-env-vars=BATCH_JOB_NAME=cfdi-batch-shard`
+    (corrido por el usuario vía `!`, bloqueado para el asistente por el clasificador de modo
+    automático — acción de producción). Verificado: `latestRevision: True`, 100% en
+    `cfdi-suite-api-00121-ggf`, `BATCH_JOB_NAME=cfdi-batch-shard`, `REMOTE_ZIP_SHARD_READ=true`.
+  - **Limpieza completada**: etiqueta `canary-remotezip` removida de `cfdi-suite-api-00149-yos`
+    (`update-traffic --remove-tags`), Job `cfdi-batch-shard-canary` borrado. Confirmado: tráfico
+    solo en `LATEST`, único Job activo es `cfdi-batch-shard`.
+  - **Estado final**: la lectura por rangos del ZIP (remotezip) está activa en producción,
+    apuntando al Job correcto, sin restos de la infraestructura de prueba. Sin pendientes de esta
+    etapa. **Lección para el patrón de "Riesgos abiertos" de pin de tráfico**: no es solo el
+    tráfico el que se puede pegar desde un deploy manual de canario — las variables de entorno
+    también, vía el modo merge de `env_vars` en `deploy-cloudrun@v2`. Verificar ambos tras
+    cualquier canario con `--tag`/`--no-traffic`, no solo `status.traffic`.
+  - **Segundo bug real encontrado y corregido el mismo día, más serio que el anterior**: al
+    corregir `BATCH_JOB_NAME` de vuelta a `cfdi-batch-shard` (el Job "real"), una prueba en vivo
+    con el ZIP real de 2000 XMLs falló: 2000/2000 errores, ZIP final vacío (22KB). Causa
+    confirmada en logs reales: `[batch_shard_worker] error procesando <job_id>: xml_temp/<job_id>.xml
+    no existe`. El Job real nunca se había redesplegado con el código de remotezip —
+    `metadata.creationTimestamp` de `cfdi-batch-shard` marcaba 2026-07-12T08:25:41Z, **11 horas
+    antes** de los commits que agregaron el soporte de `ZIP_GCS_PATH` (`e6c27d2`/`1c36c39`/`4023015`,
+    esa misma tarde 19:40-19:50). Solo el Job canario (ya borrado) tenía la imagen actualizada,
+    construida a propósito para su prueba — nadie había vuelto a correr
+    `infra/deploy-batch-shard-job.sh` contra el Job real desde entonces.
+    - **Corregido** con `gcloud run jobs update cfdi-batch-shard --image=...:latest` (imagen
+      `:latest` de Artifact Registry, confirmada idéntica al digest que corre hoy
+      `cfdi-suite-api`) — cambio acotado solo a la imagen, sin tocar las credenciales
+      (`REDIS_PASSWORD`, `PUSHER_*`) que el Job ya tenía configuradas a mano desde el 12 de julio.
+    - **Reverificado con el mismo ZIP real de 2000 XMLs, de punta a punta vía el sitio**: 20
+      tareas, cada una logueando explícitamente `"procesando 100 XMLs... (lectura remota por
+      rango, sin xml_temp/)"`, cero errores, ejecución completa en 9m38.75s, PDFs reales
+      confirmados en el ZIP descargado por el usuario. **Etapa 4 cerrada de verdad, sin
+      pendientes.**
+    - **Lección añadida**: el Job de Cloud Run (`cfdi-batch-shard`) es un recurso de despliegue
+      manual, no se actualiza solo con cada push a `main` (a diferencia del servicio principal,
+      que sí tiene `deploy-backend.yml`). Cualquier cambio de código que afecte
+      `batch_shard_worker.py` necesita su propio `gcloud run jobs update --image=...` explícito
+      después del push — no asumir que "ya está en `main`" significa "ya está corriendo en el
+      Job".
+
+## Prueba de contención de cupo entre batches concurrentes (cerrado, 2026-07-22)
+**Pregunta real que originó esto: si un usuario sube un ZIP grande y, mientras sus tareas del
+Job siguen corriendo, otro usuario sube otro ZIP grande — ¿el segundo usuario espera a que el
+primero termine ("reserva todo el estadio"), o Google reparte el cupo de CPU de forma justa entre
+ambos? No se adivinó — se probó en vivo.**
+
+- **Contexto necesario primero**: se bajó `BATCH_JOB_SHARD_SIZE` de 100 a 20 (más tareas paralelas
+  por batch, cada una con menos XMLs) — verificado con el mismo ZIP real de 2000 XMLs: 100 tareas
+  en vez de 20, tiempo total de 9m38.75s → 2m52.68s (~3.4x más rápido), 0 errores. Costo real de
+  este cambio: cada tarea paga un costo fijo de arranque (~71s, medido ajustando una recta con los
+  dos puntos reales de 100 y 20 XMLs/tarea: `T(k) = 71.16 + 5.076·k` segundos) que se reparte entre
+  menos XMLs — por eso el tiempo por XML subió de ~5.79s a ~8.63s aunque el total bajó. Con esta
+  fórmula real (no supuesta) se calculó el cruce matemático contra el camino de Cloud Tasks
+  (tasa real ya documentada: 2000 XMLs/1198s ≈ 0.599s/XML) en **N≈288 XMLs** — por debajo de eso,
+  Cloud Tasks es más rápido de verdad; el umbral recomendado para cambiar de camino debería ser
+  más alto que el cruce exacto (ej. 400-500, donde el Job ya gana con margen claro, no un empate),
+  no un número arbitrario. **Decidido y aplicado 2026-07-22: `BATCH_JOB_THRESHOLD=500`** (antes
+  `1`, decisión original de "enrutar por forma, no tamaño" — ahora revertida a propósito con
+  evidencia matemática de que un ZIP chico sale mejor por Cloud Tasks). En N=500 la ganancia real
+  del Job es de ~127s (300.1s Cloud Tasks vs. ~172.68s Job), no marginal — a diferencia del cruce
+  exacto en N≈290 donde la diferencia es cero por definición. Verificado: `latestRevision: True`,
+  revisión `cfdi-suite-api-00123-tr8`, env var confirmada.
+- **La prueba real**: 4 ejecuciones del mismo Job (`cfdi-batch-shard`), con `batch_id` distintos e
+  inventados (`contention-test-A/B/C/D`, simulando 4 usuarios independientes), disparadas casi
+  simultáneamente vía `gcloud run jobs execute --async`, reutilizando el mismo ZIP real de 2000
+  XMLs ya subido (sin volver a subirlo). Cada una pidió 100 tareas (`SHARD_SIZE=20`) — 400 tareas
+  en total pidiendo 400 vCPUs contra la cuota real confirmada de 200 vCPUs en `us-central1`
+  (`gcloud beta quotas info describe CpuAllocPerProjectRegion`), exceso deliberado de 2x para que
+  el resultado no pudiera salir ambiguo.
+- **Resultado, con timestamps reales**: las 4 ejecuciones arrancaron en el mismo instante exacto
+  (mismo timestamp hasta microsegundos) — ninguna esperó a que otra empezara. Las 4 terminaron con
+  100/100 tareas exitosas, 0 errores, en tiempos de 4m37.7s, 4m37.7s, 5m18.0s y 5m33.6s (contra
+  2m52.68s corriendo sola sin competencia) — es decir, **todas se atrasaron de forma proporcional
+  (~1.6x-1.9x más lentas), ninguna se quedó esperando en cero mientras otra acaparaba el cupo.**
+- **Veredicto**: Cloud Run reparte el cupo de CPU de forma razonablemente justa entre ejecuciones
+  de Job que compiten por la misma cuota regional — el patrón de "el primero reserva todo el
+  estadio" no se confirmó. **No hace falta construir un control de admisión propio (cola, límite
+  de tareas por ejecución, etc.) para este riesgo** — la plataforma ya lo resuelve razonablemente
+  bien. Sin pendientes de esta prueba.
 
 ## Auditoría del bug de GCS del 12 de julio (cerrado, historial)
 **La medición de "1.7x más lento" estaba contaminada por un bug real de duplicación (nuevo), y ese
@@ -215,15 +368,18 @@ bug ya se corrigió en código — CONSTRUIDO, TESTS PASANDO, Y DESPLEGADO (2026
   siguiente paso si se quiere acotar más, pendiente de decisión.
 
 ## Capa 1 (Cloud Run Job de shards) — CONSTRUIDA, DESPLEGADA Y ACTIVA EN PRODUCCIÓN
-**Permanente desde 2026-07-12. El cuello de botella real que queda no es el procesamiento, es la
-extracción del ZIP — ver "Último cambio" arriba para el hallazgo más reciente sobre eso.**
+**Permanente desde 2026-07-12. El cuello de botella de extracción del ZIP, que esta sección
+marcaba como "lo que queda sin resolver", ya se resolvió el 2026-07-22 (remotezip, ver
+"Extracción distribuida vía remotezip" → "Etapa 4" y "Próximo paso" punto 5) — esta entrada queda
+como historial de la decisión original de Capa 1, no como estado actual del umbral.**
 
-- `BATCH_JOB_ENABLED=true`, `BATCH_JOB_THRESHOLD=1` en producción — confirmado en vivo con
-  `gcloud run services describe`. Es decisión **permanente**, no de prueba (confirmada por
-  Gilberto): cualquier ZIP subido usa el Job nuevo (`cfdi-batch-shard`), no Cloud Tasks. Razón,
-  tras correr `decision-expander`: se enruta por **forma** del trabajo, no por tamaño — un ZIP
-  subido ya es "tipo Job" por definición (viene de `start-zip-gcs`), un XML suelto sigue siendo
-  Cloud Tasks (`/cfdi/pdf/start`). No hace falta adivinar un umbral.
+- `BATCH_JOB_ENABLED=true` sigue vigente. `BATCH_JOB_THRESHOLD` **cambió de `1` a `500` el
+  2026-07-22** (ver "Próximo paso" punto 5 para la razón matemática) — la decisión original de
+  "enrutar por forma, no por tamaño" (razonamiento original abajo, ya no vigente tal cual) se
+  revirtió con evidencia real de que un ZIP chico sale mejor por Cloud Tasks. Razonamiento
+  original, para contexto histórico: tras correr `decision-expander`, se decidió enrutar por
+  **forma** del trabajo, no por tamaño — un ZIP subido ya es "tipo Job" por definición (viene de
+  `start-zip-gcs`), un XML suelto sigue siendo Cloud Tasks (`/cfdi/pdf/start`).
 - **Comparación real medida** (no proyectada), mismo ZIP real (`mil_facturas_prueba.zip`, 367MB,
   2000 XMLs reales de Miniso), cronómetro real en los dos caminos, revisiones aisladas sin tráfico
   de producción de por medio:
@@ -528,28 +684,49 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
    de que Cloud Tasks duplica una extracción lenta mientras la original sigue viva. Fix con lock de
    idempotencia listo y con tests, pendiente de desplegar (confirmación explícita antes de tocar
    GCP).
-5. **Escalamiento masivo — ya NO es exploración sin decisión, ver "Último cambio" arriba.** La
-   Capa 1 (Cloud Run Job de shards) se construyó, desplegó y quedó permanente en producción
-   (`BATCH_JOB_ENABLED=true`, `THRESHOLD=1`). La pregunta "¿pico o sostenido?" que este documento
-   planteaba originalmente quedó superada por un criterio mejor (documentado en
-   `docs/propuesta-arquitectura-batch.md`, sección "Recomendación de esta ronda — CORREGIDA"):
-   construir ahora cuesta lo mismo que construir después y cuesta $0 en reposo, así que no hacía
-   falta esperar a resolver esa pregunta. Lo que sí sigue genuinamente pendiente:
-   - **Cuello de botella de extracción del ZIP a escala** — mide 6-8 min para 2000 XMLs, no lo
-     toca la Capa 1, un intento de arreglo (paralelizar subidas a GCS) salió 1.7x más lento en
-     producción y se revirtió. Idea corregida (lectura por rangos de GCS) anotada, no construida.
-     No se ha medido a escala de 15,000+ XMLs.
-   - **Ronda 2 (Capa 2, motor tipográfico compilado tipo typst)**: viable técnicamente (veredicto
-     de Ronda 0, incluye SAT/Anexo 20), pero pospuesta a propósito — no hay volumen real hoy que la
-     justifique frente al costo de mantener un motor nuevo en Rust. Decisión de negocio, no técnica.
-   - **Cuota real de paralelismo de Cloud Run Jobs en este proyecto**: ~150-200 tareas simultáneas
-     confirmadas vía `gcloud beta quotas info describe` (sin solicitar aumento) — suficiente para
-     cualquier batch visto hasta ahora, con headroom.
+5. **Escalamiento masivo — CERRADO 2026-07-22, ya no es exploración.** La Capa 1 (Cloud Run Job de
+   shards) se construyó, desplegó y quedó permanente en producción. Config final:
+   `BATCH_JOB_ENABLED=true`, `BATCH_JOB_THRESHOLD=500` (no `1` — revertido con evidencia
+   matemática, ver "Extracción distribuida vía remotezip" → "Etapa 4"), `BATCH_JOB_SHARD_SIZE=20`,
+   `REMOTE_ZIP_SHARD_READ=true`, `BATCH_JOB_NAME=cfdi-batch-shard`.
+   - **Cuello de botella de extracción del ZIP a escala — RESUELTO.** La lectura por rangos
+     (remotezip) que este documento anotaba como "idea corregida, no construida" ya está
+     construida, desplegada y verificada de punta a punta con el ZIP real de 2000 XMLs (ver
+     "Etapa 4" para los dos bugs reales que se encontraron y corrigieron en el camino). Tiempo
+     total del batch de 2000: ~2m52s (antes 16-26min con el camino viejo).
+   - **Cuota real de paralelismo de Cloud Run Jobs**: 200 vCPUs por región (confirmado exacto vía
+     `gcloud beta quotas info describe CpuAllocPerProjectRegion`, no el "~150-200" aproximado de
+     antes) — con `cpu=1` por tarea, ~200 tareas simultáneas. **Probado en vivo, no solo por
+     cuota**: 4 ejecuciones concurrentes de 100 tareas cada una (400 vs 200 de cupo, 2x exceso
+     deliberado) confirmaron que Cloud Run reparte el cupo de forma justa entre "usuarios"
+     distintos, sin que uno acapare mientras otro espera en cero (ver "Prueba de contención de
+     cupo"). No hace falta control de admisión propio.
+   - **Ronda 2 (Capa 2, motor tipográfico compilado tipo typst)**: sigue viable técnicamente
+     (veredicto de Ronda 0, incluye SAT/Anexo 20), pospuesta a propósito — no hay volumen real hoy
+     que la justifique frente al costo de mantener un motor nuevo en Rust. Decisión de negocio, no
+     técnica. Sin cambios respecto a antes.
+   - **Pendiente real, sin resolver**: qué pasa si se agota el plan gratuito de Redis (Upstash) —
+     pregunta del usuario, aún no investigada en el código (manejo de errores de Redis en los
+     endpoints de batch). No confundir con "cerrado" — es un hueco genuino todavía abierto.
 
 (El progreso de descarga 0→100% ya no tiene pendientes — implementado, desplegado y verificado dos
 veces con HAR real, ver "Último cambio" arriba.)
 
 ## Riesgos abiertos
+- **Deploys manuales de canario (`--tag`/`--no-traffic`) también pegan variables de entorno en la
+  plantilla base, no solo tráfico (encontrado y corregido 2026-07-22)**: además del pin de
+  tráfico ya documentado abajo, un `gcloud run deploy --tag=X --no-traffic --update-env-vars=...`
+  modifica la plantilla base del servicio (`spec.template`). Como `deploy-cloudrun@v2` aplica
+  `env_vars` en modo merge (no reemplaza la lista completa), cualquier variable de prueba puesta
+  ahí para el canario sobrevive a todos los deploys automáticos posteriores hasta que alguien la
+  quite a mano. Pasó con el canario `canary-remotezip` del 13 de julio: `REMOTE_ZIP_SHARD_READ` y
+  `BATCH_JOB_NAME=cfdi-batch-shard-canary` quedaron activos en producción real durante 8+ días sin
+  que nadie lo notara (ver "Extracción distribuida vía remotezip" → "Etapa 4" para el detalle
+  completo y la corrección). **Regla añadida**: tras cualquier canario con `--tag`/`--no-traffic`,
+  verificar no solo `status.traffic` sino también
+  `gcloud run services describe <servicio> --format="value(spec.template.spec.containers[0].env)"`
+  contra lo que el servicio principal debería tener — y quitar/borrar el canario en cuanto termine
+  de usarse, no dejarlo "sin costo, sin prisa".
 - **Pin de tráfico de Cloud Run (causa raíz encontrada y corregida 2026-07-11)**: promover tráfico
   manualmente por nombre de revisión (`gcloud run services update-traffic --to-revisions=<rev>=100`)
   deja el servicio fuera del alias `LATEST`. Efecto colateral no obvio: cada deploy automático

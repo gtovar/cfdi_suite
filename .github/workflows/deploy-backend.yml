@@ -38,6 +38,11 @@ jobs:
             PUSHER_KEY=${{ secrets.PUSHER_KEY }}
             PUSHER_SECRET=${{ secrets.PUSHER_SECRET }}
             PUSHER_CLUSTER=us2
+            REMOTE_ZIP_SHARD_READ=true
+            BATCH_JOB_ENABLED=true
+            BATCH_JOB_THRESHOLD=500
+            BATCH_JOB_SHARD_SIZE=20
+            BATCH_JOB_NAME=cfdi-batch-shard
           flags: |
             --allow-unauthenticated
             --cpu=2

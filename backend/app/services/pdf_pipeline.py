@@ -11,12 +11,62 @@ Flujo:
 from __future__ import annotations
 
 import io
+import os
 from concurrent.futures import ProcessPoolExecutor
-from multiprocessing import cpu_count, get_context
+from multiprocessing import get_context
 
 from pypdf import PdfReader, PdfWriter
 
 from .canvas_service import parse_xml_to_rows, render_conceptos
+
+def _detect_real_cpu_quota() -> float | None:
+    """Lee la cuota REAL de CPU que Cloud Run factura y limita, directo de cgroups --
+    NO usa cpu_count(), que solo reporta afinidad (en cuántos núcleos puede correr el
+    proceso), un mecanismo de Linux distinto e independiente de la cuota de tiempo de
+    CPU. Confirmado en vivo 2026-07-22 con un Job de diagnóstico desechable: en una
+    instancia con --cpu=2 configurado, cpu_count() reportaba 4 (afinidad de la máquina
+    física de abajo), mientras que la cuota real de cgroups (cpu.cfs_quota_us /
+    cpu.cfs_period_us, cgroup v1 -- Cloud Run no usa v2) dio 161200/100000 = 1.612,
+    que redondea a 2 -- coincide con lo medido con una prueba de carga real (curl
+    concurrente contra /internal/generate-pdf: solo ~2 peticiones corren a velocidad
+    normal a la vez por instancia).
+
+    Devuelve None si no se puede leer o si no hay límite configurado (quota "max"/-1)
+    -- en ese caso el llamador debe caer a un valor por defecto conservador, no asumir
+    cómputo ilimitado."""
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:  # cgroup v2
+            max_str, period_str = f.read().split()
+            if max_str == "max":
+                return None
+            return int(max_str) / int(period_str)
+    except (FileNotFoundError, ValueError):
+        pass
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as f:  # cgroup v1 (Cloud Run)
+            quota = int(f.read().strip())
+        if quota <= 0:
+            return None
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as f:
+            period = int(f.read().strip())
+        return quota / period
+    except (FileNotFoundError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _default_pool_workers() -> int:
+    quota = _detect_real_cpu_quota()
+    if quota and quota > 0:
+        return max(1, round(quota))
+    return 2  # respaldo conservador si cgroups no es legible -- ver PROJECT_STATE.md
+
+
+# Cuántos procesos reales caben aquí. Se autodetecta de la cuota real de CPU (arriba)
+# en vez de adivinar con cpu_count() -- pero PDF_POOL_WORKERS sigue siendo una
+# variable de entorno explícita para poder fijarlo a mano si algún día la
+# autodetección no aplica (otro proveedor de nube, otro mecanismo de cgroups, etc.),
+# mismo patrón de "override explícito disponible" que BATCH_JOB_SHARD_SIZE/THRESHOLD.
+PDF_POOL_WORKERS = int(os.getenv("PDF_POOL_WORKERS", str(_default_pool_workers())))
 
 # Pool de procesos persistente para aislar CADA generate() en su propio
 # proceso (spawn) — no solo el de gRPC+fork (>2000 conceptos, ya resuelto
@@ -31,7 +81,7 @@ from .canvas_service import parse_xml_to_rows, render_conceptos
 # no pagar el costo de arrancar Python + reimportar WeasyPrint/reportlab en
 # cada PDF — los workers quedan "calientes" tras las primeras peticiones.
 PDF_PROCESS_POOL = ProcessPoolExecutor(
-    max_workers=min(8, cpu_count()),
+    max_workers=PDF_POOL_WORKERS,
     mp_context=get_context("spawn"),
 )
 
@@ -139,7 +189,7 @@ def generate_from_data(
     header_reserve = header_h + HEADER_GAP
 
     # 5. Canvas: tabla + footer, reservando header_reserve pts en el tope de pág 1
-    n_workers = workers or min(8, cpu_count())
+    n_workers = workers or PDF_POOL_WORKERS
     body_pdf = render_conceptos(
         rows,
         cfdi_data=cfdi_data,
