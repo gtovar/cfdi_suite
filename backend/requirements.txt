@@ -17,6 +17,15 @@ opentelemetry-api
 opentelemetry-sdk
 opentelemetry-instrumentation-fastapi
 opentelemetry-exporter-gcp-trace
+# Fijado a 1.12.0a0 (no la última, 1.13.0): 1.13.0 renombró su módulo interno de
+# opentelemetry.resourcedetector.gcp_resource_detector a opentelemetry.resource.detector.gcp,
+# rompiendo opentelemetry-exporter-gcp-trace (que sigue esperando la ruta vieja en su única
+# versión publicada, 1.12.0). Confirmado en vivo 2026-07-22: CUALQUIER combinación de versiones
+# publicadas del exportador (1.9.0-1.12.0) más la única versión del detector (1.13.0) falla en
+# el import -- no es cuestión de elegir mejor, es una incompatibilidad real entre los dos
+# paquetes tal como están publicados hoy en PyPI. Verificado en entorno virtual limpio que este
+# pin exacto sí importa correctamente.
+opentelemetry-resourcedetector-gcp==1.12.0a0
 sentry-sdk[fastapi]>=2.0.0,<3
 pusher>=3.3.0,<4
 google-cloud-storage>=2.14.0

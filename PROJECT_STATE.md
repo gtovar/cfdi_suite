@@ -64,8 +64,31 @@ para poder forzar un valor a mano si algún día la autodetección no aplica, pe
 de Linux): la detección devuelve `None` correctamente y cae al respaldo de 2 sin tronar. Mismos
 8 tests preexistentes fallan (no relacionados, confirmado con y sin este cambio).
 
-**Pendiente de desplegar**: cambio de código listo en local, no subido a `origin/main` todavía —
-requiere confirmación explícita antes del push (dispara `deploy-backend.yml`).
+**Incidente encontrado al desplegar esto (2026-07-22, mismo día): el push inicial de este fix
+falló al arrancar en producción — pero por una causa completamente distinta, no relacionada con
+`PDF_POOL_WORKERS`.** La revisión nueva (`cfdi-suite-api-00124-4z4`) nunca pasó el health check;
+Cloud Run correctamente NUNCA le movió tráfico (se quedó 100% en la revisión vieja, sin caída real
+para usuarios). Causa: `backend/requirements.txt` tenía las 4 dependencias de OpenTelemetry sin
+versión fijada — en algún momento entre el último build exitoso y hoy, `opentelemetry-
+resourcedetector-gcp` publicó una 1.13.0 que renombra su módulo interno (de
+`opentelemetry.resourcedetector.gcp_resource_detector` a `opentelemetry.resource.detector.gcp`),
+rompiendo el import de `opentelemetry-exporter-gcp-trace` (que sigue esperando la ruta vieja en su
+única versión publicada, 1.12.0). **Confirmado que ninguna combinación de versiones publicadas
+funciona** (probado 1.9.0-1.12.0 del exportador contra la única versión del detector) — es una
+incompatibilidad real entre paquetes de terceros tal como están hoy en PyPI, no un error de
+elegir mal. Encontrada la versión pre-release `1.12.0a0` del detector (ya estaba instalada
+localmente por casualidad) que sí tiene la ruta vieja — fijada explícita en `requirements.txt`
+con comentario explicando por qué no es la última. **Verificado en un entorno virtual
+completamente limpio (no reusa nada local)** que instalar directo desde el `requirements.txt`
+corregido sí importa bien. 219/227 tests backend pasan (mismos 8 preexistentes de siempre).
+**Lección**: las 4 líneas de OpenTelemetry llevaban sin versión fijada desde que se agregaron —
+cualquier build futura, sin importar qué código cambiara, iba a tronar en el momento en que
+PyPI publicara una versión incompatible. Fijar versiones no es solo buena práctica genérica,
+aquí ya causó una falla real de deploy.
+
+**Pendiente de desplegar**: cambios de código listos en local (`PDF_POOL_WORKERS` +
+`requirements.txt`), no subidos a `origin/main` todavía — requiere confirmación explícita antes
+del push (dispara `deploy-backend.yml`).
 
 ## Historial: mesa de revisión watchBatchProgress (2026-07-21, previo a lo de arriba)
 **Mesa de revisión multi-agente (5 agentes) sobre un cambio ya codeado sin discusión previa
