@@ -7,10 +7,11 @@ producido vía el endpoint HTTP POST /api/templates/{id}/table-preview, para el
 mismo design_config y los mismos datos de ejemplo.
 
 Determinismo: reportlab/weasyprint/pypdf embeben timestamps por defecto. Se fija
-SOURCE_DATE_EPOCH + reportlab.invariant (solo en el proceso de test). El endpoint
-corre en el MISMO proceso que la llamada directa (TestClient + asyncio.to_thread),
-así que comparten esos flags → equivalencia a nivel BYTES. n_rows es chico
-(< 2000) → camino single-process, sin spawn. Se incluye además una comprobación
+SOURCE_DATE_EPOCH + reportlab.invariant (solo mientras corren los tests de este
+módulo, ver fixture `_pdf_determinismo` abajo). El endpoint corre en el MISMO
+proceso que la llamada directa (TestClient + asyncio.to_thread), así que
+comparten esos flags → equivalencia a nivel BYTES. n_rows es chico (< 2000) →
+camino single-process, sin spawn. Se incluye además una comprobación
 estructural (páginas + texto extraído) como red de seguridad documental.
 """
 from __future__ import annotations
@@ -18,13 +19,8 @@ from __future__ import annotations
 import io
 import os
 
-# Debe fijarse ANTES de que weasyprint/reportlab generen su primer PDF.
-os.environ["SOURCE_DATE_EPOCH"] = "0"
-import reportlab.rl_config as _rl_config
-
-_rl_config.invariant = 1
-
 import pytest
+import reportlab.rl_config as _rl_config
 from pypdf import PdfReader
 
 try:
@@ -40,6 +36,25 @@ else:
     _IMPORT_ERROR = None
 
 pytestmark = pytest.mark.skipif(TestClient is None, reason=f"fastapi no disponible: {_IMPORT_ERROR if TestClient is None else ''}")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _pdf_determinismo():
+    """Fija SOURCE_DATE_EPOCH + reportlab.invariant para los tests de este
+    módulo y los restaura al terminar -- ver el docstring de la fixture
+    homónima en test_pdf_pipeline.py para el porqué (zipfile.ZipInfo lee
+    SOURCE_DATE_EPOCH; sin restaurar, contamina cualquier test posterior que
+    cree un .zip en el mismo proceso de pytest)."""
+    original_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    original_invariant = _rl_config.invariant
+    os.environ["SOURCE_DATE_EPOCH"] = "0"
+    _rl_config.invariant = 1
+    yield
+    if original_epoch is None:
+        os.environ.pop("SOURCE_DATE_EPOCH", None)
+    else:
+        os.environ["SOURCE_DATE_EPOCH"] = original_epoch
+    _rl_config.invariant = original_invariant
 
 
 _LEGACY = {

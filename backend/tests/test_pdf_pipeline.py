@@ -3,25 +3,50 @@ Tests de pdf_pipeline / sample_data (Fase 1).
 
 Determinismo: reportlab/weasyprint/pypdf embeben timestamps por defecto. Para el
 test de equivalencia byte-a-byte se fija SOURCE_DATE_EPOCH + reportlab.invariant
-(solo en el proceso de test — no toca producción). El fixture de equivalencia es
-chico (< 2000 filas) → camino single-process, sin spawn.
+(solo mientras corren los tests de este módulo, ver fixture `_pdf_determinismo`
+abajo — no toca producción). El fixture de equivalencia es chico (< 2000 filas)
+→ camino single-process, sin spawn.
 """
 from __future__ import annotations
 
-import os
-# Debe fijarse ANTES de que weasyprint/reportlab generen su primer PDF.
-os.environ["SOURCE_DATE_EPOCH"] = "0"
-import reportlab.rl_config as _rl_config
-_rl_config.invariant = 1
-
 import io
+import os
 from pathlib import Path
 
+import pytest
+import reportlab.rl_config as _rl_config
 from pypdf import PdfReader
 
 from backend.app.services import pdf_pipeline
 from backend.app.services.canvas_service import parse_xml_to_rows
 from backend.app.services.sample_data import generar_datos_ejemplo
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _pdf_determinismo():
+    """Fija SOURCE_DATE_EPOCH + reportlab.invariant para los tests de este
+    módulo y los restaura al terminar.
+
+    Sin restaurar: zipfile.ZipInfo._for_archive() lee SOURCE_DATE_EPOCH para
+    el timestamp por defecto de un ZipInfo nuevo (gh-91279); con "0" (año
+    1970), el formato ZIP/DOS no soporta años <1980 y truena con
+    `struct.error: 'H' format requires 0 <= number <= 65535` -- silenciosamente,
+    en CUALQUIER test que corra después en el mismo proceso de pytest y cree
+    un .zip (directo, o vía openpyxl para .xlsx). Encontrado en vivo
+    2026-07-23: esto explicaba 8 "fallos preexistentes" documentados en
+    PROJECT_STATE.md (test_pdf_batch_ttl.py, test_sat_enquiry.py) que en
+    realidad eran esta fuga, no bugs reales en esos módulos.
+    """
+    original_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    original_invariant = _rl_config.invariant
+    os.environ["SOURCE_DATE_EPOCH"] = "0"
+    _rl_config.invariant = 1
+    yield
+    if original_epoch is None:
+        os.environ.pop("SOURCE_DATE_EPOCH", None)
+    else:
+        os.environ["SOURCE_DATE_EPOCH"] = original_epoch
+    _rl_config.invariant = original_invariant
 
 _FIXTURES = Path(__file__).parent.parent / "test-fixtures"
 

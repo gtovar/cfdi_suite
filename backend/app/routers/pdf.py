@@ -45,10 +45,13 @@ from ..services.redis_safety import safe_redis_call
 
 router = APIRouter(prefix="/api", tags=["PDF"])
 
-# Techo duro por conexión SSE. Con concurrency=1 cada stream abierto retiene
-# una instancia entera de Cloud Run; el cliente (subscribeWithRetry) se
-# reconecta solo al cortarse, así que esto no interrumpe al usuario — solo
-# evita que un stream retenga la instancia los 1800s del timeout del servicio.
+# Techo duro por conexión SSE. Cada stream abierto ocupa un slot de
+# concurrencia de la instancia de Cloud Run (concurrency=5, confirmado en
+# deploy-backend.yml -- corregido 2026-07-23, el comentario original decía
+# "concurrency=1" desactualizado desde el fix de Signal 6); el cliente
+# (subscribeWithRetry) se reconecta solo al cortarse, así que esto no
+# interrumpe al usuario — solo evita que un stream retenga el slot los 1800s
+# del timeout del servicio.
 SSE_MAX_STREAM_SECONDS = 600
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")

@@ -1,5 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { downloadWithProgress, fetchZipEstimatedSize, watchBatchProgress } from './pdf-download';
+import { downloadWithProgress, fetchZipEstimatedSize, waitForPdfJob, watchBatchProgress } from './pdf-download';
+
+// --- Mock de EventSource para las pruebas de waitForPdfJob ---
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+  url: string;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  closed = false;
+
+  constructor(url: string) {
+    this.url = url;
+    MockEventSource.instances.push(this);
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
 
 // --- Mock de pusher-js para las pruebas de watchBatchProgress ---
 // Expone los mismos métodos que el código real usa (connection.bind,
@@ -232,6 +250,75 @@ describe('watchBatchProgress', () => {
     fireVisibilityChange(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(globalThis.fetch).toHaveBeenCalledTimes(callsAtFinish);
+  });
+});
+
+describe('waitForPdfJob', () => {
+  // Regresión del defecto encontrado en vivo el 23 de julio de 2026,
+  // reproduciendo el incidente de Redis contra producción: con
+  // document.hidden=true en el momento de arrancar (varias pestañas a la
+  // vez, o la pestaña simplemente en segundo plano), connect() nunca creaba
+  // el EventSource -- el job se quedaba mostrando "Convirtiendo..." para
+  // siempre aunque el backend ya reportara "done", porque solo se
+  // reconectaba al disparar visibilitychange (el usuario volviendo a esa
+  // pestaña). Confirmado con curl + javascript_tool que el backend y el
+  // transporte funcionaban bien; el bug estaba aquí.
+  let mockDocument: { hidden: boolean; addEventListener: ReturnType<typeof vi.fn>; removeEventListener: ReturnType<typeof vi.fn> };
+  let visibilityListeners: Array<() => void>;
+
+  beforeEach(() => {
+    MockEventSource.instances = [];
+    vi.stubGlobal('EventSource', MockEventSource);
+
+    visibilityListeners = [];
+    mockDocument = {
+      hidden: true, // clave del caso de regresión: oculta desde el arranque
+      addEventListener: vi.fn((event: string, cb: () => void) => {
+        if (event === 'visibilitychange') visibilityListeners.push(cb);
+      }),
+      removeEventListener: vi.fn((event: string, cb: () => void) => {
+        if (event === 'visibilitychange') {
+          const idx = visibilityListeners.indexOf(cb);
+          if (idx >= 0) visibilityListeners.splice(idx, 1);
+        }
+      }),
+    };
+    vi.stubGlobal('document', mockDocument);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('conecta el EventSource aunque la pestaña esté oculta desde el arranque', async () => {
+    const promise = waitForPdfJob('job-1');
+    expect(MockEventSource.instances).toHaveLength(1);
+
+    MockEventSource.instances[0].onmessage?.({ data: JSON.stringify({ status: 'done' }) });
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it('resuelve con "done" sin necesitar que la pestaña se vuelva visible', async () => {
+    const promise = waitForPdfJob('job-2');
+    // Nunca se dispara visibilitychange en este test -- si el fix se
+    // revirtiera (guarda de document.hidden en la conexión inicial), esta
+    // promesa jamás resolvería y el test fallaría por timeout.
+    MockEventSource.instances[0].onmessage?.({ data: JSON.stringify({ status: 'converting' }) });
+    MockEventSource.instances[0].onmessage?.({ data: JSON.stringify({ status: 'done' }) });
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it('SÍ respeta la pestaña oculta para reintentos tras un error (no revierte el ahorro de cuota)', async () => {
+    waitForPdfJob('job-3');
+    expect(MockEventSource.instances).toHaveLength(1);
+
+    MockEventSource.instances[0].onerror?.();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    // Sigue oculta -- no debe haber creado un segundo EventSource.
+    expect(MockEventSource.instances).toHaveLength(1);
   });
 });
 

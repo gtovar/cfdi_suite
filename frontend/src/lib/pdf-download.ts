@@ -83,9 +83,17 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
       fn();
     };
 
-    // Pestaña oculta = sin nadie mirando la barra de progreso: cerramos el
-    // stream para no quemar comandos de Redis ni retener una instancia de
-    // Cloud Run (concurrency=1), y reconectamos al volver a ser visible.
+    // Pestaña oculta = probablemente nadie mirando la barra de progreso: en
+    // RECONEXIONES (tras un error, o al volver de estar oculta) evitamos
+    // quemar comandos de Redis y retener una instancia de Cloud Run de más.
+    // La conexión INICIAL, en cambio, siempre se intenta sin importar
+    // visibilidad -- encontrado en vivo 2026-07-23 reproduciendo el
+    // incidente: con `document.hidden` true en el momento de arrancar (varias
+    // pestañas a la vez, o simplemente la pestaña en segundo plano), el
+    // EventSource nunca llegaba a crearse, y el job se quedaba viéndose
+    // "Convirtiendo..." para siempre aunque el PDF ya estuviera listo -- solo
+    // se hubiera reconectado si el usuario volvía a esa pestaña.
+    let hasConnectedOnce = false;
     const onVisibility = () => {
       if (document.hidden) es?.close();
       else if (!settled) connect();
@@ -93,7 +101,9 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
     document.addEventListener('visibilitychange', onVisibility);
 
     const connect = () => {
-      if (settled || document.hidden) return;
+      if (settled) return;
+      if (hasConnectedOnce && document.hidden) return;
+      hasConnectedOnce = true;
       es?.close();
       es = new EventSource(url);
 
