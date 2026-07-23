@@ -86,9 +86,53 @@ cualquier build futura, sin importar qué código cambiara, iba a tronar en el m
 PyPI publicara una versión incompatible. Fijar versiones no es solo buena práctica genérica,
 aquí ya causó una falla real de deploy.
 
-**Pendiente de desplegar**: cambios de código listos en local (`PDF_POOL_WORKERS` +
-`requirements.txt`), no subidos a `origin/main` todavía — requiere confirmación explícita antes
-del push (dispara `deploy-backend.yml`).
+**Segunda ronda, mismo día: `/code-review high` sobre el fix de `PDF_POOL_WORKERS` encontró
+8 hallazgos reales (4 confirmados como bugs que pueden tronar el arranque de la app, 2
+riesgos plausibles, 2 de diseño) — los 8 pasaron por `decision-expander` antes de
+implementarse, plan completo en `/Users/gil/.claude/plans/encapsulated-meandering-waterfall.md`.**
+
+- **Nuevo módulo `backend/app/services/cpu_quota.py`** — se extrajo la detección de
+  cgroups fuera de `pdf_pipeline.py` (que se declara a sí mismo orquestador XML→PDF, no
+  introspección de sistema), siguiendo el precedente real de `gcs_range_auth.py`
+  (módulo angosto, nombrado por el mecanismo, no un "utils.py" genérico — este proyecto
+  no tiene ese precedente, confirmado con una exploración exhaustiva).
+- **Manejo de excepciones unificado**: `except (OSError, ValueError, ZeroDivisionError)`
+  en ambas ramas cgroup v2/v1 — antes v2 no atrapaba `ZeroDivisionError` (v1 sí, pese a
+  hacer la misma división) y ninguna atrapaba `PermissionError`/`OSError` genérico
+  (real en CI/contenedores rootless, no solo en Cloud Run).
+- **`PDF_POOL_WORKERS` blindado**: `os.getenv` solo usa el default cuando la llave está
+  AUSENTE, no cuando está vacía — `PDF_POOL_WORKERS=""` puesto a mano tronaba `int("")`
+  sin atrapar, tumbando el arranque completo de la app (no solo de PDF). Corregido con
+  parseo explícito + `try/except ValueError` con log claro. De paso se arregló que el
+  valor autodetectado se calculaba SIEMPRE (I/O de cgroups desperdiciado) aunque la
+  variable ya estuviera puesta — ahora solo se calcula cuando hace falta.
+- **Techo de seguridad reintroducido** (`MAX_POOL_WORKERS=8` en `cpu_quota.py`),
+  aplicado tanto a la autodetección como al override manual — el código viejo
+  (`min(8, cpu_count())`) tenía este techo, el nuevo código lo había perdido para el
+  camino de override explícito.
+- **`render_conceptos` (`canvas_service.py`) — hallazgo de que su parámetro `workers`
+  no tiene efecto alguno** desde el 11 de julio (nested `ProcessPoolExecutor` quitado a
+  propósito, documentado). El diff original de `PDF_POOL_WORKERS` calculaba este valor
+  con más cuidado sin darse cuenta de que no hace nada para el camino de >2000 conceptos.
+  Se agregó comentario aclaratorio en la firma y en el call site — no se quitó el
+  parámetro (limpieza aparte, cambia una firma con más de un llamador, fuera de alcance).
+- **`.github/workflows/deploy-backend.yml`: `env_vars_update_strategy: overwrite`**
+  activado (antes usaba el default `merge`, la causa raíz de que `REMOTE_ZIP_SHARD_READ`/
+  `BATCH_JOB_NAME` quedaran pegados 8+ días — ver "Etapa 4" arriba). Con `overwrite`, el
+  YAML es la única fuente de verdad — revertir un commit sí apaga las variables la
+  próxima vez que se despliegue. **Verificado antes de activarlo**: se comparó la lista
+  completa de variables vivas en producción contra el YAML — `GCS_BUCKET_NAME` estaba
+  vivo pero NO en el YAML; se agregó explícitamente antes de activar `overwrite`, para no
+  borrarla por accidente en el primer deploy con el modo nuevo.
+- **18 tests nuevos** en `backend/tests/test_cpu_quota.py` (mockeando `open()` por ruta,
+  sin tocar el sistema de archivos real) — cubren las asimetrías de excepciones, el techo
+  de seguridad, y el parseo blindado del env var (string vacío, no numérico, override
+  grande). 237/245 tests backend pasan (mismos 8 preexistentes de siempre, confirmados
+  hoy sin relación a estos cambios).
+
+**Pendiente de desplegar**: todo listo en local (`PDF_POOL_WORKERS` + `cpu_quota.py` +
+`requirements.txt` + `env_vars_update_strategy: overwrite`), no subido a `origin/main`
+todavía — requiere confirmación explícita antes del push (dispara `deploy-backend.yml`).
 
 ## Historial: mesa de revisión watchBatchProgress (2026-07-21, previo a lo de arriba)
 **Mesa de revisión multi-agente (5 agentes) sobre un cambio ya codeado sin discusión previa

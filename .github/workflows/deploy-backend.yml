@@ -26,6 +26,20 @@ jobs:
           service: cfdi-suite-api
           region: us-central1
           source: ./backend
+          # overwrite (no merge, el default): env_vars de aquí abajo es la ÚNICA
+          # fuente de verdad de las variables del servicio -- cualquier variable
+          # puesta a mano con `gcloud` que no esté listada aquí se BORRA en el
+          # siguiente deploy. A propósito: "merge" fue la causa real de que
+          # REMOTE_ZIP_SHARD_READ y BATCH_JOB_NAME quedaran pegados en producción
+          # 8+ días sin que nadie lo notara (ver PROJECT_STATE.md, 2026-07-22) --
+          # con "overwrite", ese tipo de fuga ya no puede pasar en silencio: o la
+          # variable está aquí, versionada, o no existe en el servicio.
+          # Antes de activar esto se comparó la lista completa contra las
+          # variables realmente vivas en producción (`gcloud run services
+          # describe ... spec.template.spec.containers[0].env`) para no borrar
+          # nada por accidente en el primer deploy con este modo -- GCS_BUCKET_NAME
+          # faltaba aquí y sí estaba vivo, se agregó abajo.
+          env_vars_update_strategy: overwrite
           env_vars: |
             ALLOWED_ORIGINS=${{ secrets.VERCEL_URL }}
             REDIS_HOST=dashing-aphid-43185.upstash.io
@@ -38,6 +52,7 @@ jobs:
             PUSHER_KEY=${{ secrets.PUSHER_KEY }}
             PUSHER_SECRET=${{ secrets.PUSHER_SECRET }}
             PUSHER_CLUSTER=us2
+            GCS_BUCKET_NAME=cfdi-suite-uploads-706861124428
             REMOTE_ZIP_SHARD_READ=true
             BATCH_JOB_ENABLED=true
             BATCH_JOB_THRESHOLD=500

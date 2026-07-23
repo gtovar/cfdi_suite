@@ -18,55 +18,39 @@ from multiprocessing import get_context
 from pypdf import PdfReader, PdfWriter
 
 from .canvas_service import parse_xml_to_rows, render_conceptos
+from .cpu_quota import MAX_POOL_WORKERS, default_pool_workers
 
-def _detect_real_cpu_quota() -> float | None:
-    """Lee la cuota REAL de CPU que Cloud Run factura y limita, directo de cgroups --
-    NO usa cpu_count(), que solo reporta afinidad (en cuántos núcleos puede correr el
-    proceso), un mecanismo de Linux distinto e independiente de la cuota de tiempo de
-    CPU. Confirmado en vivo 2026-07-22 con un Job de diagnóstico desechable: en una
-    instancia con --cpu=2 configurado, cpu_count() reportaba 4 (afinidad de la máquina
-    física de abajo), mientras que la cuota real de cgroups (cpu.cfs_quota_us /
-    cpu.cfs_period_us, cgroup v1 -- Cloud Run no usa v2) dio 161200/100000 = 1.612,
-    que redondea a 2 -- coincide con lo medido con una prueba de carga real (curl
-    concurrente contra /internal/generate-pdf: solo ~2 peticiones corren a velocidad
-    normal a la vez por instancia).
-
-    Devuelve None si no se puede leer o si no hay límite configurado (quota "max"/-1)
-    -- en ese caso el llamador debe caer a un valor por defecto conservador, no asumir
-    cómputo ilimitado."""
-    try:
-        with open("/sys/fs/cgroup/cpu.max") as f:  # cgroup v2
-            max_str, period_str = f.read().split()
-            if max_str == "max":
-                return None
-            return int(max_str) / int(period_str)
-    except (FileNotFoundError, ValueError):
-        pass
-    try:
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as f:  # cgroup v1 (Cloud Run)
-            quota = int(f.read().strip())
-        if quota <= 0:
-            return None
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as f:
-            period = int(f.read().strip())
-        return quota / period
-    except (FileNotFoundError, ValueError, ZeroDivisionError):
-        return None
-
-
-def _default_pool_workers() -> int:
-    quota = _detect_real_cpu_quota()
-    if quota and quota > 0:
-        return max(1, round(quota))
-    return 2  # respaldo conservador si cgroups no es legible -- ver PROJECT_STATE.md
-
-
-# Cuántos procesos reales caben aquí. Se autodetecta de la cuota real de CPU (arriba)
-# en vez de adivinar con cpu_count() -- pero PDF_POOL_WORKERS sigue siendo una
-# variable de entorno explícita para poder fijarlo a mano si algún día la
+# Cuántos procesos reales caben aquí. Se autodetecta de la cuota real de CPU
+# (cpu_quota.py) en vez de adivinar con cpu_count() -- pero PDF_POOL_WORKERS sigue
+# siendo una variable de entorno explícita para poder fijarlo a mano si algún día la
 # autodetección no aplica (otro proveedor de nube, otro mecanismo de cgroups, etc.),
 # mismo patrón de "override explícito disponible" que BATCH_JOB_SHARD_SIZE/THRESHOLD.
-PDF_POOL_WORKERS = int(os.getenv("PDF_POOL_WORKERS", str(_default_pool_workers())))
+#
+# Ojo con dos cosas que ya mordieron en el código anterior de este módulo:
+# 1. os.getenv(key, default) solo usa `default` cuando la LLAVE está ausente, no
+#    cuando está vacía -- si alguien pone PDF_POOL_WORKERS="" a mano, la llave SÍ
+#    está presente, y un int("") sin atrapar tumbaría el arranque completo de la
+#    app (esto pasa al importar el módulo, antes de servir una sola petición).
+# 2. `default` se evalúa siempre, aunque la variable SÍ esté puesta -- por eso aquí
+#    solo se llama a default_pool_workers() (que hace I/O real contra cgroups)
+#    dentro del branch donde de verdad hace falta, no como argumento de getenv().
+_pdf_pool_workers_env = os.getenv("PDF_POOL_WORKERS")
+if _pdf_pool_workers_env is not None:
+    try:
+        PDF_POOL_WORKERS = int(_pdf_pool_workers_env)
+    except ValueError:
+        print(
+            f"[pdf_pipeline] PDF_POOL_WORKERS={_pdf_pool_workers_env!r} no es un "
+            "entero válido -- usando autodetección de cuota real de CPU en su lugar."
+        )
+        PDF_POOL_WORKERS = default_pool_workers()
+    else:
+        # Techo de seguridad también para el override manual -- un typo humano
+        # (ej. de más un cero) no debe poder agotar la memoria del contenedor
+        # levantando demasiados procesos WeasyPrint/reportlab/lxml.
+        PDF_POOL_WORKERS = min(MAX_POOL_WORKERS, max(1, PDF_POOL_WORKERS))
+else:
+    PDF_POOL_WORKERS = default_pool_workers()
 
 # Pool de procesos persistente para aislar CADA generate() en su propio
 # proceso (spawn) — no solo el de gRPC+fork (>2000 conceptos, ya resuelto
@@ -189,6 +173,11 @@ def generate_from_data(
     header_reserve = header_h + HEADER_GAP
 
     # 5. Canvas: tabla + footer, reservando header_reserve pts en el tope de pág 1
+    # NOTA (2026-07-22, code review): render_conceptos ya NO usa este valor para
+    # paralelismo real -- ver el comentario de "workers" en su firma, en
+    # canvas_service.py. Se sigue calculando/pasando por compatibilidad de firma,
+    # no lo quites asumiendo que no hace nada; solo no esperes que cambiar
+    # PDF_POOL_WORKERS acelere el render de facturas con miles de conceptos.
     n_workers = workers or PDF_POOL_WORKERS
     body_pdf = render_conceptos(
         rows,

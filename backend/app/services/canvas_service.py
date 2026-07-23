@@ -666,7 +666,7 @@ def _merge_pdfs(pdf_list: list[bytes]) -> bytes:
 def render_conceptos(
     rows: list[dict],
     cfdi_data: dict,
-    workers: int | None = None,
+    workers: int | None = None,  # vestigial, ver docstring -- no controla nada hoy
     skip_header_card: bool = False,
     header_reserve: float = 0.0,
     render_config: dict | None = None,
@@ -676,7 +676,13 @@ def render_conceptos(
 
     skip_header_card=True + header_reserve=Xpt: reserva X puntos en el tope de página 1
     para que el header HTML se estampe encima sin solaparse con la tabla.
-    N <= 2000: single-process.  N > 2000: chunks en paralelo.
+    N <= 2000: single-process. N > 2000: chunks secuenciales dentro de este mismo
+    proceso (NO paralelo -- ver el comentario más abajo, 2026-07-11: se quitó el
+    ProcessPoolExecutor anidado a propósito). `workers` no tiene efecto alguno hoy;
+    se conserva en la firma por compatibilidad con los llamadores existentes
+    (pdf_pipeline.generate_from_data le sigue pasando un valor, que se ignora aquí)
+    -- confirmado con un code review el 2026-07-22, no lo quites asumiendo que sí
+    hace algo, y no asumas que cambiarlo acelera nada.
     render_config: dict con primitivos (hex strings, bools) — spawn-safe.
     """
     if len(rows) <= 2000:
