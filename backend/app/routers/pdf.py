@@ -229,9 +229,15 @@ async def start_pdf_generation(
     bucket = storage_client.bucket(BUCKET_NAME)
     blob_xml = bucket.blob(f"xml_temp/{job_id}.xml")
     await asyncio.to_thread(blob_xml.upload_from_string, xml_content, content_type="application/xml")
+    # <-- El XML ya está en GCS -- lo que sigue (status best-effort + encolar
+    # la tarea real) nunca debe fallar por un problema de Redis. Encontrado en
+    # vivo el 23 de julio: esta escritura, sin protección, tumbaba con 500 el
+    # encolado de CADA XML individual mientras la cuota de Redis seguía
+    # agotada -- el mismo defecto de Paso 1, en una función que el plan
+    # original no había cubierto.
 
     # 🟢 En Redis SOLO guardamos el estatus inicial pendiente (pesa nada)
-    await redis_client.set(f"pdf:status:{job_id}", b"pending", ex=1800)
+    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"pending", ex=1800))
 
     try:
         await asyncio.to_thread(enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=template_id)
@@ -302,22 +308,27 @@ async def start_pdf_zip_generation(
     try:
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
-        
+
         CHUNK_SIZE = 20
         for i in range(0, len(job_ids), CHUNK_SIZE):
             chunk = job_ids[i:i + CHUNK_SIZE]
-            
+
             # a) En Redis SÓLO creamos el estatus "pending" (pesa unos bytes)
-            async with redis_client.pipeline(transaction=False) as pipe:
-                for jid, _ in chunk:
-                    pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
-                await pipe.execute()
-                
+            # -- best-effort: un fallo de cuota aquí no debe tumbar la subida
+            # real a GCS del chunk completo (mismo defecto que start_pdf_generation,
+            # encontrado en vivo el 23 de julio con este mismo flujo de ZIP).
+            async def _set_pending_chunk(chunk=chunk):
+                async with redis_client.pipeline(transaction=False) as pipe:
+                    for jid, _ in chunk:
+                        pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                    await pipe.execute()
+            await safe_redis_call(_set_pending_chunk)
+
             # b) Subimos los contenidos XML reales a Cloud Storage temporal
             for jid, xml_content in chunk:
                 blob_xml = bucket.blob(f"xml_temp/{jid}.xml")
                 await asyncio.to_thread(blob_xml.upload_from_string, xml_content, content_type="application/xml")
-                
+
     except Exception as infra_err:
         raise HTTPException(
             status_code=500,
@@ -325,9 +336,9 @@ async def start_pdf_zip_generation(
         )
 
     just_ids = [item[0] for item in job_ids]
-    await redis_client.set(f"pdf:extracting_total:{batch_id}", len(just_ids), ex=BATCH_METADATA_TTL_SECONDS)
-    await redis_client.sadd(f"pdf:batch_ids:{batch_id}", *just_ids)
-    await redis_client.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
+    await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_total:{batch_id}", len(just_ids), ex=BATCH_METADATA_TTL_SECONDS))
+    await safe_redis_call(lambda: redis_client.sadd(f"pdf:batch_ids:{batch_id}", *just_ids))
+    await safe_redis_call(lambda: redis_client.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS))
 
     network_semaphore = asyncio.Semaphore(50)
 
@@ -338,7 +349,7 @@ async def start_pdf_zip_generation(
                 await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
             except Exception as ex:
                 print(f"Error registrando archivo {jid} en la cola de Google: {ex}")
-                await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                await safe_redis_call(lambda jid=jid: redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
 
     async_tasks = [safe_enqueue_task(jid) for jid in just_ids]
     await asyncio.gather(*async_tasks)

@@ -312,6 +312,44 @@ class BatchMetadataTtlTests(unittest.TestCase):
             b"%PDF-fake", content_type="application/pdf"
         )
 
+    def test_start_pdf_generation_encola_aunque_redis_este_agotado(self) -> None:
+        """Hallazgo en vivo el 23 de julio, reproduciendo el incidente real
+        con el navegador contra producción: start_pdf_generation (pdf.py:234,
+        camino individual, no ZIP) escribía a Redis SIN protección antes de
+        encolar la tarea real -- el mismo defecto de Paso 1, en una función
+        que el plan original no cubría. Con la cuota de Redis agotada, el
+        XML debe subirse a GCS y la tarea debe encolarse igual (202/200,
+        jobId presente), no un 500."""
+        import io
+
+        from fastapi.testclient import TestClient
+
+        from backend.app.main import app
+
+        mock_bucket = MagicMock()
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "enqueue_pdf_generation") as mock_enqueue,
+        ):
+            mock_redis.set = AsyncMock(side_effect=RuntimeError(
+                "max requests limit exceeded. Limit: 500000, Usage: 500000."
+            ))
+
+            client = TestClient(app)
+            response = client.post(
+                "/api/cfdi/pdf/start",
+                files={"file": ("factura.xml", io.BytesIO(b"<xml/>"), "application/xml")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("jobId", response.json())
+        mock_bucket.blob.return_value.upload_from_string.assert_called_once()
+        mock_enqueue.assert_called_once()
+
     def test_direct_path_enqueue_failure_sets_error_status_ttl_to_24h(self) -> None:
         """start_pdf_zip_generation (~283-346): si Cloud Tasks rechaza el
         encolado, el job nunca progresará — su status "error" debe vivir
