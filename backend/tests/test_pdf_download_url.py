@@ -112,13 +112,20 @@ class DownloadPdfEndpointTests(unittest.TestCase):
 
 
 @unittest.skipIf(TestClient is None, f"fastapi no disponible: {_IMPORT_ERROR}")
-class PdfProgressDegradedFallbackTests(unittest.TestCase):
+class PdfProgressGcsFallbackTests(unittest.TestCase):
     """Encontrado en vivo el 23 de julio reproduciendo el incidente contra
     producción: /cfdi/pdf/{job_id}/progress (el stream SSE que el frontend
     escucha) se quedaba reportando "converting" para siempre con Redis
     agotado, aunque el PDF ya estuviera listo en GCS -- el status "done"
-    nunca llegaba a escribirse (safe_redis_call lo descarta). Mientras la
-    bandera de degradación esté activa, debe caer a GCS como respaldo."""
+    nunca llegaba a escribirse (safe_redis_call lo descarta).
+
+    La primera versión de este fix condicionaba el respaldo a
+    redis_safety.is_degraded(), pero esa bandera vive en memoria de UNA
+    instancia de Cloud Run -- confirmado en vivo: la misma consulta daba
+    "done" pegándole directo a una revisión, pero "converting" para siempre
+    a través del rewrite de Vercel (que aterrizó en otra instancia que nunca
+    había visto fallar un Redis propio). Por eso ya NO se condiciona a la
+    bandera: se consulta GCS cada vez que el status viene vacío, sin más."""
 
     async def _first_event(self, job_id: str) -> str:
         """Invoca pdf_progress directo (sin pasar por TestClient/HTTP) y
@@ -128,7 +135,7 @@ class PdfProgressDegradedFallbackTests(unittest.TestCase):
         response = await pdf_router.pdf_progress(job_id)
         return await response.body_iterator.__anext__()
 
-    def test_reporta_done_via_gcs_cuando_redis_degradado_y_sin_status(self) -> None:
+    def test_reporta_done_via_gcs_cuando_el_status_viene_vacio(self) -> None:
         mock_blob = MagicMock()
         mock_blob.exists.return_value = True
         mock_bucket = MagicMock()
@@ -139,29 +146,31 @@ class PdfProgressDegradedFallbackTests(unittest.TestCase):
         with (
             patch("backend.app.routers.pdf.storage.Client", return_value=mock_storage_client),
             patch("backend.app.routers.pdf.redis_client.get", new_callable=AsyncMock) as mock_get,
-            patch("backend.app.routers.pdf.redis_safety.is_degraded", return_value=True),
         ):
             mock_get.return_value = None
-            first_event = _run(self._first_event("job-degraded"))
+            first_event = _run(self._first_event("job-sin-status"))
 
         self.assertIn("done", first_event)
 
-    def test_no_cae_a_gcs_si_no_esta_degradado(self) -> None:
-        """Sin la bandera activa, un status ausente sigue significando
-        "converting" -- no se agrega una llamada a GCS por cada tick del
-        camino feliz."""
+    def test_sigue_convirtiendo_si_gcs_tampoco_tiene_el_blob(self) -> None:
+        """Status vacío + blob todavía inexistente en GCS = de verdad sigue
+        en proceso, no un caso de degradación -- debe seguir reportando
+        "converting", no un falso "done"."""
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = False
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
         mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
 
         with (
             patch("backend.app.routers.pdf.storage.Client", return_value=mock_storage_client),
             patch("backend.app.routers.pdf.redis_client.get", new_callable=AsyncMock) as mock_get,
-            patch("backend.app.routers.pdf.redis_safety.is_degraded", return_value=False),
         ):
             mock_get.return_value = None
-            first_event = _run(self._first_event("job-normal"))
+            first_event = _run(self._first_event("job-en-proceso"))
 
         self.assertIn("converting", first_event)
-        mock_storage_client.bucket.return_value.blob.assert_not_called()
 
 
 if __name__ == "__main__":

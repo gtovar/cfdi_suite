@@ -40,7 +40,6 @@ from ..services.batch_progress import publish_batch_tick
 from ..services.zip_manifest import is_valid_xml_entry, compute_job_id, build_manifest
 from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
-from ..services import redis_safety
 from ..services.redis_errors import is_redis_quota_error
 from ..services.redis_safety import safe_redis_call
 
@@ -597,8 +596,19 @@ async def pdf_progress(job_id: str):
         # Redis agotado, el status "done" nunca se escribe (safe_redis_call
         # lo descarta) y este stream se queda reportando "converting" para
         # siempre, aunque el PDF ya esté listo y descargable en GCS (Paso 3).
-        # Mientras la bandera de degradación esté activa, se usa GCS como
-        # respaldo -- mismo principio que Paso 3, aplicado aquí también.
+        #
+        # NO basta con condicionar el respaldo a redis_safety.is_degraded():
+        # esa bandera vive en memoria de UNA instancia de Cloud Run. Con
+        # varias instancias activas (confirmado en vivo: la misma consulta
+        # devolvía "done" pegando directo a una revisión, pero "converting"
+        # para siempre pasando por el rewrite de Vercel, que aterrizó en otra
+        # instancia que nunca había visto fallar un Redis propio), la
+        # instancia que atiende ESTE stream puede no estar "degradada" según
+        # su propia bandera aunque Redis esté agotado para todo el servicio.
+        # Por eso se consulta GCS cada vez que el status viene vacío, sin
+        # condicionarlo a la bandera -- una llamada extra a GCS por segundo
+        # mientras el job sigue en vuelo es barata frente a dejar al usuario
+        # viendo "Convirtiendo..." para siempre con el PDF ya listo.
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         deadline = time.monotonic() + SSE_MAX_STREAM_SECONDS
@@ -608,7 +618,7 @@ async def pdf_progress(job_id: str):
             if status in ("done", "error"):
                 yield f'data: {{"status": "{status}"}}\n\n'
                 break
-            if status is None and redis_safety.is_degraded():
+            if status is None:
                 blob = bucket.blob(f"pdfs/{job_id}.pdf")
                 if await asyncio.to_thread(blob.exists):
                     yield 'data: {"status": "done"}\n\n'
