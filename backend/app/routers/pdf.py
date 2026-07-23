@@ -1152,14 +1152,14 @@ async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
     batch_id = str(uuid.uuid4())
 
     # Avisamos a Redis que este lote está en fase de descarga/extracción (expira en 1 hr)
-    await redis_client.set(f"pdf:extracting:{batch_id}", b"true", ex=3600)
+    await safe_redis_call(lambda: redis_client.set(f"pdf:extracting:{batch_id}", b"true", ex=3600))
 
     try:
         await asyncio.to_thread(
             enqueue_zip_extraction, gcs_path=payload.gcsPath, batch_id=batch_id, template_id=template_id
         )
     except Exception as e:
-        await redis_client.delete(f"pdf:extracting:{batch_id}")
+        await safe_redis_call(lambda: redis_client.delete(f"pdf:extracting:{batch_id}"))
         raise HTTPException(status_code=500, detail=f"Error encolando la extracción en Cloud Tasks: {e}")
 
     # Respondemos al Front-End INMEDIATAMENTE para que no se quede trabado
