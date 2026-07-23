@@ -262,6 +262,56 @@ class BatchMetadataTtlTests(unittest.TestCase):
             "pdf:status:job-boom", b"error", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
         )
 
+    def test_pdf_se_genera_y_sube_aunque_redis_este_agotado(self) -> None:
+        """El caso central del incidente 2026-07-23: la cuota de Upstash
+        agotada en la escritura de status "converting" NO debe impedir que
+        el PDF se genere y se suba a GCS -- la respuesta debe seguir siendo
+        200, no 500 (ver Paso 1 de
+        docs/plan-implementacion-resiliencia-redis-2026-07-23.md)."""
+        import redis.exceptions
+
+        from backend.app.routers.pdf import GeneratePdfPayload
+
+        mock_request = MagicMock()
+        mock_request.headers = {"x-cloudtasks-queuename": "pdf-generator-queue"}
+        payload = GeneratePdfPayload(
+            job_id="job-degraded", xml_b64="", template_id="default", batch_id=None
+        )
+
+        mock_blob_xml = MagicMock()
+        mock_blob_xml.exists.return_value = True
+        mock_blob_xml.download_as_bytes.return_value = b"<xml/>"
+        mock_blob_pdf = MagicMock()
+        mock_bucket = MagicMock()
+
+        def bucket_blob(path):
+            return mock_blob_xml if path.startswith("xml_temp/") else mock_blob_pdf
+
+        mock_bucket.blob.side_effect = bucket_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "generate", return_value=b"%PDF-fake"),
+            patch.object(pdf_router, "PDF_PROCESS_POOL", None),
+        ):
+            mock_redis.get = AsyncMock(return_value=None)
+            mock_redis.set = AsyncMock(
+                side_effect=redis.exceptions.ResponseError(
+                    "max requests limit exceeded. Limit: 500000, Usage: 500000."
+                )
+            )
+            mock_redis.delete = AsyncMock()
+
+            result = _run(pdf_router.internal_generate_pdf(payload, mock_request))
+
+        self.assertEqual(result, {"status": "success", "message": "PDF generado"})
+        mock_blob_pdf.upload_from_string.assert_called_once_with(
+            b"%PDF-fake", content_type="application/pdf"
+        )
+
     def test_direct_path_enqueue_failure_sets_error_status_ttl_to_24h(self) -> None:
         """start_pdf_zip_generation (~283-346): si Cloud Tasks rechaza el
         encolado, el job nunca progresará — su status "error" debe vivir

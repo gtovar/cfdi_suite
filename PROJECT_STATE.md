@@ -5,11 +5,75 @@
 main
 
 ## Último cambio
-**2026-07-23: incidente real de Redis (cuota gratuita de Upstash agotada por completo, 500,000/500,000)
-durante pruebas de carga del usuario — tumbó la generación de PDFs individuales y por lote en
-producción. Mesa de 4 agentes (arquitecto, producto/UX, SRE, destructor) analizó el incidente y
-produjo un plan de implementación completo. NADA de ese plan está implementado todavía — es
-trabajo pendiente para la próxima sesión.**
+**2026-07-23 (continuación, misma tarde): Pasos 1-6 del plan de resiliencia Redis
+IMPLEMENTADOS EN LOCAL, con tests — falta desplegar. Cola de Cloud Tasks pausada
+en producción ahora mismo (incidente seguía activo en vivo al retomar, ver abajo).**
+
+- **Al retomar la sesión, la cuota de Redis seguía agotada EN VIVO** (no solo en logs viejos):
+  `gcloud logging read` mostró errores "max requests limit exceeded" cada ~10s, el más reciente
+  a segundos del momento de la consulta — 60 errores en los últimos 10 minutos. Cloud Tasks
+  seguía reintentando contra el Redis agotado. Con confirmación del usuario, se pausó la cola:
+  `gcloud tasks queues pause pdf-generator-queue --location=us-central1` (confirmado
+  `state: PAUSED`). Esto corta la quema de cuota sin perder trabajo — los PDFs ya generados
+  siguen en GCS. **La cola sigue pausada — generación de PDFs en producción está detenida hasta
+  desplegar el fix y reanudarla explícitamente.**
+- **Pasos 1-6 de `docs/plan-implementacion-resiliencia-redis-2026-07-23.md` implementados y
+  verificados con tests, TODAVÍA NO DESPLEGADOS:**
+  - Paso 1: `internal_generate_pdf` (`backend/app/routers/pdf.py`) reestructurado — el trabajo
+    real (decodificar XML → `generate()` → subir a GCS) ya no puede ser tumbado por un fallo de
+    Redis; todas las escrituras de estado/progreso son best-effort vía `safe_redis_call`.
+  - Paso 2: mismo tratamiento en `backend/app/workers/batch_shard_worker.py` (`_process_one`,
+    `_process_one_remote`, y ambos loops `for job_id in my_shard`) — un fallo de Redis durante el
+    reporte de un XML individual ya no puede escalar a `sys.exit(1)` y tumbar el shard completo
+    (hasta 100 XMLs).
+  - Paso 3: `download_pdf` y `get_pdf_download_url` (`pdf.py`) ya no consultan Redis en absoluto
+    — GCS (`blob.exists()`) es la única señal de "¿está listo?". Se simplificó a quitar el gate
+    de Redis por completo (no se mantuvo como caché opcional — no había evidencia de que valiera
+    la complejidad extra).
+  - Paso 4: nuevo `backend/app/services/redis_errors.py` con `is_redis_quota_error(exc)`,
+    reconoce el mensaje real de Upstash ("max requests limit exceeded", antes no coincidía con
+    ninguna cadena buscada). Usado en `pdf.py`; **no se tocó `batch.py`** (pipeline distinto de
+    análisis CFDI por lote, no implicado en el mecanismo del incidente — se revisaron sus 3
+    bloques `except` (líneas ~64, ~185, ~222, ~249) y ninguno clasifica errores de Redis hoy;
+    dejarlo así es una decisión explícita, no un olvido).
+  - Paso 5: nuevo `backend/app/services/redis_safety.py` con `safe_redis_call`/`mark_degraded`/
+    `is_degraded` (bandera de degradación pasiva, cooldown 60s).
+  - Paso 6: `/api/health` (`backend/app/main.py`) expone `{"status": "degraded", ...}` cuando la
+    bandera está activa — solo lee memoria, nunca llama a Redis.
+  - Tests nuevos: `backend/tests/test_redis_safety.py`, `backend/tests/test_health_endpoint.py`,
+    ampliados `test_pdf_batch_ttl.py`, `test_batch_shard_job.py`, `test_pdf_download_url.py`.
+    `python3 -m pytest backend/tests/ -q` → 251 passed, 8 failed (exactamente los 8 preexistentes
+    documentados abajo, cero nuevos rotos) — confirmado con `git stash`/`stash pop` contra el
+    baseline sin estos cambios, no solo leyendo la lista vieja.
+- **Pendiente antes de desplegar**: Paso 7 (frontend, banner ámbar en flujo individual) NO
+  implementado todavía — depende del Paso 3 (ya hecho). Pasos 8 (runbook) y 9 (bugs de UX, piden
+  confirmación aparte) tampoco.
+- **Dos objetivos de deploy, no uno**: `cfdi-suite-api` (servicio, sirve `pdf.py`/`main.py`) Y
+  `cfdi-batch-shard` (Cloud Run Job, sirve `batch_shard_worker.py` — misma imagen que la API,
+  ver `infra/deploy-batch-shard-job.sh`). Ambos importan los módulos nuevos `redis_safety`/
+  `redis_errors`. Desplegar solo la API deja el Paso 2 (el de peor blast radius) sin corregir en
+  producción.
+- **FOOTGUN encontrado en `infra/deploy-batch-shard-job.sh` (no corregido en el archivo a
+  propósito — está versionado y advierte contra secretos en texto plano, ver su propio
+  comentario): su `--set-env-vars` solo lista 4 variables (`GCS_BUCKET_NAME`, `REDIS_HOST`,
+  `REDIS_PORT`, `PUSHER_CLUSTER`), pero el Job real en producción tiene 8 (confirmado con
+  `gcloud run jobs describe cfdi-batch-shard`) — las otras 4 (`REDIS_PASSWORD`,
+  `PUSHER_APP_ID/KEY/SECRET`) se agregaron a mano después (ver el bug del 12 de julio que este
+  mismo script documenta). Correr el script tal cual con `gcloud run jobs deploy` BORRARÍA esas
+  4 variables (reproduciendo el bug de Pusher apagado en silencio + rompiendo auth de Redis).
+  Para actualizar solo la imagen del Job sin tocar sus env vars: `gcloud run jobs update
+  cfdi-batch-shard --region=us-central1 --image=<digest exacto, no :latest>` — `update` sin
+  flag de env vars es un patch parcial, no reemplaza nada.
+- **Al desplegar y verificar limpio, reanudar la cola**: `gcloud tasks queues resume
+  pdf-generator-queue --location=us-central1` — el incidente no está resuelto hasta que esto
+  corra contra la revisión ya corregida.
+
+---
+
+**2026-07-23 (temprano, antes de lo de arriba): incidente real de Redis (cuota gratuita de
+Upstash agotada por completo, 500,000/500,000) durante pruebas de carga del usuario — tumbó la
+generación de PDFs individuales y por lote en producción. Mesa de 4 agentes (arquitecto,
+producto/UX, SRE, destructor) analizó el incidente y produjo un plan de implementación completo.**
 
 - **Causa raíz del incidente**: durante pruebas agresivas (varias pestañas de Chrome, lotes de 150
   XMLs cada una, cambiando `maxConcurrentDispatches` repetidamente), el plan gratuito de Redis
@@ -770,10 +834,21 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**MÁS URGENTE (2026-07-23): implementar `docs/plan-implementacion-resiliencia-redis-2026-07-23.md`.**
-Plan completo, ejecutable paso a paso, con archivo/línea real — nada de esto está construido
-todavía. Ver "Último cambio" arriba para el contexto del incidente que lo motivó. Antes de
-implementar, confirmar si la cuota de Redis ya se liberó (para poder probar de verdad al terminar).
+**MÁS URGENTE (2026-07-23): cerrar el plan de resiliencia Redis — backend (Pasos 1-6) ya
+implementado y con tests en local, falta TODO lo siguiente:**
+0. Pedir confirmación explícita y desplegar AMBOS objetivos (`cfdi-suite-api` y el Job
+   `cfdi-batch-shard`, ver "Último cambio" arriba — no basta con uno solo).
+1. Verificar arranque limpio de ambas revisiones (`gcloud logging read` sobre errores de
+   arranque, mismo patrón de siempre).
+2. Reanudar la cola: `gcloud tasks queues resume pdf-generator-queue --location=us-central1`
+   (sigue pausada desde esta sesión — production PDF generation está detenida hasta esto).
+3. Confirmar que la cuota de Redis ya se liberó o se subió de plan antes de cualquier prueba de
+   carga real (seguía agotada en vivo al momento de pausar la cola).
+4. Implementar Paso 7 del plan (frontend: banner ámbar en el flujo individual, portado del
+   patrón que ya existe en el flujo de lote) — no empezado. Pasos 8 (runbook) y 9 (bugs de UX)
+   son opcionales/piden confirmación aparte, ver el documento del plan.
+5. Prueba de degradación real end-to-end (punto 4 de "Verificación end-to-end" del plan) antes
+   de dar el incidente por cerrado del todo.
 
 0. **Plan de recuperación de PDFs de batches — código listo en local, falta desplegar.** Pedir
    confirmación explícita antes de cada deploy: primero Fase 2 (backend, commits `be07d0b` +

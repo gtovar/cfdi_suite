@@ -199,6 +199,63 @@ class RunShardZipGcsPathTests(unittest.TestCase):
         mock_redis.smembers.assert_called_once_with("pdf:batch_ids:batch-old")
         mock_bucket.blob.assert_any_call("xml_temp/job-1.xml")
 
+    def test_fallo_de_redis_en_tick_de_error_no_tumba_el_resto_del_shard(self) -> None:
+        """El defecto gemelo del incidente 2026-07-23 (ver Paso 2 de
+        docs/plan-implementacion-resiliencia-redis-2026-07-23.md): antes,
+        un fallo de Redis DENTRO del except del loop (publish_batch_tick
+        definitive_error=True) escapaba el `for`, subía hasta main() y
+        disparaba sys.exit(1) -- reintentando la tarea COMPLETA de hasta
+        100 XMLs. Con safe_redis_call, un XML que falla (aquí: job-1,
+        xml inexistente) no debe impedir que job-2 se procese, y run_shard()
+        no debe propagar la excepción."""
+        mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(return_value={b"job-1", b"job-2"})
+        mock_redis.set = AsyncMock()
+        mock_redis.rpush = AsyncMock()
+        mock_redis.expire = AsyncMock()
+
+        mock_blob_missing = MagicMock()
+        mock_blob_missing.exists.return_value = False
+        mock_blob_ok = MagicMock()
+        mock_blob_ok.exists.return_value = True
+        mock_blob_ok.download_as_bytes.return_value = b"<xml/>"
+        mock_bucket = MagicMock()
+
+        def bucket_blob(path):
+            return mock_blob_missing if "job-1" in path else mock_blob_ok
+
+        mock_bucket.blob.side_effect = bucket_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        # publish_batch_tick lanza SIEMPRE que se le pase definitive_error
+        # (simula la cuota de Redis agotada justo en el reporte de error de
+        # job-1) -- el resto del shard (job-2) debe procesarse igual.
+        async def flaky_tick(redis_client, publish_fn, batch_id, definitive_error=False):
+            if definitive_error:
+                raise Exception("max requests limit exceeded. Limit: 500000, Usage: 500000.")
+
+        env = {
+            "BATCH_ID": "batch-flaky",
+            "TEMPLATE_ID": "default",
+            "SHARD_SIZE": "5",
+            "CLOUD_RUN_TASK_INDEX": "0",
+        }
+
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(batch_shard_worker, "redis_client", mock_redis),
+            patch.object(batch_shard_worker.storage, "Client", return_value=mock_storage_client),
+            patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
+            patch.object(batch_shard_worker, "publish_batch_tick", new=flaky_tick),
+        ):
+            os.environ.pop("ZIP_GCS_PATH", None)
+            # No debe propagar la excepción del tick fallido.
+            asyncio.run(batch_shard_worker.run_shard())
+
+        # job-2 sí se procesó pese al fallo de Redis en el reporte de job-1.
+        mock_blob_ok.upload_from_string.assert_called_once()
+
 
 @unittest.skipIf(batch_progress is None, f"backend no disponible: {_IMPORT_ERROR}")
 class PublishBatchTickSharedLogicTests(unittest.TestCase):

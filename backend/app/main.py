@@ -30,6 +30,7 @@ from .routers.templates import router as templates_router
 from .routers.rfc_validation import router as rfc_router
 from .routers.sat_enquiry import router as sat_router
 from .services.analyze_cfdi import run_analyze_cfdi
+from .services import redis_safety
 from google.api_core.exceptions import InvalidArgument
 
 # === PARCHE GLOBAL DE SEGURIDAD PARA MULTIPART ===
@@ -152,6 +153,11 @@ async def handle_request_validation_error(
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
+    # Solo lee la bandera en memoria -- NUNCA debe hacer una llamada real a
+    # Redis (el presupuesto de cuota son ~11 peticiones/min, ver Paso 6 de
+    # docs/plan-implementacion-resiliencia-redis-2026-07-23.md).
+    if redis_safety.is_degraded():
+        return {"status": "degraded", "realtime": "unavailable"}
     return {"status": "ok"}
 
 

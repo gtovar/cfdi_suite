@@ -40,6 +40,8 @@ from ..services.batch_progress import publish_batch_tick
 from ..services.zip_manifest import is_valid_xml_entry, compute_job_id, build_manifest
 from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
+from ..services.redis_errors import is_redis_quota_error
+from ..services.redis_safety import safe_redis_call
 
 router = APIRouter(prefix="/api", tags=["PDF"])
 
@@ -120,9 +122,11 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         raise HTTPException(status_code=403, detail="Acceso denegado. Solo Cloud Tasks.")
 
     print(f"Iniciando generación de PDF para Job ID: {payload.job_id}")
-    try:
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"converting", ex=3600)
+    # Best-effort, nunca puede tumbar el trabajo real de abajo si Redis está
+    # agotado (ver docs/mesa-decision-resiliencia-redis-2026-07-23.md).
+    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{payload.job_id}", b"converting", ex=3600))
 
+    try:
         if payload.xml_b64:
             xml_bytes = base64.b64decode(payload.xml_b64)
         else:
@@ -135,20 +139,17 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
                 storage_client = storage.Client()
                 bucket = storage_client.bucket(BUCKET_NAME)
                 blob_xml = bucket.blob(f"xml_temp/{payload.job_id}.xml")
-                
+
                 if await asyncio.to_thread(blob_xml.exists):
                     xml_bytes = await asyncio.to_thread(blob_xml.download_as_bytes)
                 else:
                     xml_bytes = None
-            
+
         if not xml_bytes:
-            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
             print(f"Abortando Job {payload.job_id}: XML ya no existe ni en Redis ni en GCS.")
+            await safe_redis_call(lambda: redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
             if payload.batch_id:
-                try:
-                    await _publish_batch_tick(payload.batch_id, definitive_error=True)
-                except Exception as tick_err:
-                    print(f"Aviso: tick de progreso no publicado para {payload.batch_id}: {tick_err}")
+                await safe_redis_call(lambda: _publish_batch_tick(payload.batch_id, definitive_error=True))
             return Response(status_code=204)
 
         with tracer.start_as_current_span("generacion_pdf_intensiva"):
@@ -162,51 +163,49 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
             pdf_bytes = await loop.run_in_executor(
                 PDF_PROCESS_POOL, generate, xml_bytes, payload.template_id, payload.html_shell
             )
-        
+
         # Guardado final del PDF
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(f"pdfs/{payload.job_id}.pdf")
         await asyncio.to_thread(blob.upload_from_string, pdf_bytes, content_type="application/pdf")
+        # <-- A partir de aquí el PDF ya está generado y subido a GCS. Nada de
+        # lo que sigue (reporte de estado a Redis) puede convertir esto en un
+        # 500 -- ver Paso 1 de docs/plan-implementacion-resiliencia-redis-2026-07-23.md.
 
-        await redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=BATCH_METADATA_TTL_SECONDS)
-        # Tamaño en bytes, guardado aquí (ya lo tenemos en memoria) para que la
-        # descarga del ZIP consolidado pueda estimar el progreso sin tener que
-        # volver a golpear GCS por metadata de cada PDF del lote.
-        await redis_client.set(f"pdf:size:{payload.job_id}", str(len(pdf_bytes)).encode(), ex=86400)
-        await redis_client.delete(f"pdf:xml:{payload.job_id}")
-        
-        # 3️⃣ NUEVO: Borramos el XML temporal de GCS para no dejar basura
-        try:
-            blob_xml = bucket.blob(f"xml_temp/{payload.job_id}.xml")
-            if await asyncio.to_thread(blob_xml.exists):
-                await asyncio.to_thread(blob_xml.delete)
-        except Exception as e:
-            print(f"Aviso: No se pudo limpiar el XML temporal {payload.job_id}: {e}")
- 
-        print(f"PDF {payload.job_id} guardado con éxito.")
-        if payload.batch_id:
-            try:
-                await redis_client.rpush(f"pdf:ready_recent:{payload.batch_id}", payload.job_id)
-                await redis_client.expire(f"pdf:ready_recent:{payload.batch_id}", BATCH_METADATA_TTL_SECONDS)
-                await _publish_batch_tick(payload.batch_id)
-            except Exception as tick_err:
-                print(f"Aviso: tick de progreso no publicado para {payload.batch_id}: {tick_err}")
-        return {"status": "success", "message": "PDF generado"}
-
-    except HTTPException as http_exc:
-        raise http_exc
+    except HTTPException:
+        raise
     except Exception as e:
+        # Solo fallos reales de decodificar/generar/subir llegan aquí.
         print(f"Error generando PDF {payload.job_id}: {e}")
-        try:
-            await redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
-        except Exception as redis_err:
-            pass
-        
-        error_str = str(e).lower()
-        if "quota exceeded" in error_str or "oom" in error_str:
+        await safe_redis_call(lambda: redis_client.set(f"pdf:status:{payload.job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
+
+        if is_redis_quota_error(e):
             raise HTTPException(status_code=429, detail="El motor de procesamiento está a máxima capacidad.")
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Reporte best-effort, fuera del try de arriba -- nunca produce un 5xx.
+    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{payload.job_id}", b"done", ex=BATCH_METADATA_TTL_SECONDS))
+    # Tamaño en bytes, guardado aquí (ya lo tenemos en memoria) para que la
+    # descarga del ZIP consolidado pueda estimar el progreso sin tener que
+    # volver a golpear GCS por metadata de cada PDF del lote.
+    await safe_redis_call(lambda: redis_client.set(f"pdf:size:{payload.job_id}", str(len(pdf_bytes)).encode(), ex=86400))
+    await safe_redis_call(lambda: redis_client.delete(f"pdf:xml:{payload.job_id}"))
+
+    # 3️⃣ Borramos el XML temporal de GCS para no dejar basura
+    try:
+        blob_xml = bucket.blob(f"xml_temp/{payload.job_id}.xml")
+        if await asyncio.to_thread(blob_xml.exists):
+            await asyncio.to_thread(blob_xml.delete)
+    except Exception as e:
+        print(f"Aviso: No se pudo limpiar el XML temporal {payload.job_id}: {e}")
+
+    print(f"PDF {payload.job_id} guardado con éxito.")
+    if payload.batch_id:
+        await safe_redis_call(lambda: redis_client.rpush(f"pdf:ready_recent:{payload.batch_id}", payload.job_id))
+        await safe_redis_call(lambda: redis_client.expire(f"pdf:ready_recent:{payload.batch_id}", BATCH_METADATA_TTL_SECONDS))
+        await safe_redis_call(lambda: _publish_batch_tick(payload.batch_id))
+    return {"status": "success", "message": "PDF generado"}
 
 @router.post("/cfdi/pdf/start")
 async def start_pdf_generation(
@@ -599,12 +598,10 @@ async def pdf_progress(job_id: str):
 
 @router.get("/cfdi/pdf/{job_id}/download")
 async def download_pdf(job_id: str):
-    # Primero verificamos rápidamente en Redis si el estatus dice "done"
-    status_bytes = await redis_client.get(f"pdf:status:{job_id}")
-    if not status_bytes or status_bytes.decode("utf-8") != "done":
-        raise HTTPException(status_code=404, detail="El PDF aún no está listo o expiró.")
-
-    # Descargamos desde Google Cloud Storage
+    # La existencia del blob en GCS es la señal principal de "¿está listo?" --
+    # no el status en Redis. Si Redis está caído o agotado (ver
+    # docs/mesa-decision-resiliencia-redis-2026-07-23.md), un PDF ya generado
+    # y subido debe poder descargarse igual.
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(f"pdfs/{job_id}.pdf")
@@ -682,11 +679,12 @@ async def get_pdf_download_url(job_id: str):
     Signed URL de lectura para un PDF individual ya listo — el navegador
     descarga directo de GCS, sin pasar por Cloud Run ni por el rewrite de
     Vercel (evita el límite de 120s de proxies externos para lotes grandes).
-    """
-    status_bytes = await redis_client.get(f"pdf:status:{job_id}")
-    if not status_bytes or status_bytes.decode("utf-8") != "done":
-        raise HTTPException(status_code=404, detail="El PDF aún no está listo o expiró.")
 
+    La existencia del blob en GCS es la señal principal de "¿está listo?" --
+    no el status en Redis (ver Paso 3 de
+    docs/plan-implementacion-resiliencia-redis-2026-07-23.md): con Redis
+    caído o agotado, un PDF ya generado debe poder descargarse igual.
+    """
     try:
         credentials, service_account_email = _get_signing_credentials()
         storage_client = storage.Client(credentials=credentials)
