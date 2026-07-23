@@ -6,8 +6,73 @@ main
 
 ## Último cambio
 **2026-07-23 (continuación, misma tarde): Pasos 1-6 del plan de resiliencia Redis
-IMPLEMENTADOS EN LOCAL, con tests — falta desplegar. Cola de Cloud Tasks pausada
-en producción ahora mismo (incidente seguía activo en vivo al retomar, ver abajo).**
+DESPLEGADOS EN PRODUCCIÓN Y VERIFICADOS EN VIVO reproduciendo el incidente real
+(3 pestañas de Chrome, 450 XMLs, cuota de Redis todavía agotada de verdad) — la misma
+prueba de carga que causó el incidente original, ahora hecha a propósito y de forma
+controlada para confirmar el fix. Encontró y corrigió 3 bugs reales adicionales que el
+plan original no cubría. Cola de Cloud Tasks reanudada. El backend queda resuelto y
+probado de punta a punta; queda un hallazgo de frontend sin resolver (ver abajo) y el
+Paso 7 del plan.**
+
+- **Commits `b21fa64` → `e875d1d` (4 deploys durante esta sesión), todos con confirmación
+  explícita antes de cada push.** Revisión final: `cfdi-suite-api-00130-blw`, 100% del
+  tráfico, cero errores de arranque en ninguna de las 4.
+- **Metodología**: se subieron 450 XMLs reales (duplicados de `backend/test-fixtures/`
+  con nombres únicos, job_id se deriva del nombre de archivo no del contenido) en 3
+  pestañas de Chrome simultáneas contra `cfdiinspector.vercel.app` (producción real), con
+  la cuota de Redis agotada de verdad durante toda la prueba — no fue necesario simular
+  nada, el incidente seguía activo al empezar la sesión.
+- **3 bugs reales adicionales encontrados en vivo, no cubiertos por el plan original**
+  (los 3 corregidos y desplegados, mismo patrón `safe_redis_call`/GCS-como-señal-de-verdad
+  que Pasos 1/3):
+  1. **`start_pdf_generation` (`pdf.py:234`, commit `016fa36`)**: escribía el status
+     "pending" a Redis SIN protección antes de encolar la tarea real. Con la cuota
+     agotada, esto tumbaba el 100% (150/150) de las conversiones individuales en las 3
+     pestañas — confirmado antes y después del fix con las mismas pestañas reales.
+     También corregido `start_pdf_zip_generation` (mismo patrón, mayor blast radius: tumbaba
+     el ZIP completo) y `safe_enqueue_task` dentro de esa función.
+  2. **`pdf_progress` (`pdf.py:593`, el stream SSE de progreso, commit `b0f6df8` +
+     `e875d1d`)**: con Redis agotado, el status "done" nunca se escribe, así que este
+     endpoint se quedaba reportando "converting" para siempre aunque el PDF ya estuviera
+     listo en GCS. Primer intento de fix condicionó el respaldo a GCS a
+     `redis_safety.is_degraded()` — **esto falló en producción real** porque esa bandera
+     vive en memoria de UNA instancia de Cloud Run: la misma consulta daba "done" pegando
+     directo a una revisión, pero "converting" para siempre a través del rewrite de
+     Vercel (que aterrizó en otra instancia sin la bandera activa). Fix final: consulta
+     GCS cada vez que el status viene vacío, sin condicionar a ninguna bandera.
+     Confirmado con `curl` (directo a Cloud Run Y a través de Vercel) que ahora ambos
+     caminos reportan "done" consistentemente para el mismo job.
+- **Verificación end-to-end real, no simulada, con Redis todavía agotado**:
+  - PDFs generándose y guardándose con éxito pese a que cada escritura a Redis falla.
+  - Cero respuestas 5xx.
+  - `/api/health` → `{"status": "degraded", "realtime": "unavailable"}`.
+  - Descarga real de un PDF generado en estas condiciones (200, PDF válido de 106
+    páginas) y de otro (200, PDF válido, vía `/download` directo).
+  - `/progress` reporta "done" correctamente vía `curl` tanto directo a Cloud Run como a
+    través de Vercel para el mismo job_id.
+- **Job `cfdi-batch-shard` actualizado**: `gcloud run jobs update --image=<digest exacto>`
+  (nunca `:latest`) — confirmado que las 8 env vars (incluyendo `REDIS_PASSWORD`/
+  `PUSHER_*`, que el script `deploy-batch-shard-job.sh` habría borrado, ver footgun
+  documentado abajo) siguen intactas tras el update.
+- **Cola `pdf-generator-queue` reanudada** (`gcloud tasks queues resume`).
+- **HALLAZGO SIN RESOLVER, fuera del alcance de este plan (bug de frontend, no de
+  Redis)**: en la prueba real con el navegador, la UI de "Conversión masiva" se quedaba
+  mostrando "Convirtiendo..." indefinidamente para archivos individuales, AUNQUE
+  confirmado por `curl` que el backend ya reportaba "done" correctamente (tanto directo a
+  Cloud Run como vía Vercel). Prueba decisiva con `javascript_tool` (`EventSource` crudo
+  contra el mismo endpoint, en la misma pestaña): el mensaje "done" SÍ llega al navegador,
+  rápido y correcto — el transporte (SSE, Vercel, gzip) funciona bien. El bug está en el
+  cableado propio del frontend (`ConversionMasivaPage.tsx`/`waitForPdfJob` no se
+  suscribe correctamente para esta fila, o algo en la lógica "de 4 en 4"), NO en nada
+  relacionado con Redis. **No se investigó ni se tocó código de frontend para esto** —
+  queda como hallazgo para la próxima sesión, probablemente relacionado con (pero no
+  necesariamente resuelto por) el Paso 7 del plan.
+- **La cuota de Redis (Upstash) sigue agotada al cerrar este checkpoint** — no se liberó
+  ni se subió de plan durante esta sesión.
+- **3 pestañas de Chrome quedaron abiertas** al final de la sesión con datos de prueba
+  parciales (algunos archivos en error de intentos previos a los fixes, otros nunca
+  reintentados) — no se limpiaron, son solo del ejercicio de reproducción, no bloquean
+  nada real.
 
 - **Al retomar la sesión, la cuota de Redis seguía agotada EN VIVO** (no solo en logs viejos):
   `gcloud logging read` mostró errores "max requests limit exceeded" cada ~10s, el más reciente
@@ -834,21 +899,28 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**MÁS URGENTE (2026-07-23): cerrar el plan de resiliencia Redis — backend (Pasos 1-6) ya
-implementado y con tests en local, falta TODO lo siguiente:**
-0. Pedir confirmación explícita y desplegar AMBOS objetivos (`cfdi-suite-api` y el Job
-   `cfdi-batch-shard`, ver "Último cambio" arriba — no basta con uno solo).
-1. Verificar arranque limpio de ambas revisiones (`gcloud logging read` sobre errores de
-   arranque, mismo patrón de siempre).
-2. Reanudar la cola: `gcloud tasks queues resume pdf-generator-queue --location=us-central1`
-   (sigue pausada desde esta sesión — production PDF generation está detenida hasta esto).
-3. Confirmar que la cuota de Redis ya se liberó o se subió de plan antes de cualquier prueba de
-   carga real (seguía agotada en vivo al momento de pausar la cola).
-4. Implementar Paso 7 del plan (frontend: banner ámbar en el flujo individual, portado del
-   patrón que ya existe en el flujo de lote) — no empezado. Pasos 8 (runbook) y 9 (bugs de UX)
-   son opcionales/piden confirmación aparte, ver el documento del plan.
-5. Prueba de degradación real end-to-end (punto 4 de "Verificación end-to-end" del plan) antes
-   de dar el incidente por cerrado del todo.
+**Backend del plan de resiliencia Redis (Pasos 1-6 + 3 bugs adicionales) DESPLEGADO Y
+VERIFICADO EN VIVO EN PRODUCCIÓN, con la cuota real todavía agotada — incidente original
+resuelto en la práctica. Queda cerrar el resto:**
+0. **MÁS URGENTE, hallazgo nuevo de esta sesión**: la UI de "Conversión masiva" no
+   refleja el estado real de la conversión (se queda en "Convirtiendo..." aunque el PDF
+   ya esté listo, confirmado por backend). Diagnóstico ya hecho (ver "Último cambio"): NO
+   es un problema de transporte/Redis, es el cableado del frontend
+   (`ConversionMasivaPage.tsx`/`waitForPdfJob`). Investigar por qué el `EventSource` que
+   monta ese componente no dispara igual que uno crudo probado con `javascript_tool` (que
+   sí funcionó). Prioridad alta porque, aunque el trabajo se completa bien en el backend,
+   el usuario no lo ve sin esto.
+1. **Paso 7 (frontend, no empezado)**: portar el banner ámbar del flujo de lote al flujo
+   individual — probablemente relacionado con el punto 0 de arriba, revisar juntos.
+2. Pasos 8 (runbook operacional — ya parcialmente cubierto en "Último cambio" y en el
+   footgun documentado de `deploy-batch-shard-job.sh`) y 9 (bugs de UX, `ACTIVE_BATCH_KEY`
+   por pestaña) son opcionales y piden confirmación aparte antes de implementarse.
+3. **No confirmado todavía**: si la cuota de Redis (Upstash) ya se liberó o se subió de
+   plan — seguía agotada al cerrar esta sesión. El sistema funciona en modo degradado
+   mientras tanto (gracias a este fix), pero antes de la próxima prueba de carga real vale
+   la pena confirmar el estado de la cuenta de Upstash directamente (no solo por logs).
+4. Cerrar las 3 pestañas de Chrome que quedaron abiertas del ejercicio de reproducción
+   (datos de prueba, no bloquean nada).
 
 0. **Plan de recuperación de PDFs de batches — código listo en local, falta desplegar.** Pedir
    confirmación explícita antes de cada deploy: primero Fase 2 (backend, commits `be07d0b` +
