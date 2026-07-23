@@ -5,6 +5,47 @@
 main
 
 ## Último cambio
+**2026-07-23: incidente real de Redis (cuota gratuita de Upstash agotada por completo, 500,000/500,000)
+durante pruebas de carga del usuario — tumbó la generación de PDFs individuales y por lote en
+producción. Mesa de 4 agentes (arquitecto, producto/UX, SRE, destructor) analizó el incidente y
+produjo un plan de implementación completo. NADA de ese plan está implementado todavía — es
+trabajo pendiente para la próxima sesión.**
+
+- **Causa raíz del incidente**: durante pruebas agresivas (varias pestañas de Chrome, lotes de 150
+  XMLs cada una, cambiando `maxConcurrentDispatches` repetidamente), el plan gratuito de Redis
+  (500,000 peticiones/mes) se agotó por completo. Confirmado en logs: `"max requests limit
+  exceeded. Limit: 500000, Usage: 500000."`
+- **Mecanismo real, no solo "Redis falló y no se manejó"**: una tormenta de reintentos
+  autoalimentada — `internal_generate_pdf` (`backend/app/routers/pdf.py:124`) escribe estado en
+  Redis ANTES de generar el PDF, dentro del único `try` de la función; si Redis falla ahí, cae a
+  un 500; Cloud Tasks reintenta cualquier no-2xx (sin respetar `Retry-After`); cada reintento
+  vuelve a golpear el Redis ya agotado. El mismo defecto vive en
+  `backend/app/workers/batch_shard_worker.py` (líneas ~163/199, el tick de error sin proteger),
+  con peor consecuencia: puede tumbar una tarea completa de hasta 100 XMLs vía `sys.exit(1)`.
+- **Hallazgo crítico que invalida la narrativa de "el trabajo real queda bien, solo se pierde el
+  aviso"**: los endpoints de descarga (`download_pdf` línea ~603, `get_pdf_download_url` línea
+  ~686) consultan Redis PRIMERO, antes de mirar GCS — aunque el PDF ya exista, no se puede
+  descargar mientras Redis esté caído. Encontrado independientemente por dos agentes de la mesa
+  (Producto y Destructor), sin verse entre sí — convergencia fuerte.
+- **Decisión explícita tomada**: el lock de idempotencia de extracción (`pdf:extracting_lock`)
+  se queda **fail-closed** (un batch nuevo espera si Redis no responde) — la alternativa
+  (fail-open) reintroduce el bug de duplicación de extracción del 12 de julio, justo en el peor
+  momento (cuota agotada a mitad de un batch).
+- **Descartado con evidencia, no por reflejo**: circuit breaker completo (`pybreaker`) — el error
+  real de Upstash falla rápido, no se cuelga, así que no hay timeouts que acumular (el beneficio
+  clásico de un breaker no aplica aquí). Se prefiere una bandera de degradación pasiva, mucho más
+  barata. También descartada la abstracción `ProgressReporter` completa por ahora (sin evidencia
+  de un segundo consumidor real que la necesite) y recalcular el total del batch desde GCS en
+  cada consulta (movería el gasto de cuota de Redis a GCS, no lo eliminaría).
+- **Documentos de esta ronda**: `docs/mesa-decision-resiliencia-redis-2026-07-23.md` (síntesis
+  completa de la mesa, con el razonamiento detrás de cada decisión) y
+  `docs/plan-implementacion-resiliencia-redis-2026-07-23.md` (el plan ejecutable, paso a paso,
+  con archivo/línea real, pensado para que una sesión nueva sin contexto previo pueda seguirlo
+  directo — **léelo primero si estás retomando esto**).
+- **Estado de la cuota de Redis al cerrar esta sesión**: agotada. Verificar si ya se liberó (reset
+  mensual) o si se subió de plan antes de retomar cualquier prueba de carga real.
+
+## Historial: Etapa 4 remotezip + ajuste SHARD_SIZE/THRESHOLD (2026-07-22, previo a lo de arriba)
 **2026-07-22: Etapa 4 de remotezip cerrada de verdad en producción, con dos bugs reales
 encontrados y corregidos en el camino, más ajuste de `SHARD_SIZE`/`THRESHOLD` y una prueba de
 contención de cupo entre batches concurrentes. Detalle completo en "Extracción distribuida vía
@@ -729,6 +770,11 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
+**MÁS URGENTE (2026-07-23): implementar `docs/plan-implementacion-resiliencia-redis-2026-07-23.md`.**
+Plan completo, ejecutable paso a paso, con archivo/línea real — nada de esto está construido
+todavía. Ver "Último cambio" arriba para el contexto del incidente que lo motivó. Antes de
+implementar, confirmar si la cuota de Redis ya se liberó (para poder probar de verdad al terminar).
+
 0. **Plan de recuperación de PDFs de batches — código listo en local, falta desplegar.** Pedir
    confirmación explícita antes de cada deploy: primero Fase 2 (backend, commits `be07d0b` +
    `b94e301`), verificar en producción, y solo entonces Fase 3 (frontend, `5c29a27`) + Fase 4
