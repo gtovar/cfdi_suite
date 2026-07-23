@@ -40,6 +40,7 @@ from ..services.batch_progress import publish_batch_tick
 from ..services.zip_manifest import is_valid_xml_entry, compute_job_id, build_manifest
 from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
+from ..services import redis_safety
 from ..services.redis_errors import is_redis_quota_error
 from ..services.redis_safety import safe_redis_call
 
@@ -592,13 +593,26 @@ async def download_batch_zip(batch_id: str):
 @router.get("/cfdi/pdf/{job_id}/progress")
 async def pdf_progress(job_id: str):
     async def event_generator():
+        # Encontrado en vivo el 23 de julio reproduciendo el incidente: con
+        # Redis agotado, el status "done" nunca se escribe (safe_redis_call
+        # lo descarta) y este stream se queda reportando "converting" para
+        # siempre, aunque el PDF ya esté listo y descargable en GCS (Paso 3).
+        # Mientras la bandera de degradación esté activa, se usa GCS como
+        # respaldo -- mismo principio que Paso 3, aplicado aquí también.
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BUCKET_NAME)
         deadline = time.monotonic() + SSE_MAX_STREAM_SECONDS
         while time.monotonic() < deadline:
-            status_bytes = await redis_client.get(f"pdf:status:{job_id}")
-            status = status_bytes.decode("utf-8") if status_bytes else "pending"
-            if status in ["done", "error"]:
+            status_bytes = await safe_redis_call(lambda: redis_client.get(f"pdf:status:{job_id}"))
+            status = status_bytes.decode("utf-8") if status_bytes else None
+            if status in ("done", "error"):
                 yield f'data: {{"status": "{status}"}}\n\n'
                 break
+            if status is None and redis_safety.is_degraded():
+                blob = bucket.blob(f"pdfs/{job_id}.pdf")
+                if await asyncio.to_thread(blob.exists):
+                    yield 'data: {"status": "done"}\n\n'
+                    break
             yield 'data: {"status": "converting"}\n\n'
             await asyncio.sleep(1)
     return StreamingResponse(
