@@ -5,6 +5,61 @@
 main
 
 ## Último cambio
+**2026-07-23 (noche, cierre de la sesión): hallazgo de frontend (UI atascada en
+"Convirtiendo...") RESUELTO Y VERIFICADO EN PRODUCCIÓN REAL, más los 6 "fallos
+preexistentes" de frontend (documentados desde 2026-07-13 sin investigar) resultaron
+ser 4 causas raíz reales, cada una investigada con decision-expander antes de arreglarse.**
+
+- **Fix del hallazgo de frontend** (`frontend/src/lib/pdf-download.ts`, commit `04b557f`
+  de esta misma sesión, ver más arriba): `subscribeWithRetry()` ya no depende de
+  `document.hidden` para la conexión inicial del `EventSource` -- solo para reintentos
+  tras error. Corregido de paso el comentario desactualizado "concurrency=1" → 5 en
+  `pdf.py` (Signal 6 ya lo había cambiado).
+- **Verificado en producción real, tras deploy fresco**: subida de 2 XMLs nuevos vía
+  "Conversión masiva" → "2/2 convertidos", "Completado", ambos con "Listo" y link de
+  descarga PDF. Sin esto, ANTES del fix, ningún archivo individual llegaba nunca a
+  mostrar "Listo" en las pruebas de esta sesión.
+- **Los "6 fallos preexistentes" de frontend (commit `8e8da6b`) resultaron ser 4 causas
+  raíz reales**, cada una con su propio decision-expander antes de decidir el fix (no
+  solo "hacer que pase el test"):
+  1. `BatchCompletionModal.tsx` (`resolveCompletionStatus`): con `totalFiles=0` pero
+     `totalProblematic>0`, forzaba ícono verde "todo bien" con errores reales. Confirmado
+     ALCANZABLE en producción (no solo caso de test): la rehidratación de un batch tras
+     recargar la página repuebla `queue` pero nunca `files` en `BatchAnalysisPage.tsx`.
+     Corregido el default de `pct` (pesimista, no optimista) Y agregado fallback a
+     `queue.length`.
+  2. `cfdi-api-client.ts` (`analyzeCFDI`): doble lectura del mismo `Response` body producía
+     "Body is unusable" en vez del error real. Confirmado que el backend real NO usa 503
+     en ningún lugar hoy (el caso de "503 con fallback contractual" del test no es
+     alcanzable actualmente, pero el código quedó correcto para si acaso). Reordenado:
+     contrato válido primero sin importar status, sin re-leer el body nunca.
+  3. `ExtractWorkspaceToolbar.test.tsx`: confirmado con `git log -p --follow` que el
+     commit `bd40ab3` (rediseño Tailux, mayo 2026) simplificó esta fila a propósito
+     ("chips de debug → estado inteligente") -- el test nunca se actualizó. El contador
+     de "seleccionados" se movió (no se perdió) a `ExtractWorkspacePagination.tsx`, que
+     no tenía ninguna prueba; se agregó una nueva (`ExtractWorkspacePagination.test.tsx`).
+  4. `App.test.tsx`: `App.tsx` es hoy una app multi-página (rediseño posterior a este
+     test) -- la vista de inspector individual ya no es la vista por defecto, se alcanza
+     por drill-down real desde `BatchAnalysisPage.onSelectFile`. Además, `FindingsSidebar`
+     selecciona un FINDING (`onSelectFinding`), no un concepto directo -- eso vive un
+     nivel más adentro, en `ResolutionPanel` (`onSelectConcept={diagnose.setSelectedConcept}`),
+     sin mockear `useFindingContexts` (el fixture `cfdi.findings[0].id='concept-0'`
+     coincide a propósito con su rama real de negocio). Se mockearon `BatchAnalysisPage`
+     y `ResolutionPanel` con el mismo patrón ya usado en el archivo.
+- **Tests**: backend 262 passed/0 failed (sin cambios desde antes). Frontend 108
+  passed/0 failed, 18/18 archivos -- de los 6 fallos documentados desde julio, ya no
+  queda ninguno.
+- **Nota**: se encontró un commit (`eeec527`, "envolver redis.set de start-zip-gcs en
+  safe_redis_call") ya en `origin/main` antes de esta sesión, hecho fuera de esta
+  conversación (probablemente vía `aider`, cache local `.aider.*` presente sin trackear)
+  -- mismo patrón de fix que esta sesión, aplicado a una tercera variante de "start" no
+  cubierta hasta ahora (`start_pdf_zip_gcs_generation`). Ya desplegado y sano, sin
+  conflicto. También hay cambios sin commitear en `ConversionMasivaPage.tsx` (banner de
+  error diferenciado ámbar/rojo) que no son de esta sesión -- no se tocaron ni se
+  commitearon, quedan pendientes de que el usuario decida qué hacer con ellos.
+
+---
+
 **2026-07-23 (continuación, misma tarde): Pasos 1-6 del plan de resiliencia Redis
 DESPLEGADOS EN PRODUCCIÓN Y VERIFICADOS EN VIVO reproduciendo el incidente real
 (3 pestañas de Chrome, 450 XMLs, cuota de Redis todavía agotada de verdad) — la misma
@@ -899,28 +954,25 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**Backend del plan de resiliencia Redis (Pasos 1-6 + 3 bugs adicionales) DESPLEGADO Y
-VERIFICADO EN VIVO EN PRODUCCIÓN, con la cuota real todavía agotada — incidente original
-resuelto en la práctica. Queda cerrar el resto:**
-0. **MÁS URGENTE, hallazgo nuevo de esta sesión**: la UI de "Conversión masiva" no
-   refleja el estado real de la conversión (se queda en "Convirtiendo..." aunque el PDF
-   ya esté listo, confirmado por backend). Diagnóstico ya hecho (ver "Último cambio"): NO
-   es un problema de transporte/Redis, es el cableado del frontend
-   (`ConversionMasivaPage.tsx`/`waitForPdfJob`). Investigar por qué el `EventSource` que
-   monta ese componente no dispara igual que uno crudo probado con `javascript_tool` (que
-   sí funcionó). Prioridad alta porque, aunque el trabajo se completa bien en el backend,
-   el usuario no lo ve sin esto.
-1. **Paso 7 (frontend, no empezado)**: portar el banner ámbar del flujo de lote al flujo
-   individual — probablemente relacionado con el punto 0 de arriba, revisar juntos.
+**Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales) Y el hallazgo
+de frontend (UI atascada) DESPLEGADOS Y VERIFICADOS EN VIVO EN PRODUCCIÓN — incidente
+original resuelto en la práctica, cero fallos de test en backend ni frontend. Queda:**
+0. **Sin commitear, no es de esta sesión**: `frontend/src/components/ConversionMasivaPage.tsx`
+   tiene cambios en el working tree (banner de error diferenciado ámbar/rojo según el tipo
+   de `batchError`) que no se hicieron en esta conversación — probablemente vía `aider`
+   (hay cache local `.aider.*` sin trackear en el repo). No se tocaron ni se investigaron.
+   Decidir con el usuario si commitear, descartar, o seguir editando antes de tocar nada.
+1. **Paso 7 (frontend, banner ámbar del flujo de lote portado al individual)**: no
+   empezado. Ya no es tan urgente como se pensó — el hallazgo real (UI atascada) ya se
+   resolvió por otra vía (fix de `document.hidden` en `subscribeWithRetry`), así que Paso 7
+   pasa a ser mejora de UX, no corrección de un bug.
 2. Pasos 8 (runbook operacional — ya parcialmente cubierto en "Último cambio" y en el
    footgun documentado de `deploy-batch-shard-job.sh`) y 9 (bugs de UX, `ACTIVE_BATCH_KEY`
    por pestaña) son opcionales y piden confirmación aparte antes de implementarse.
 3. **No confirmado todavía**: si la cuota de Redis (Upstash) ya se liberó o se subió de
-   plan — seguía agotada al cerrar esta sesión. El sistema funciona en modo degradado
-   mientras tanto (gracias a este fix), pero antes de la próxima prueba de carga real vale
-   la pena confirmar el estado de la cuenta de Upstash directamente (no solo por logs).
-4. Cerrar las 3 pestañas de Chrome que quedaron abiertas del ejercicio de reproducción
-   (datos de prueba, no bloquean nada).
+   plan — seguía agotada la última vez que se verificó en esta sesión. El sistema funciona
+   en modo degradado mientras tanto, pero antes de la próxima prueba de carga real vale la
+   pena confirmar el estado de la cuenta de Upstash directamente (no solo por logs).
 
 0. **Plan de recuperación de PDFs de batches — código listo en local, falta desplegar.** Pedir
    confirmación explícita antes de cada deploy: primero Fase 2 (backend, commits `be07d0b` +
