@@ -5,23 +5,19 @@
 main
 
 ## Deuda técnica pendiente (explícita, no olvidada)
-- **Visibilidad de progreso del batch de ZIP puede quedar "stuck" tras una caída de
-  Redis.** Confirmado en vivo 2026-07-24 (segunda ronda de la prueba real, batch
-  `b4198478-a494-4837-a49f-7dec3896a5c9`): con Redis realmente agotado durante toda la
-  extracción Y la generación, los 4 PDFs se generaron y subieron a GCS con éxito
-  (confirmado descargando uno directo vía `/download-url`), pero `/status` y
-  `/ready-files` siguieron mostrando "0 listos" — porque la escritura `pdf:status:X →
-  done` también falló (best-effort, correcto) y luego la LECTURA (`mget`) no truena con
-  excepción, simplemente responde "no hay nada" (Upstash deja pasar la lectura aunque las
-  escrituras hayan fallado). Mi código solo activa el respaldo de GCS cuando la lectura
-  truena, no cuando "funciona" pero no encuentra datos -- así que ese batch en particular
-  muestra "0 listos" **para siempre**, incluso después de que Redis se recupere (nadie
-  reescribe el `done` que nunca se grabó). No es pérdida de datos -- el archivo existe y
-  se puede descargar directo -- es visibilidad de progreso. Decisión 2026-07-24: NO
-  arreglado ahora (haría que `/status`/`ready-files` consulten GCS por archivo cuando el
-  conteo viene en cero, costoso en lotes grandes según el asesor de esta sesión) — queda
-  como tarea aparte, idealmente con datos reales de tamaño típico de lote antes de
-  decidir el enfoque.
+- ~~Visibilidad de progreso del batch de ZIP puede quedar "stuck" tras una caída de
+  Redis~~ — **RESUELTO 2026-07-24** (sesión de síntesis de 3 herramientas + verificación
+  real en producción). `list_ready_files` y `_batch_progress_snapshot` ahora reconcilian
+  contra GCS job por job (solo los que Redis reportó `None`, nunca los que ya tienen
+  status real), sin necesitar que la lectura truene con excepción. Verificado en vivo
+  contra producción con la cuota de Upstash genuinamente agotada (no simulada): un batch
+  nuevo pasó de "Lote no encontrado"/0 listos a `status: done, percentage: 100` con la
+  MISMA cuota agotada, gracias a que `start_pdf_zip_generation` (ruta síncrona de ZIP
+  chico) ahora también escribe el manifiesto de respaldo en GCS antes de tocar Redis —
+  hueco que ni el fix de esta sesión ni ninguna de las otras 2 herramientas comparadas
+  (Aider, OpenCode) había cubierto, encontrado solo al probar contra producción real.
+  Detalle completo en "Experimento: mismo bug..." más abajo y en el historial de
+  2026-07-24 (ZIP fallaba al 100%) justo debajo de esta sección.
 - **Centralizar el acceso a Redis.** Hoy hay 3 conexiones/clientes separados
   (`pdf.py` async, `batch_shard_worker.py` su propia conexión async independiente,
   `batch.py` un cliente síncrono distinto) y las llaves (`f"pdf:status:{job_id}"`,
@@ -34,8 +30,60 @@ main
   eso fue lo que dejó la membresía del batch escondida sin protección propia. Decisión
   2026-07-24: NO se aborda ahora (para no tocar código recién probado justo antes de la
   verificación real en producción) — queda como tarea aparte para una sesión futura.
+  **Sigue sin tocarse tras la sesión de síntesis de 3 herramientas del 2026-07-24**
+  (deliberado, fuera de alcance de esa tarea) — los 3 clientes/conexiones y las llaves
+  inline siguen exactamente igual.
 
 ## Último cambio
+**2026-07-24: comparación real de 3 herramientas (Claude, Aider, OpenCode) resolviendo el
+mismo bug ("0 listos para siempre" con Redis caído) cada una en su rama, síntesis de las
+mejores ideas aplicada directamente a `main`, barrido de código muerto relacionado, y
+verificación final contra producción real (cuota de Upstash genuinamente agotada, no
+simulada) que encontró y corrigió un hueco adicional. 291 tests backend + 114 frontend,
+todos verdes en cada paso. 3 commits: `4a54cc4` (síntesis), `afe854f` (barrido de código
+muerto), `8429d2e` (fix del manifiesto de ZIP chico encontrado en producción).**
+
+- **Síntesis de 3 herramientas** (detalle completo en "Experimento..." más abajo):
+  reconciliación contra GCS por-job (idea de Aider, mejor que el enfoque todo-o-nada del
+  primer intento de Claude) extendida también a `_batch_progress_snapshot` (hueco que
+  ninguna de las 2 otras herramientas había cubierto — solo arreglaban `list_ready_files`).
+  Freno automático (`is_degraded()`) dentro de `safe_redis_call`/`_sync` + `REDIS_DISABLED`
+  como interruptor manual. Frontend: botón de descarga visible con al menos un archivo
+  listo, no solo al 100%.
+- **Barrido de código muerto** (backend + frontend, ~8,800 líneas netas): 2 motores de PDF
+  nunca conectados (`gopdf_service.py`, `pdf_reportlab.py`) y el parámetro `engine` de
+  `/cfdi/pdf/start` que se aceptaba pero nunca se usaba — esto además hacía que 3 botones
+  del inspector de un solo XML ("PDF", "PDF Pro", "Go PDF") produjeran el mismo PDF
+  byte-idéntico con tooltips que prometían motores distintos; se quitaron los 2 botones
+  falsos. Editor visual completo abandonado (`pages/Editor.jsx` + 12 archivos +
+  3 dependencias `@dnd-kit/*`), reemplazado hace tiempo por `PdfTemplateBuilder` pero
+  nunca borrado. Otros sueltos: `FileUpload.tsx`, `current-ts-wrapper.ts`,
+  `detectCFDIProfile`, `batchAnalyze`, `dotenv`/`express`. **Dejado aparte a propósito**:
+  el `export default` de `PdfTemplateBuilder.tsx` (el componente en sí no se renderiza
+  hoy, solo se reusa su tipo/constante) — necesita revisión aparte antes de decidir si se
+  borra.
+- **Verificación real en producción** (deploy vía push a `main`, sin ningún canario
+  manual — el auto-deploy de GitHub Actions promueve directo a `--to-latest`, confirmado
+  con `status.traffic`): subí un ZIP real de 2 CFDIs por `/cfdi/pdf/start-zip` con la
+  cuota de Upstash genuinamente agotada (confirmado en logs: `max requests limit
+  exceeded. Limit: 500000, Usage: 500000`). Encontró un hueco NUEVO no cubierto por la
+  síntesis: la ruta síncrona de ZIP chico (`/cfdi/pdf/start-zip`, distinta de la ruta
+  grande vía URL firmada) nunca escribía el manifiesto de respaldo en GCS — con el
+  `SADD`/`SET` de membresía fallando en silencio por la cuota agotada, el batch quedaba
+  sin ninguna forma de reconstruirse ("Lote no encontrado" / `jobIds: []`), aunque el PDF
+  ya existiera y fuera descargable directo por su job_id. Corregido (mismo patrón que
+  `process_zip_in_background`: escribir el manifiesto ANTES de tocar Redis) y
+  re-verificado con la MISMA cuota agotada real: el segundo batch de prueba resolvió
+  correctamente (`status: done, percentage: 100`, ambos jobIds en `/ready-files`).
+- **Sin canarios ni servicios huérfanos**: `minScale` no configurado (cero costo en
+  reposo), todas las ejecuciones de Cloud Run Jobs en estado "Completed", sin tags de
+  tráfico activos tras ninguno de los 2 deploys de esta sesión.
+- **Sigue pendiente / sin tocar esta sesión**: la centralización de Redis (ver "Deuda
+  técnica pendiente" arriba) y la cuota de Upstash, que sigue agotada al cerrar esta
+  sesión — verificar si ya se liberó (reset mensual) o si conviene subir de plan antes de
+  la siguiente prueba de carga real.
+
+## Historial: prueba real en producción, ZIP fallaba al 100% con Redis caído (2026-07-24, previo a lo de arriba)
 **2026-07-24 (prueba real en producción, cuota de Redis genuinamente agotada): la
 prueba con navegador expuso un hallazgo real que ningún test con mocks había visto —
 subir un .ZIP no funcionaba EN ABSOLUTO mientras Redis estuviera caído. Corregido con
