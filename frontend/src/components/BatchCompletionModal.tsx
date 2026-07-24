@@ -51,7 +51,12 @@ function useCountUp(target: number, duration = 1200): number {
 }
 
 export function resolveCompletionStatus(totalProblematic: number, totalFiles: number) {
-  const pct = totalFiles > 0 ? totalProblematic / totalFiles : 0;
+  // totalFiles=0 con totalProblematic>0 es un caso real (no solo de test): tras
+  // recargar la página, la rehidratación de un batch ya terminado repuebla
+  // `queue` con los resultados reales pero no `files` (ver el fallback en
+  // BatchAnalysisPage.tsx). Sin denominador conocido, asumir 100% (pesimista)
+  // en vez de 0% (que forzaba "todo bien" con errores reales presentes).
+  const pct = totalFiles > 0 ? totalProblematic / totalFiles : (totalProblematic > 0 ? 1 : 0);
   const headline =
     totalProblematic === 0 ? '¡Lote impecable!' :
     pct < 0.05 ? 'Casi perfecto' :

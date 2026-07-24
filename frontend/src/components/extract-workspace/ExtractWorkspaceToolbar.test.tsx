@@ -45,13 +45,22 @@ afterEach(() => {
 });
 
 describe('ExtractWorkspaceToolbar', () => {
-  it('renders the search scope and filtered row summary in the status area', () => {
+  // Actualizado 2026-07-23: el commit bd40ab3 ("rediseño inspector-ingreso
+  // con lenguaje visual Tailux") simplificó esta fila de estado a propósito
+  // ("chips de debug → estado inteligente") -- el alcance de búsqueda
+  // ("en Descripcion") y el contador de filtros de columna se quitaron sin
+  // reemplazo, y el contador de seleccionados se movió a
+  // ExtractWorkspacePagination.tsx (ver su propio test). Estas pruebas
+  // quedaron sin actualizar desde entonces (documentado como "preexistente"
+  // en PROJECT_STATE.md sin investigar cuál de los dos -- test o componente
+  // -- estaba desalineado; confirmado ahora con `git log -p` que fue el
+  // test el que no siguió al rediseño intencional).
+  it('renders the search term chip and filtered row summary in the status area', () => {
     const { container } = renderReact(<ExtractWorkspaceToolbar grid={createGrid()} />);
 
-    expect(container.textContent).toContain('"servicio" en Descripcion');
-    expect(container.textContent).toContain('3 de 12 visibles');
-    expect(container.textContent).toContain('1 filtros de columna');
-    expect(container.textContent).toContain('2 seleccionados');
+    expect(container.textContent).toContain('“servicio”');
+    expect(container.textContent).toContain('3 de 12 registros');
+    expect(container.textContent).toContain('1 orden');
   });
 
   it('shows the no-search summary when the global search is empty', () => {
@@ -68,9 +77,8 @@ describe('ExtractWorkspaceToolbar', () => {
       />,
     );
 
-    expect(container.textContent).toContain('sin busqueda global (todas las columnas)');
-    expect(container.textContent).toContain('12 de 12 visibles');
-    expect(container.textContent).toContain('0 filtros de columna');
-    expect(container.textContent).toContain('0 seleccionados');
+    expect(container.textContent).not.toContain('“servicio”');
+    expect(container.textContent).toContain('12 de 12 registros');
+    expect(container.textContent).toContain('1 orden');
   });
 });

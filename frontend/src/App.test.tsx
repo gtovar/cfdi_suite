@@ -168,9 +168,39 @@ vi.mock('./components/FileUpload', () => ({
   default: () => <div>FileUpload</div>,
 }));
 
+// App.tsx es hoy una app multi-página (Consultas SAT / Análisis masivo /
+// Conversión masiva / Cancelaciones); activeView inicia en 'masivo' y solo
+// pasa a 'inspector' (la vista que este test necesita, con FindingsSidebar)
+// vía el drill-down real de BatchAnalysisPage.onSelectFile. Se mockea aquí
+// con el mismo patrón que el resto de componentes de este archivo -- un
+// botón simple que dispara ese callback -- para no tener que simular una
+// subida de archivo real dentro del componente completo de Análisis masivo.
+vi.mock('./components/BatchAnalysisPage', () => ({
+  default: ({ onSelectFile }: { onSelectFile?: (file: File) => void }) => (
+    <button type="button" onClick={() => onSelectFile?.(new File(['<xml/>'], 'test.xml'))}>
+      Abrir detalle de archivo
+    </button>
+  ),
+}));
+
+// FindingsSidebar selecciona un FINDING (por id), no un concepto directo --
+// eso pasa un nivel más adentro, en ResolutionPanel (ver su mock abajo).
 vi.mock('./components/FindingsSidebar', () => ({
-  default: ({ findingContexts, onSelectConcept }: { findingContexts: Array<{ conceptLinks: Array<{ concept: typeof impactedConcept }> }>; onSelectConcept: (concept: typeof impactedConcept) => void }) => (
-    <button type="button" onClick={() => onSelectConcept(findingContexts[0].conceptLinks[0].concept)}>
+  default: ({ onSelectFinding }: { onSelectFinding: (findingId: string) => void }) => (
+    <button type="button" onClick={() => onSelectFinding('concept-0')}>
+      Abrir hallazgo
+    </button>
+  ),
+}));
+
+// El fixture `cfdi.findings[0].id === 'concept-0'` coincide a propósito con
+// la rama real de useFindingContexts (finding.id.startsWith('concept-')),
+// SIN mockear ese hook -- así ResolutionPanel sí se renderiza (requiere
+// selectedFindingContext.correctionSteps truthy) con datos reales, y solo
+// se mockea la selección de concepto dentro de él.
+vi.mock('./components/ResolutionPanel', () => ({
+  default: ({ onSelectConcept }: { onSelectConcept: (concept: typeof impactedConcept) => void }) => (
+    <button type="button" onClick={() => onSelectConcept(impactedConcept)}>
       Abrir concepto impactado
     </button>
   ),
@@ -186,8 +216,28 @@ describe('App integration', () => {
   it('opens concept detail when the sidebar selects an impacted concept', () => {
     const rendered = renderApp();
 
+    // activeView inicia en 'masivo' -- primero hay que hacer drill-down a un
+    // archivo (como en producción) para llegar a la vista de inspector.
+    const openInspector = Array.from(rendered.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Abrir detalle de archivo'),
+    );
+    expect(openInspector).toBeTruthy();
+    act(() => {
+      openInspector?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
     expect(rendered.container.textContent).not.toContain('Modal abierto: Concepto impactado de prueba');
 
+    // Paso 1: seleccionar el finding en FindingsSidebar (activa ResolutionPanel).
+    const openFinding = Array.from(rendered.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Abrir hallazgo'),
+    );
+    expect(openFinding).toBeTruthy();
+    act(() => {
+      openFinding?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // Paso 2: dentro de ResolutionPanel, seleccionar el concepto impactado.
     const trigger = Array.from(rendered.container.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('Abrir concepto impactado'),
     );

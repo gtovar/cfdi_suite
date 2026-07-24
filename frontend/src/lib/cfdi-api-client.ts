@@ -54,38 +54,41 @@ export async function analyzeCFDI(
     body: JSON.stringify({ xml }),
   });
 
-    // NUEVO: Interceptar errores HTTP inmediatamente para extraer el detalle real
-  if (!response.ok) {
-    let errorDetail = `Error del servidor: ${response.status}`;
-    try {
-      // Intentamos extraer el JSON del error de FastAPI/Python
-      const errorData = await response.json();
-      if (errorData.detail) {
-        // FastAPI suele mandar los errores en la propiedad "detail"
-        errorDetail = typeof errorData.detail === 'string'
-          ? errorData.detail
-          : JSON.stringify(errorData.detail);
-      }
-    } catch (e) {
-      // Si no es JSON, leemos el texto plano (ej. errores de Cloud Run)
-      const errorText = await response.text();
-      if (errorText) errorDetail = errorText.substring(0, 200);
-    }
-    // Este throw será atrapado por el catch de useCfdiAnalysis.ts
-    throw new Error(errorDetail);
-  }
-
   onProgress?.({
     label: 'Procesando respuesta del backend',
     progress: 76,
     detail: 'Consolidando respuesta contractual para la UI.',
   });
 
-  const payload = await tryReadContractualPayload(response);
+  // Un body contractual válido (con meta.requestId) se usa sin importar el
+  // status HTTP -- el backend puede señalar degradación/fallback en el JSON
+  // (meta.providerMode), no necesariamente con un status de error (hoy
+  // analyze_cfdi siempre responde 200, pero el contrato no lo exige). Se
+  // intenta sobre un clone() para no consumir el body real todavía -- lo
+  // necesitamos disponible si esto no encuentra un contrato válido.
+  const payload = await tryReadContractualPayload(response.clone());
   if (!payload?.meta?.requestId) {
-    throw new Error(response.ok
-      ? 'La API devolvió una respuesta contractual inválida'
-      : `La API respondió ${response.status}`);
+    if (!response.ok) {
+      let errorDetail = `La API respondió ${response.status}`;
+      try {
+        // Intentamos extraer el JSON del error de FastAPI/Python
+        const errorData = await response.json();
+        if (errorData.detail) {
+          // FastAPI suele mandar los errores en la propiedad "detail"
+          errorDetail = typeof errorData.detail === 'string'
+            ? errorData.detail
+            : JSON.stringify(errorData.detail);
+        }
+      } catch {
+        // No es JSON -- se deja el mensaje genérico. Nunca se vuelve a leer
+        // el body aquí (antes se intentaba .text() tras el .json() fallido
+        // sobre el MISMO Response, lo cual siempre fallaba con "Body is
+        // unusable: Body has already been read" en vez del error real).
+      }
+      // Este throw será atrapado por el catch de useCfdiAnalysis.ts
+      throw new Error(errorDetail);
+    }
+    throw new Error('La API devolvió una respuesta contractual inválida');
   }
 
   const header = payload.ingresoRowHeader;

@@ -1173,7 +1173,11 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       {/* Wrapped modal */}
       {showModal && (
         <BatchCompletionModal
-          totalFiles={files.length}
+          // Tras rehidratar un batch ya terminado (recarga de página), `queue`
+          // se repuebla con los resultados reales pero `files` no -- cae a
+          // queue.length para que el modal no muestre "0 archivos" con
+          // errores reales presentes (ver resolveCompletionStatus).
+          totalFiles={files.length || queue.length}
           ok={stats.ok}
           conErrores={stats.conErrores}
           errors={stats.errors}
