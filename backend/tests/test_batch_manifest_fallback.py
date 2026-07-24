@@ -170,5 +170,118 @@ class ReadyFilesManifestFallbackTests(unittest.TestCase):
         self.assertEqual(result["jobIds"], ["job-1"])
 
 
+@unittest.skipIf(pdf_router is None, f"backend no disponible: {_IMPORT_ERROR}")
+class StartPdfZipGenerationWritesManifestTests(unittest.TestCase):
+    """Hallazgo real de producción 2026-07-24 (cuota de Upstash agotada en
+    vivo, no simulada): start_pdf_zip_generation (la ruta síncrona de ZIP
+    chico, /cfdi/pdf/start-zip) no escribía ningún manifiesto de respaldo en
+    GCS -- a diferencia de process_zip_in_background (la ruta grande vía
+    URL firmada), que sí lo hace. Con la cuota agotada, el SADD/SET que
+    registra pdf:batch_ids/pdf:extracting_total fallaba en silencio
+    (safe_redis_call), y el batch quedaba sin ninguna forma de reconstruirse
+    -- "Lote no encontrado" / jobIds: [] -- aunque los PDFs ya existieran y
+    fueran descargables uno por uno. Estos tests confirman que ahora sí se
+    escribe el manifiesto, ANTES de tocar Redis, y que list_ready_files
+    puede resolver el batch usando SOLO ese manifiesto."""
+
+    def test_escribe_el_manifiesto_en_gcs_aunque_redis_este_totalmente_caido(self) -> None:
+        import io
+        import zipfile
+
+        from fastapi.testclient import TestClient
+
+        from backend.app.main import app
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("factura1.xml", "<xml/>")
+            zf.writestr("factura2.xml", "<xml/>")
+        zip_bytes = buf.getvalue()
+
+        written_manifests: dict[str, bytes] = {}
+
+        def _blob(path: str):
+            blob = MagicMock()
+            if path.startswith("xml_temp/_manifest_") and path.endswith(".json"):
+                def _capture(data, content_type=None, _path=path):
+                    written_manifests[_path] = data
+                blob.upload_from_string.side_effect = _capture
+            return blob
+
+        mock_bucket = MagicMock()
+        mock_bucket.blob.side_effect = _blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "enqueue_pdf_generation"),
+        ):
+            # Reproduce exactamente el hallazgo real: TODA llamada a Redis
+            # truena con el error real de cuota agotada de Upstash (no una
+            # ConnectionError genérica) -- safe_redis_call la traga y
+            # devuelve None, igual que en producción.
+            quota_error = Exception(
+                "max requests limit exceeded. Limit: 500000, Usage: 500000."
+            )
+            mock_redis.set = AsyncMock(side_effect=quota_error)
+            mock_redis.sadd = AsyncMock(side_effect=quota_error)
+            mock_redis.expire = AsyncMock(side_effect=quota_error)
+            pipe_cm = MagicMock()
+            pipe_cm.__aenter__ = AsyncMock(return_value=pipe_cm)
+            pipe_cm.__aexit__ = AsyncMock(return_value=False)
+            pipe_cm.set = MagicMock()
+            pipe_cm.execute = AsyncMock(side_effect=quota_error)
+            mock_redis.pipeline = MagicMock(return_value=pipe_cm)
+
+            client = TestClient(app)
+            response = client.post(
+                "/api/cfdi/pdf/start-zip",
+                files={"file": ("batch.zip", zip_bytes, "application/zip")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        batch_id = response.json()["batchId"]
+
+        manifest_path = f"xml_temp/_manifest_{batch_id}.json"
+        self.assertIn(manifest_path, written_manifests)
+        manifest = json.loads(written_manifests[manifest_path])
+        self.assertEqual(sorted(manifest.values()), ["factura1.xml", "factura2.xml"])
+
+    def test_list_ready_files_resuelve_el_batch_solo_con_el_manifiesto(self) -> None:
+        """Con Redis totalmente caído desde la creación (sin pdf:batch_ids
+        ni pdf:status en absoluto), list_ready_files debe poder reconstruir
+        la membresía completa del batch usando SOLO el manifiesto escrito
+        por start_pdf_zip_generation, y reconciliar cada job contra GCS."""
+        manifest = {"job-1": "factura1.xml", "job-2": "factura2.xml"}
+        mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(side_effect=_redis_down)
+        mock_redis.mget = AsyncMock(side_effect=_redis_down)
+
+        def _blob(path):
+            blob = MagicMock()
+            if path == "xml_temp/_manifest_batch-sync.json":
+                blob.download_as_bytes.return_value = json.dumps(manifest).encode()
+            elif path == "pdfs/job-1.pdf":
+                blob.exists = MagicMock(return_value=True)
+            elif path == "pdfs/job-2.pdf":
+                blob.exists = MagicMock(return_value=False)
+            return blob
+
+        mock_bucket = MagicMock()
+        mock_bucket.blob.side_effect = _blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router, "redis_client", mock_redis),
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+        ):
+            result = _run(pdf_router.list_ready_files("batch-sync"))
+
+        self.assertEqual(result["jobIds"], ["job-1"])
+
+
 if __name__ == "__main__":
     unittest.main()

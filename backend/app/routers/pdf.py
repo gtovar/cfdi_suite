@@ -269,6 +269,7 @@ async def start_pdf_zip_generation(
             pass
 
     job_ids = []
+    manifest: dict[str, str] = {}
 
     try:
         with zipfile.ZipFile(file.file, "r") as z:
@@ -277,6 +278,7 @@ async def start_pdf_zip_generation(
                     job_id = str(uuid.uuid4())
                     xml_content = z.read(file_info.filename)
                     job_ids.append((job_id, xml_content))
+                    manifest[job_id] = file_info.filename
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
     except Exception as e:
@@ -307,6 +309,24 @@ async def start_pdf_zip_generation(
     print(f"⚠️ EL EMBUDO (Payload Size):  {mb_reales:.2f} MB enviados de {UPSTASH_REQUEST_MAX_MB} MB máximos permitidos en una sola petición.")
     print(f"🔀 COMANDOS EN PIPELINE:     Total de comandos de escritura en el Pipeline: {total_comandos_pipeline} de {UPSTASH_MONTHLY_COMMANDS_LIMIT}.")
     print("="*80 + "\n")
+
+    # Manifiesto (job_id -> filename) escrito a GCS ANTES de tocar Redis --
+    # hallazgo real de producción 2026-07-24 (cuota de Upstash agotada en
+    # vivo, no simulada): con la cuota agotada, el SADD/SET que registra la
+    # membresía del batch más abajo fallaba en silencio, y esta ruta
+    # síncrona (a diferencia de process_zip_in_background, la ruta grande
+    # vía URL firmada) no tenía ningún respaldo en GCS -- el batch quedaba
+    # sin forma de reconstruirse ("Lote no encontrado"/"jobIds": []) aunque
+    # los PDFs ya existieran y fueran descargables uno por uno. Mismo
+    # patrón que ya usa process_zip_in_background/_try_remote_manifest_path.
+    try:
+        await asyncio.to_thread(
+            _batch_manifest_blob(batch_id).upload_from_string,
+            json.dumps(manifest),
+            content_type="application/json",
+        )
+    except Exception as manifest_err:
+        print(f"Aviso: no se pudo escribir el manifiesto de {batch_id} en GCS: {manifest_err}")
 
     # El bloque que va justo abajo de los prints de auditoría en pdf.py
     try:

@@ -39,7 +39,7 @@ ALLOWLIST: set[tuple[str, int]] = {
         # ZIP_GCS_PATH) -- es el INSUMO de qué XMLs le tocan a esta tarea, no
         # un reporte; ver comentario ahí mismo. Fail-closed a propósito.
     (
-        "app/routers/pdf.py", 1167,
+        "app/routers/pdf.py", 1187,
     ),  # scard cosmético dentro de flush_chunk -- ya vive en su propio
         # try/except (líneas de alrededor) que nunca deja que un fallo aquí
         # tumbe la subida real del chunk; no usa safe_redis_call por nombre
