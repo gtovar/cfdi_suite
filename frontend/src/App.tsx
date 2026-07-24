@@ -28,7 +28,7 @@ import type { ExtractMode } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
 import CfdiAnalysisLoader from './components/CfdiAnalysisLoader';
 import InspectorHeader from './components/InspectorHeader';
-import { type TemplateConfig, DEFAULT_TEMPLATE } from './components/PdfTemplateBuilder';
+import type { TemplateConfig } from './components/PdfTemplateBuilder';
 import ConversionMasivaPage from './components/ConversionMasivaPage';
 import ResolutionPanel from './components/ResolutionPanel';
 import TaxAuditPanel from './components/TaxAuditPanel';
@@ -112,12 +112,6 @@ export default function App() {
   const [pdfPhase, setPdfPhase] = useState<'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error'>('idle');
   const [pdfProgressDetail, setPdfProgressDetail] = useState<string | undefined>();
   const [pdfError, setPdfError] = useState<string | undefined>();
-  const [templateConfig] = useState<TemplateConfig>(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem('cfdi-pdf-template') ?? '');
-      return stored ? { ...DEFAULT_TEMPLATE, ...stored } : DEFAULT_TEMPLATE;
-    } catch { return DEFAULT_TEMPLATE; }
-  });
 
   const diagnose = useDiagnoseState(cfdi);
   const findingContexts = useFindingContexts(cfdi);
@@ -245,14 +239,13 @@ export default function App() {
     // activeView permanece en 'inspector'
   }
 
-  async function handleDownloadPdf(engine: 'playwright' | 'reportlab' | 'gopdfsuit' | 'canvas_pipeline' = 'reportlab', template?: TemplateConfig | { _id: string }) {
+  async function handleDownloadPdf(template?: TemplateConfig | { _id: string }) {
     if (!sourceFile) return;
     setPdfPhase('parsing');
     setPdfError(undefined);
     try {
       const form = new FormData();
       form.append('file', sourceFile);
-      form.append('engine', engine);
       if (template) form.append('template', JSON.stringify(template));
       const startRes = await fetch('/api/cfdi/pdf/start', { method: 'POST', body: form });
       if (!startRes.ok) {
@@ -436,10 +429,8 @@ export default function App() {
                 hasFindings={cfdi.findings.length > 0}
                 modifiedXml={modifiedXml}
                 onDownloadModified={handleDownloadModified}
-                onDownloadPdf={sourceFile && pdfPhase === 'idle' ? handleDownloadPdf : undefined}
-                onDownloadPdfReportlab={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('reportlab', templateConfig) : undefined}
-                onDownloadPdfGopdf={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('gopdfsuit', templateConfig) : undefined}
-                onDownloadPdfCanvas={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf('canvas_pipeline', { _id: activeTemplateId }) : undefined}
+                onDownloadPdf={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf() : undefined}
+                onDownloadPdfCanvas={sourceFile && pdfPhase === 'idle' ? () => handleDownloadPdf({ _id: activeTemplateId }) : undefined}
                 pdfPhase={pdfPhase}
                 pdfProgressDetail={pdfProgressDetail}
                 pdfError={pdfError}

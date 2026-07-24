@@ -42,8 +42,6 @@ interface InspectorHeaderProps {
   modifiedXml?: string | null;
   onDownloadModified?: () => void;
   onDownloadPdf?: () => void;
-  onDownloadPdfReportlab?: () => void;
-  onDownloadPdfGopdf?: () => void;
   onDownloadPdfCanvas?: () => void;
   pdfPhase?: 'idle' | 'parsing' | 'rendering_html' | 'generating_pdf' | 'error';
   pdfProgressDetail?: string;
@@ -104,8 +102,6 @@ export default function InspectorHeader({
   modifiedXml,
   onDownloadModified,
   onDownloadPdf,
-  onDownloadPdfReportlab,
-  onDownloadPdfGopdf,
   onDownloadPdfCanvas,
   pdfPhase = 'idle',
   pdfProgressDetail,
@@ -299,29 +295,14 @@ export default function InspectorHeader({
             <button
               onClick={onDownloadPdf}
               title="PDF oficial — layout SAT exacto"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors duration-200 hover:bg-gray-50 border-r border-gray-200"
+              className={clsx(
+                'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors duration-200 hover:bg-gray-50',
+                onDownloadPdfCanvas && 'border-r border-gray-200',
+              )}
             >
               <Download size={13} />
               PDF
             </button>
-            {onDownloadPdfReportlab && (
-              <button
-                onClick={onDownloadPdfReportlab}
-                title="PDF personalizado — diseño propio, generación rápida"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors duration-200 hover:bg-blue-50 border-r border-gray-200"
-              >
-                ⚡ PDF Pro
-              </button>
-            )}
-            {onDownloadPdfGopdf && (
-              <button
-                onClick={onDownloadPdfGopdf}
-                title="Experimento masivo — Motor GoPdfSuit"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-purple-600 transition-colors duration-200 hover:bg-purple-50 border-r border-gray-200"
-              >
-                🚀 Go PDF
-              </button>
-            )}
             {onDownloadPdfCanvas && (
               <button
                 onClick={onDownloadPdfCanvas}

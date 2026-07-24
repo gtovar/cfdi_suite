@@ -215,7 +215,6 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 @router.post("/cfdi/pdf/start")
 async def start_pdf_generation(
     file: UploadFile = File(...),
-    engine: str = Form("canvas_pipeline"),
     template: Optional[str] = Form(None)
 ):
     job_id = str(uuid.uuid4())

@@ -18,19 +18,6 @@ export interface DiotParams {
   razon_social?: string;
 }
 
-export interface BatchSummary {
-  total_files: number;
-  files_ok: number;
-  files_con_errores: number;
-  files_error: number;
-  total_findings: number;
-}
-
-export interface BatchAnalyzeResponse {
-  results: BatchFileResult[];
-  summary: BatchSummary;
-}
-
 function makeErrorResult(
   filename: string,
   error: string,
@@ -48,25 +35,6 @@ function makeErrorResult(
     findings_count: 0,
     error,
   };
-}
-
-export async function batchAnalyze(files: File[]): Promise<BatchAnalyzeResponse> {
-  const form = new FormData();
-  for (const f of files) {
-    form.append('files', f);
-  }
-
-  const res = await fetch('/api/cfdi/batch/analyze', {
-    method: 'POST',
-    body: form,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`La API respondió ${res.status}: ${text}`);
-  }
-
-  return res.json() as Promise<BatchAnalyzeResponse>;
 }
 
 export async function analyzeOneForBatch(

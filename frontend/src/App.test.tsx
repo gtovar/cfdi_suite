@@ -164,10 +164,6 @@ vi.mock('./components/ExtractWorkspace', () => ({
   default: () => <div>ExtractWorkspace</div>,
 }));
 
-vi.mock('./components/FileUpload', () => ({
-  default: () => <div>FileUpload</div>,
-}));
-
 // App.tsx es hoy una app multi-página (Consultas SAT / Análisis masivo /
 // Conversión masiva / Cancelaciones); activeView inicia en 'masivo' y solo
 // pasa a 'inspector' (la vista que este test necesita, con FindingsSidebar)
