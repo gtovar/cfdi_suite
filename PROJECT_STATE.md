@@ -5,6 +5,23 @@
 main
 
 ## Deuda técnica pendiente (explícita, no olvidada)
+- **Visibilidad de progreso del batch de ZIP puede quedar "stuck" tras una caída de
+  Redis.** Confirmado en vivo 2026-07-24 (segunda ronda de la prueba real, batch
+  `b4198478-a494-4837-a49f-7dec3896a5c9`): con Redis realmente agotado durante toda la
+  extracción Y la generación, los 4 PDFs se generaron y subieron a GCS con éxito
+  (confirmado descargando uno directo vía `/download-url`), pero `/status` y
+  `/ready-files` siguieron mostrando "0 listos" — porque la escritura `pdf:status:X →
+  done` también falló (best-effort, correcto) y luego la LECTURA (`mget`) no truena con
+  excepción, simplemente responde "no hay nada" (Upstash deja pasar la lectura aunque las
+  escrituras hayan fallado). Mi código solo activa el respaldo de GCS cuando la lectura
+  truena, no cuando "funciona" pero no encuentra datos -- así que ese batch en particular
+  muestra "0 listos" **para siempre**, incluso después de que Redis se recupere (nadie
+  reescribe el `done` que nunca se grabó). No es pérdida de datos -- el archivo existe y
+  se puede descargar directo -- es visibilidad de progreso. Decisión 2026-07-24: NO
+  arreglado ahora (haría que `/status`/`ready-files` consulten GCS por archivo cuando el
+  conteo viene en cero, costoso en lotes grandes según el asesor de esta sesión) — queda
+  como tarea aparte, idealmente con datos reales de tamaño típico de lote antes de
+  decidir el enfoque.
 - **Centralizar el acceso a Redis.** Hoy hay 3 conexiones/clientes separados
   (`pdf.py` async, `batch_shard_worker.py` su propia conexión async independiente,
   `batch.py` un cliente síncrono distinto) y las llaves (`f"pdf:status:{job_id}"`,
