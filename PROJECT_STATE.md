@@ -5,6 +5,31 @@
 main
 
 ## Último cambio
+**2026-07-24 (madrugada, cierre final de la sesión): los 2 pendientes que quedaron
+anotados (commit ajeno `eeec527` y cambios sin commitear en `ConversionMasivaPage.tsx`)
+ya se revisaron, pasaron por decision-expander, y se cerraron — ya no quedan hallazgos
+pendientes de esta sesión.**
+
+- **`eeec527`** ("envolver redis.set de start-zip-gcs en safe_redis_call"): revisado a
+  fondo — está completo y correcto, mismo patrón que el resto de la sesión, sin huecos
+  (confirmado que no quedó ninguna otra llamada a Redis sin proteger en esa función). Ya
+  estaba desplegado y sano. No requirió ninguna acción.
+- **`ConversionMasivaPage.tsx`** (banner ámbar vs. rojo según el tipo de error del batch):
+  pasado por decision-expander — confirmado que `watchBatchProgress()` solo produce
+  exactamente 2 mensajes de rechazo reales hoy (timeout de cliente vs. error crítico real
+  del servidor), así que el chequeo por string exacto del cambio cubre ambos casos sin
+  dejar un tercero mal clasificado. `clearAll()` (el botón del caso rojo) resetea todo el
+  estado local de forma segura. **Comiteado tal cual** (commit `5a386b9`), con test nuevo
+  para las 2 ramas del banner (no tenía ninguna cobertura antes).
+- **Tests finales**: backend 262 passed/0 failed. Frontend 110 passed/0 failed, 18/18
+  archivos.
+- Quedan sin trackear en el repo `.aider.chat.history.md`, `.aider.input.history`,
+  `.aider.tags.cache.v4/` — cache local de la herramienta `aider` (usada en paralelo a
+  esta sesión, fuera de esta conversación). No se tocaron ni se investigó si deberían
+  agregarse a `.gitignore` — decisión del usuario, no de esta sesión.
+
+---
+
 **2026-07-23 (noche, cierre de la sesión): hallazgo de frontend (UI atascada en
 "Convirtiendo...") RESUELTO Y VERIFICADO EN PRODUCCIÓN REAL, más los 6 "fallos
 preexistentes" de frontend (documentados desde 2026-07-13 sin investigar) resultaron
@@ -954,14 +979,10 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales) Y el hallazgo
-de frontend (UI atascada) DESPLEGADOS Y VERIFICADOS EN VIVO EN PRODUCCIÓN — incidente
-original resuelto en la práctica, cero fallos de test en backend ni frontend. Queda:**
-0. **Sin commitear, no es de esta sesión**: `frontend/src/components/ConversionMasivaPage.tsx`
-   tiene cambios en el working tree (banner de error diferenciado ámbar/rojo según el tipo
-   de `batchError`) que no se hicieron en esta conversación — probablemente vía `aider`
-   (hay cache local `.aider.*` sin trackear en el repo). No se tocaron ni se investigaron.
-   Decidir con el usuario si commitear, descartar, o seguir editando antes de tocar nada.
+**Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales), el hallazgo
+de frontend (UI atascada), y los 6 tests preexistentes (4 causas reales) DESPLEGADOS Y
+VERIFICADOS EN VIVO EN PRODUCCIÓN — incidente original resuelto en la práctica, cero
+fallos de test en backend ni frontend, cero hallazgos pendientes de esta sesión. Queda:**
 1. **Paso 7 (frontend, banner ámbar del flujo de lote portado al individual)**: no
    empezado. Ya no es tan urgente como se pensó — el hallazgo real (UI atascada) ya se
    resolvió por otra vía (fix de `document.hidden` en `subscribeWithRetry`), así que Paso 7
