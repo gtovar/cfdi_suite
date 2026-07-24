@@ -19,6 +19,42 @@ main
   verificación real en producción) — queda como tarea aparte para una sesión futura.
 
 ## Último cambio
+**2026-07-24 (prueba real en producción, cuota de Redis genuinamente agotada): la
+prueba con navegador expuso un hallazgo real que ningún test con mocks había visto —
+subir un .ZIP no funcionaba EN ABSOLUTO mientras Redis estuviera caído. Corregido con
+decisión explícita del usuario. Resultado final de la verificación real:**
+
+- **Confirmado funcionando bajo Redis caído de verdad (no simulado)**: PDF individual
+  (`curl` directo contra producción: job creado, PDF generado, URL de descarga firmada
+  funcionando) y Análisis masivo (4 XMLs subidos por el navegador, procesados y con
+  resultados completos vía polling — los logs de Cloud Run confirman que sí pasó por la
+  ruta degradada real).
+- **Hallazgo real, no cubierto por los tests con mocks de esta sesión**: subir un ZIP
+  real vía "Conversión masiva" se quedaba en 0% para siempre. Causa: el lock de
+  idempotencia de `process_zip_in_background` (`SET NX`, deliberadamente fail-closed
+  desde una sesión anterior, 2026-07-12, para evitar procesar el mismo ZIP dos veces en
+  paralelo) truena con Redis agotado, propaga un 500 en `/api/internal/extract-zip`, y
+  Cloud Tasks reintenta la misma llamada indefinidamente sin llegar NUNCA al resto de la
+  función — ni el manifiesto en GCS ni nada de lo demás arreglado hoy se alcanzaba. A
+  diferencia de los XMLs sueltos y el análisis masivo, que sí sobrevivían la misma caída
+  real, la conversión por ZIP fallaba al 100%, no de forma degradada.
+- **Fix, con decisión explícita del usuario** (best-effort en vez de fail-closed): si
+  Redis truena al intentar adquirir el lock, se continúa la extracción de todas formas,
+  aceptando el riesgo (raro) de procesar el mismo ZIP dos veces en paralelo si coincide
+  un reintento de Cloud Tasks mientras Redis sigue caído. El caso real de protección
+  (Redis SÍ responde y el lock ya está tomado — duplicado genuino con Redis sano) se
+  sigue absteniendo igual que antes, sin cambios. Test nuevo agregado
+  (`test_process_zip_in_background_continua_si_redis_no_responde_al_lock`) verificando
+  que un fallo de Redis en el lock ya NO aborta la extracción. 277 passed backend (antes
+  276).
+- **Metodológico**: este hallazgo NO lo encontró ningún test unitario con mocks — solo
+  apareció al probar de verdad contra producción con la condición real (Redis agotado
+  seguía activo en el momento de la prueba). Confirma la razón de fondo del pedido del
+  usuario esta sesión: los mocks prueban que el código hace lo que se le programó, no que
+  el sistema completo se comporte bien bajo la falla real.
+
+---
+
 **2026-07-24: barrido exhaustivo de Redis tras la pregunta directa del usuario
 ("¿ya lo metiste en todos lados?") — la respuesta honesta era NO. Se encontraron y
 cerraron 3 huecos reales, clasificados por arquitectura (no todos son el mismo tipo de

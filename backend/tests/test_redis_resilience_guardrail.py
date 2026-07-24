@@ -34,24 +34,25 @@ SAFE_WRAPPER_NAMES = {"safe_redis_call", "safe_redis_call_sync"}
 # ya tomada y documentada en el código fuente en esa misma línea/bloque.
 ALLOWLIST: set[tuple[str, int]] = {
     (
-        "app/routers/pdf.py", 996,
-    ),  # Lock de idempotencia (SET NX) de process_zip_in_background --
-        # deliberadamente fail-closed, ver el comentario ahí mismo: si Redis
-        # falla aquí no hay lock que adquirir, la extracción no debe correr
-        # dos veces en paralelo.
-    (
         "app/workers/batch_shard_worker.py", 186,
     ),  # smembers de pdf:batch_ids en el camino "de siempre" (sin
         # ZIP_GCS_PATH) -- es el INSUMO de qué XMLs le tocan a esta tarea, no
-        # un reporte; ver comentario ahí mismo. Fail-closed a propósito,
-        # mismo criterio que el lock de arriba.
+        # un reporte; ver comentario ahí mismo. Fail-closed a propósito.
     (
-        "app/routers/pdf.py", 1122,
+        "app/routers/pdf.py", 1139,
     ),  # scard cosmético dentro de flush_chunk -- ya vive en su propio
         # try/except (líneas de alrededor) que nunca deja que un fallo aquí
         # tumbe la subida real del chunk; no usa safe_redis_call por nombre
         # pero el efecto (nunca propaga) es el mismo.
 }
+# NOTA 2026-07-24: el lock de idempotencia de process_zip_in_background
+# (antes en esta lista como deliberadamente fail-closed) pasó a best-effort
+# tras verificar en vivo, con la cuota de Redis realmente agotada en
+# producción, que el diseño fail-closed bloqueaba POR COMPLETO la conversión
+# masiva vía ZIP (a diferencia de los XMLs sueltos y el análisis masivo, que
+# sí sobrevivían la misma caída real) -- decisión explícita del usuario. Ya
+# no necesita entrada aquí: el AST lo detecta protegido (envuelto en
+# safe_redis_call) igual que el resto.
 
 
 class _ParentTagger(ast.NodeVisitor):

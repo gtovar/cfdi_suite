@@ -464,6 +464,38 @@ class BatchMetadataTtlTests(unittest.TestCase):
         # No debe haber tocado GCS en absoluto si el lock no se adquirió.
         mock_storage_client.bucket.assert_not_called()
 
+    def test_process_zip_in_background_continua_si_redis_no_responde_al_lock(self) -> None:
+        """Verificado en vivo 2026-07-24 contra producción con la cuota de
+        Redis realmente agotada: el lock fail-closed bloqueaba POR COMPLETO
+        la conversión masiva vía ZIP (Cloud Tasks reintentando /internal/extract-zip
+        para siempre sin llegar nunca al resto de la función). Decisión
+        explícita del usuario: si Redis truena al intentar el lock (no si
+        responde y dice que ya está tomado), se continúa de todas formas."""
+        mock_storage_client = MagicMock()
+        mock_bucket = MagicMock()
+        mock_blob = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch("tempfile.NamedTemporaryFile"),
+            patch("zipfile.ZipFile") as mock_zipfile,
+            patch("os.path.exists", return_value=False),
+        ):
+            mock_redis.set = AsyncMock(side_effect=ConnectionError("max requests limit exceeded"))
+            mock_redis.delete = AsyncMock()
+            mock_zip_instance = MagicMock()
+            mock_zip_instance.infolist.return_value = []
+            mock_zipfile.return_value.__enter__.return_value = mock_zip_instance
+
+            ran = _run(pdf_router.process_zip_in_background("uploads/some.zip", "batch-lock-down", "default"))
+
+        # No debe abortar solo porque Redis truene al adquirir el lock -- debe
+        # seguir hasta el final (batch vacío, pero SÍ corrió).
+        self.assertTrue(ran)
+
     def _make_zip_info(self, filename: str):
         import zipfile
         return zipfile.ZipInfo(filename=filename)

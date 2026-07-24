@@ -992,12 +992,29 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     # traslapados). El SET NX es atómico -- solo una invocación gana el lock;
     # cualquier reintento que llegue mientras el original sigue vivo se
     # aborta de inmediato en vez de repetir el trabajo completo.
+    #
+    # 2026-07-24: verificado en vivo contra producción con la cuota de Redis
+    # realmente agotada -- esta línea, sin proteger, tronaba con 500 en
+    # /api/internal/extract-zip, y Cloud Tasks reintentaba la misma llamada
+    # indefinidamente sin llegar NUNCA al resto de la función (el manifiesto
+    # en GCS, los endpoints degradados, nada de eso se alcanzaba). Con Redis
+    # caído, subir un ZIP no funcionaba en absoluto -- a diferencia de los
+    # XMLs sueltos y del análisis masivo, que sí sobrevivían la misma caída
+    # real. Decisión explícita del usuario: best-effort en vez de fail-closed
+    # -- si Redis no responde, se continúa la extracción de todas formas,
+    # aceptando el riesgo (raro) de procesar el mismo ZIP dos veces en
+    # paralelo si coincide un reintento de Cloud Tasks mientras Redis sigue
+    # caído. El caso "Redis SÍ respondió y el lock ya existe" (duplicado
+    # genuino con Redis sano) se sigue absteniendo igual que antes.
     lock_key = f"pdf:extracting_lock:{batch_id}"
-    acquired = await redis_client.set(lock_key, "1", nx=True, ex=EXTRACTION_LOCK_TTL_SECONDS)
-    if not acquired:
+    acquired = await safe_redis_call(lambda: redis_client.set(lock_key, "1", nx=True, ex=EXTRACTION_LOCK_TTL_SECONDS))
+    if acquired is False:
         print(f"[process_zip_in_background] Extracción ya en curso para batch {batch_id} "
               f"(probable reintento de Cloud Tasks) -- se omite para no duplicar el trabajo.")
         return False
+    if acquired is None:
+        print(f"[process_zip_in_background] {batch_id}: Redis no respondió al intentar el lock "
+              f"de idempotencia -- se continúa de todas formas (best-effort).")
 
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
