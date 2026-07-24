@@ -177,6 +177,12 @@ async def run_shard() -> None:
     # lista en cada una de las N tareas (todas leen el mismo Set, ya inmutable
     # -- la extracción del batch ya terminó antes de disparar el Job) produce
     # el mismo particionado sin necesitar una estructura de datos nueva.
+    #
+    # Deliberadamente SIN safe_redis_call: esto es el insumo de entrada de la
+    # tarea (qué XMLs le tocan), no un reporte -- igual que el lock de
+    # idempotencia en process_zip_in_background. Si Redis falla aquí no hay
+    # nada que repartir; la tarea de Cloud Run Job simplemente falla y la
+    # plataforma la reintenta (ver auditoría de resiliencia 2026-07-23).
     job_ids_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
     job_ids = [jid.decode("utf-8") for jid in job_ids_raw]
 

@@ -9,14 +9,26 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
-from pusher import Pusher 
+from google.cloud import storage
+from pusher import Pusher
 import sentry_sdk
 
 from ..services.analyze_cfdi import run_analyze_cfdi
 from ..services.batch_reports import generate_diot
 from ..services.task_dispatcher import enqueue_cfdi_analysis
+from ..services.redis_safety import safe_redis_call_sync
 
 router = APIRouter(prefix="/api/cfdi/batch")
+
+# Bucket compartido con app.routers.pdf -- reusamos el prefijo xml_temp/ (ya
+# cubierto por la regla de lifecycle de 1 día, ver infra/gcs-lifecycle.json)
+# para el contenido y los resultados de este pipeline también, en vez de dar
+# de alta un prefijo nuevo que requeriría su propia regla.
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
+
+
+def _analysis_bucket():
+    return storage.Client().bucket(BUCKET_NAME)
 
 # Configuración dinámica de Redis mediante variables de entorno
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -88,50 +100,47 @@ async def batch_analyze(files: list[UploadFile] = File(...)):
 
     batch_id = str(uuid.uuid4())
     contents = list(await asyncio.gather(*[_read_upload(f) for f in files]))
-    
-    # Inicializamos el estado del lote en Redis
-    redis_client.hmset(f"batch:{batch_id}", {
+
+    # Inicializamos el estado del lote en Redis -- best-effort: es solo
+    # coordinación (contador de progreso), el contenido real de cada XML ya
+    # no vive aquí (ver abajo), así que un fallo aquí no impide crear el
+    # lote ni encolar el trabajo real.
+    safe_redis_call_sync(lambda: redis_client.hmset(f"batch:{batch_id}", {
         "total_files": len(contents),
         "completed_count": 0,
         "status": "processing"
-    })
+    }))
     # Aseguramos la auto-limpieza de la memoria de Redis
-    redis_client.expire(f"batch:{batch_id}", REDIS_TTL)
-    redis_client.expire(f"batch:{batch_id}:results", REDIS_TTL)
+    safe_redis_call_sync(lambda: redis_client.expire(f"batch:{batch_id}", REDIS_TTL))
+    safe_redis_call_sync(lambda: redis_client.expire(f"batch:{batch_id}:results", REDIS_TTL))
+
+    bucket = _analysis_bucket()
 
     # Encolar cada archivo de manera inmediata en Cloud Tasks
     for fname, raw in contents:
         xml_str = raw.decode("utf-8", errors="replace")
-        
-        # 1. Creamos una llave única para el contenido de este archivo en Redis
-        redis_xml_key = f"xml_payload:{batch_id}:{fname}"
-        
-        # 2. Guardamos el XML en Redis con 1 hora (3600 seg) de expiración
-        redis_client.set(redis_xml_key, xml_str, ex=3600)
-        
-        # 3. Le pasamos a Cloud Tasks la LLAVE de Redis, NO el XML gigante
-        enqueue_cfdi_analysis(batch_id, fname, redis_xml_key)
+
+        # El XML se sube a GCS (durable) en vez de guardarse en Redis con TTL
+        # de 1h -- antes, si Upstash perdía esa llave (agotamiento de cuota o
+        # eviction) antes de que Cloud Tasks la leyera, el contenido se
+        # perdía para siempre sin ninguna copia de respaldo (ver auditoría de
+        # resiliencia 2026-07-23). Mismo patrón que xml_temp/ en
+        # app.routers.pdf.
+        gcs_path = f"xml_temp/analysis_{batch_id}/{fname}"
+        await asyncio.to_thread(
+            bucket.blob(gcs_path).upload_from_string, xml_str, content_type="application/xml"
+        )
+
+        # Le pasamos a Cloud Tasks la RUTA de GCS, no el XML completo
+        enqueue_cfdi_analysis(batch_id, fname, gcs_path)
 
     return {"batch_id": batch_id, "total_files": len(contents), "status": "processing"}
 
-@router.get("/status/{batch_id}")
-async def get_batch_status(batch_id: str):
-    """Endpoint de consulta (polling) para el frontend y rehidratación de estado."""
-    batch_meta = redis_client.hgetall(f"batch:{batch_id}")
-    if not batch_meta:
-        raise HTTPException(404, "El lote de procesamiento no existe o ya caducó")
-
-    raw_results = redis_client.lrange(f"batch:{batch_id}:results", 0, -1)
-    results = [json.loads(r) for r in raw_results]
-
-    completed = int(batch_meta.get("completed_count", 0))
-    total = int(batch_meta.get("total_files", 0))
+def _build_status_response(total: int, completed: int, results: list[dict]) -> dict:
     status = "done" if completed >= total else "processing"
-
     files_ok = sum(1 for r in results if r["status"] == "ok")
     files_con_errores = sum(1 for r in results if r["status"] == "con_errores")
     files_error = sum(1 for r in results if r["status"] == "error")
-
     return {
         "status": status,
         "results": results,
@@ -145,20 +154,76 @@ async def get_batch_status(batch_id: str):
         },
     }
 
+
+async def _load_results_from_gcs(bucket, batch_id: str) -> list[dict]:
+    """Respaldo de resultados cuando la lista de Redis (batch:{id}:results)
+    no responde -- cada resultado ya calculado se guarda de forma durable en
+    GCS antes de tocar Redis (ver batch_worker_task), así que esto reconstruye
+    el mismo contenido sin depender de Redis para nada."""
+    prefix = f"xml_temp/analysis_results_{batch_id}/"
+    blobs = await asyncio.to_thread(lambda: list(bucket.list_blobs(prefix=prefix)))
+    if not blobs:
+        return []
+
+    async def _read(blob) -> dict:
+        raw = await asyncio.to_thread(blob.download_as_bytes)
+        return json.loads(raw)
+
+    return list(await asyncio.gather(*[_read(b) for b in blobs]))
+
+
+@router.get("/status/{batch_id}")
+async def get_batch_status(batch_id: str):
+    """Endpoint de consulta (polling) para el frontend y rehidratación de estado."""
+    batch_meta = safe_redis_call_sync(lambda: redis_client.hgetall(f"batch:{batch_id}"))
+    bucket = _analysis_bucket()
+
+    if not batch_meta:
+        # Puede ser que el lote de verdad no exista, o que Redis no haya
+        # respondido (o haya perdido el hash) -- antes de reportar 404,
+        # confirmamos contra GCS: los XMLs originales sobreviven a un Redis
+        # caído (ver batch_analyze), así que si existen, el lote es real.
+        submitted = await asyncio.to_thread(
+            lambda: list(bucket.list_blobs(prefix=f"xml_temp/analysis_{batch_id}/"))
+        )
+        if not submitted:
+            raise HTTPException(404, "El lote de procesamiento no existe o ya caducó")
+
+        results = await _load_results_from_gcs(bucket, batch_id)
+        return _build_status_response(total=len(submitted), completed=len(results), results=results)
+
+    raw_results = safe_redis_call_sync(lambda: redis_client.lrange(f"batch:{batch_id}:results", 0, -1))
+    results = [json.loads(r) for r in raw_results] if raw_results is not None else await _load_results_from_gcs(bucket, batch_id)
+
+    completed = int(batch_meta.get("completed_count", 0))
+    total = int(batch_meta.get("total_files", 0))
+    return _build_status_response(total=total, completed=completed, results=results)
+
 @router.post("/worker-task")
 async def batch_worker_task(request: Request):
     """Webhook asíncrono e independiente invocado por Google Cloud Tasks."""
     payload = await request.json()
     batch_id = payload["batch_id"]
     filename = payload["filename"]
-    redis_key = payload["redis_key"]
+    # payload.get("redis_key"): tareas ya encoladas en Cloud Tasks ANTES de
+    # este deploy (migración de Redis a GCS) siguen trayendo el campo viejo.
+    # Un valor así nunca es una ruta de GCS válida -- bucket.blob(...) sobre
+    # esa cadena simplemente no existe, y cae al mismo try/except de abajo
+    # (mismo comportamiento que el "expiró en caché" de antes), en vez de un
+    # KeyError -> 500 -> reintento infinito de Cloud Tasks durante la ventana
+    # del deploy.
+    gcs_path = payload.get("gcs_path") or payload.get("redis_key")
 
-    # 1. Traemos el XML real desde Redis
-    xml_str = redis_client.get(redis_key)
-    
-    # Respaldo por si la cola tarda más de una hora en procesar y el caché ya expiró
-    if not xml_str:
-        return {"status": "error", "message": "El contenido del XML expiró en la caché de Redis"}
+    # 1. Traemos el XML real desde GCS (durable) -- antes vivía en Redis con
+    #    TTL de 1h y sin ninguna copia de respaldo si Upstash lo perdía antes
+    #    de que Cloud Tasks llegara a leerlo (ver auditoría de resiliencia
+    #    2026-07-23).
+    bucket = _analysis_bucket()
+    try:
+        xml_bytes = await asyncio.to_thread(bucket.blob(gcs_path).download_as_bytes)
+    except Exception:
+        return {"status": "error", "message": "El XML no se encontró en Storage (lote expirado o ruta inválida)"}
+    xml_str = xml_bytes.decode("utf-8", errors="replace")
 
     try:
         # Analizamos el CFDI de manera aislada
@@ -211,9 +276,22 @@ async def batch_worker_task(request: Request):
         "error": error_msg,
     }
 
-    # Guardado atómico en la lista de resultados e incremento de contadores en Redis
-    redis_client.rpush(f"batch:{batch_id}:results", json.dumps(parsed_result))
-    redis_client.hincrby(f"batch:{batch_id}", "completed_count", 1)
+    # Guardado durable en GCS PRIMERO -- el resultado del análisis (ya
+    # calculado con éxito) nunca debe perderse solo porque el REPORTE a Redis
+    # falle; mismo principio ya aplicado en pdf.py tras el incidente del 23
+    # de julio.
+    result_path = f"xml_temp/analysis_results_{batch_id}/{filename}.json"
+    await asyncio.to_thread(
+        bucket.blob(result_path).upload_from_string,
+        json.dumps(parsed_result),
+        content_type="application/json",
+    )
+
+    # Contadores/lista en Redis: best-effort desde que el resultado ya está a
+    # salvo en GCS -- un fallo aquí solo retrasa lo que /status ve por Redis,
+    # nunca pierde el resultado (get_batch_status cae a GCS si hace falta).
+    safe_redis_call_sync(lambda: redis_client.rpush(f"batch:{batch_id}:results", json.dumps(parsed_result)))
+    safe_redis_call_sync(lambda: redis_client.hincrby(f"batch:{batch_id}", "completed_count", 1))
 
     # Emitimos el evento en tiempo real solo si Pusher se inicializó correctamente
     if pusher_client:

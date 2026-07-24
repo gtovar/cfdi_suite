@@ -134,7 +134,9 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
             xml_bytes = base64.b64decode(payload.xml_b64)
         else:
             # 1️⃣ Buscamos en Redis primero (por si quedaron tareas viejas en la cola)
-            compressed_xml = await redis_client.get(f"pdf:xml:{payload.job_id}")
+            # -- best-effort: si Redis falla aquí, no debe abortar la generación
+            # cuando el 2️⃣ (GCS, la ruta real hoy) sí tiene el XML.
+            compressed_xml = await safe_redis_call(lambda: redis_client.get(f"pdf:xml:{payload.job_id}"))
             if compressed_xml:
                 xml_bytes = zlib.decompress(compressed_xml)
             else:
@@ -363,32 +365,72 @@ async def start_pdf_zip_generation(
     }
 
 
+def _batch_manifest_blob(batch_id: str):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+    return bucket.blob(f"xml_temp/_manifest_{batch_id}.json")
+
+
+async def _load_batch_manifest(batch_id: str) -> dict[str, str] | None:
+    """job_id -> filename, leído de xml_temp/_manifest_{batch_id}.json en GCS.
+
+    Respaldo de membresía del batch cuando pdf:batch_ids (el Set de Redis)
+    no está disponible o viene vacío por una falla de Redis durante la
+    extracción -- ver process_zip_in_background, que escribe este manifiesto
+    ANTES de iterar el ZIP, con la misma función (build_manifest) que ya usa
+    el camino de sharding grande para no depender de Redis para saber qué
+    archivos pertenecen al batch."""
+    try:
+        raw = await asyncio.to_thread(_batch_manifest_blob(batch_id).download_as_bytes)
+    except Exception:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 async def _batch_progress_snapshot(batch_id: str) -> dict:
-    """Estado actual del lote calculado desde Redis (fuente de verdad).
+    """Estado actual del lote calculado desde Redis (fuente de verdad para el
+    detalle done/error/converting) con el manifiesto de GCS como respaldo de
+    membresía y total si Redis no responde.
 
     Lo comparten el SSE legacy y el endpoint /status; los ticks de Pusher usan
     contadores aproximados, este cálculo (MGET de statuses) es el exacto.
     """
     # Si el loop de extracción murió a mitad de camino, no dejamos la barra
     # congelada hasta el timeout del cliente: reportamos el error de inmediato.
-    extracting_error = await redis_client.get(f"pdf:extracting_error:{batch_id}")
+    extracting_error = await safe_redis_call(lambda: redis_client.get(f"pdf:extracting_error:{batch_id}"))
     if extracting_error:
         return {"status": "error", "message": extracting_error.decode("utf-8")}
 
-    total_bytes = await redis_client.get(f"pdf:extracting_total:{batch_id}")
+    total_bytes = await safe_redis_call(lambda: redis_client.get(f"pdf:extracting_total:{batch_id}"))
+    manifest: dict[str, str] | None = None
     if total_bytes is None:
-        # Aún no conocemos el total real (ventana muy breve al arrancar).
-        is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
-        if is_extracting:
-            return {"status": "processing", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 0, "message": "Preparando lote..."}
-        return {"status": "error", "message": "Lote no encontrado"}
+        # Puede ser la ventana breve al arrancar (aún no se conoce el total)
+        # o que Redis no esté respondiendo -- en ese segundo caso, el
+        # manifiesto en GCS (si ya se escribió) es la fuente de verdad del
+        # total real, sin depender de Redis para nada.
+        manifest = await _load_batch_manifest(batch_id)
+        if manifest:
+            total_bytes = len(manifest)
+        else:
+            is_extracting = await safe_redis_call(lambda: redis_client.get(f"pdf:extracting:{batch_id}"))
+            if is_extracting:
+                return {"status": "processing", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 0, "message": "Preparando lote..."}
+            return {"status": "error", "message": "Lote no encontrado"}
 
     total = int(total_bytes)
     if total == 0:
         return {"status": "done", "total": 0, "done": 0, "error": 0, "converting": 0, "pending": 0, "percentage": 100}
 
-    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
-    registered_ids = [rid.decode("utf-8") for rid in registered_raw]
+    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
+    registered_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
+    if not registered_ids:
+        if manifest is None:
+            manifest = await _load_batch_manifest(batch_id)
+        if manifest:
+            registered_ids = list(manifest.keys())
 
     # Fase de extracción: el ZIP todavía se está desempaquetando y subiendo a
     # GCS -- ningún XML ha empezado a convertirse todavía. Se reporta con un
@@ -398,7 +440,7 @@ async def _batch_progress_snapshot(batch_id: str) -> dict:
     # 2026-07-12: antes de esto, la pantalla se quedaba en 0% fijo toda la
     # extracción (6-25 min medidos) sin ningún aviso -- el dato (cuántos
     # XMLs ya están en pdf:batch_ids) ya existía, solo no se exponía aquí.
-    is_extracting = await redis_client.get(f"pdf:extracting:{batch_id}")
+    is_extracting = await safe_redis_call(lambda: redis_client.get(f"pdf:extracting:{batch_id}"))
     if is_extracting:
         extracted = len(registered_ids)
         return {
@@ -413,17 +455,36 @@ async def _batch_progress_snapshot(batch_id: str) -> dict:
         }
 
     done = error = converting = 0
+    statuses = None
     if registered_ids:
         keys = [f"pdf:status:{jid}" for jid in registered_ids]
-        statuses = await redis_client.mget(keys)
-        for status_bytes in statuses:
-            status = status_bytes.decode("utf-8") if status_bytes else "pending"
-            if status == "done":
-                done += 1
-            elif status == "error":
-                error += 1
-            elif status == "converting":
-                converting += 1
+        statuses = await safe_redis_call(lambda: redis_client.mget(keys))
+
+    if statuses is None and registered_ids:
+        # Redis no respondió para el detalle de estado -- no lo reconstruimos
+        # golpeando GCS por cada archivo del batch (podrían ser miles); se
+        # reporta degradado en vez de fingir precisión. El detalle vuelve en
+        # cuanto Redis se recupera; mientras tanto el trabajo real sigue
+        # corriendo igual (no depende de esta lectura).
+        return {
+            "status": "processing",
+            "total": total,
+            "done": 0,
+            "error": 0,
+            "converting": 0,
+            "pending": total,
+            "percentage": 0,
+            "message": "Progreso no disponible temporalmente (reconectando)",
+        }
+
+    for status_bytes in (statuses or []):
+        status = status_bytes.decode("utf-8") if status_bytes else "pending"
+        if status == "done":
+            done += 1
+        elif status == "error":
+            error += 1
+        elif status == "converting":
+            converting += 1
 
     registered_pending = len(registered_ids) - done - error - converting
     not_yet_registered = total - len(registered_ids)
@@ -476,13 +537,32 @@ async def list_ready_files(batch_id: str):
     frontend la usa para ir llenando la tabla de descargas individuales
     conforme avanza el lote, sin esperar a que todo el batch termine.
     """
-    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
-    if not registered_raw:
+    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
+    job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
+    if not job_ids:
+        manifest = await _load_batch_manifest(batch_id)
+        if manifest:
+            job_ids = list(manifest.keys())
+    if not job_ids:
         return {"jobIds": []}
 
-    job_ids = [rid.decode("utf-8") for rid in registered_raw]
     keys = [f"pdf:status:{jid}" for jid in job_ids]
-    statuses = await redis_client.mget(keys)
+    statuses = await safe_redis_call(lambda: redis_client.mget(keys))
+
+    if statuses is None:
+        # Redis no respondió el detalle de estado -- esta ruta existe para
+        # decidir qué archivos ya se pueden descargar, así que aquí sí vale
+        # la pena preguntarle a GCS directo (misma señal que ya usa la
+        # descarga individual) en vez de reportar "nada listo".
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BUCKET_NAME)
+
+        async def _exists(jid: str) -> bool:
+            return await asyncio.to_thread(bucket.blob(f"pdfs/{jid}.pdf").exists)
+
+        exists_flags = await asyncio.gather(*[_exists(jid) for jid in job_ids])
+        ready = [jid for jid, exists in zip(job_ids, exists_flags) if exists]
+        return {"jobIds": ready}
 
     ready = [
         jid for jid, status_bytes in zip(job_ids, statuses)
@@ -501,15 +581,19 @@ async def batch_estimated_size(batch_id: str):
     grande y conviene la descarga nativa del navegador sin progreso.
     El ZIP comprime, así que el tamaño final real será algo menor a esta suma.
     """
-    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
-    if not registered_raw:
+    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
+    job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
+    if not job_ids:
+        manifest = await _load_batch_manifest(batch_id)
+        if manifest:
+            job_ids = list(manifest.keys())
+    if not job_ids:
         return {"estimatedBytes": 0, "knownCount": 0, "totalCount": 0}
 
-    job_ids = [rid.decode("utf-8") for rid in registered_raw]
     keys = [f"pdf:size:{jid}" for jid in job_ids]
-    sizes_raw = await redis_client.mget(keys)
+    sizes_raw = await safe_redis_call(lambda: redis_client.mget(keys))
 
-    known_sizes = [int(s) for s in sizes_raw if s]
+    known_sizes = [int(s) for s in (sizes_raw or []) if s]
     return {
         "estimatedBytes": sum(known_sizes),
         "knownCount": len(known_sizes),
@@ -519,11 +603,14 @@ async def batch_estimated_size(batch_id: str):
 
 @router.get("/cfdi/pdf/batch/{batch_id}/download")
 async def download_batch_zip(batch_id: str):
-    registered_raw = await redis_client.smembers(f"pdf:batch_ids:{batch_id}")
-    if not registered_raw:
+    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
+    job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
+    if not job_ids:
+        manifest = await _load_batch_manifest(batch_id)
+        if manifest:
+            job_ids = list(manifest.keys())
+    if not job_ids:
         raise HTTPException(status_code=404, detail="El lote especificado no existe o ya expiró.")
-
-    job_ids = [rid.decode("utf-8") for rid in registered_raw]
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
 
@@ -810,7 +897,7 @@ async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, templa
             rz.close()
     except Exception as e:
         print(f"[_try_remote_manifest_path] Error leyendo el directorio central remoto de {gcs_path}: {e}")
-        await redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600)
+        await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600))
         return True
 
     manifest = build_manifest(infolist, batch_id)  # job_id -> filename
@@ -823,16 +910,30 @@ async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, templa
         # Cae al camino de siempre, sin haber tocado Redis ni disparado nada.
         return None
 
-    await redis_client.set(f"pdf:extracting_total:{batch_id}", total_xmls, ex=BATCH_METADATA_TTL_SECONDS)
+    # Manifiesto también en GCS -- mismo respaldo que process_zip_in_background
+    # para que _batch_progress_snapshot y afines no dependan solo del sadd de
+    # abajo si Redis falla a media construcción.
+    try:
+        await asyncio.to_thread(
+            _batch_manifest_blob(batch_id).upload_from_string,
+            json.dumps(manifest),
+            content_type="application/json",
+        )
+    except Exception as manifest_err:
+        print(f"Aviso: no se pudo escribir el manifiesto remoto de {batch_id} en GCS: {manifest_err}")
+
+    await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_total:{batch_id}", total_xmls, ex=BATCH_METADATA_TTL_SECONDS))
 
     job_ids = list(manifest.keys())
     if job_ids:
-        async with redis_client.pipeline(transaction=False) as pipe:
-            for jid in job_ids:
-                pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
-            pipe.sadd(f"pdf:batch_ids:{batch_id}", *job_ids)
-            pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
-            await pipe.execute()
+        async def _write_manifest_redis():
+            async with redis_client.pipeline(transaction=False) as pipe:
+                for jid in job_ids:
+                    pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                pipe.sadd(f"pdf:batch_ids:{batch_id}", *job_ids)
+                pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
+                await pipe.execute()
+        await safe_redis_call(_write_manifest_redis)
 
         # Un solo aviso de progreso (100% extraído) -- a diferencia del
         # camino de siempre, aquí no hay una fase de extracción larga que
@@ -858,11 +959,11 @@ async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, templa
             print(f"[_try_remote_manifest_path] Job de shards disparado para batch {batch_id}: {op_name}")
         except Exception as job_err:
             print(f"Error disparando Cloud Run Job para batch {batch_id}: {job_err}")
-            await redis_client.set(
+            await safe_redis_call(lambda: redis_client.set(
                 f"pdf:extracting_error:{batch_id}",
                 f"No se pudo disparar el Job de shards: {job_err}",
                 ex=3600,
-            )
+            ))
 
     # NOTA (decisión deliberada, ver docs/propuesta-arquitectura-batch.md):
     # el ZIP original NO se borra aquí. A diferencia del camino de siempre
@@ -905,8 +1006,8 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     if REMOTE_ZIP_SHARD_READ:
         ran = await _try_remote_manifest_path(bucket, gcs_path, batch_id, template_id)
         if ran is not None:
-            await redis_client.delete(f"pdf:extracting:{batch_id}")
-            await redis_client.delete(lock_key)
+            await safe_redis_call(lambda: redis_client.delete(f"pdf:extracting:{batch_id}"))
+            await safe_redis_call(lambda: redis_client.delete(lock_key))
             return ran
         # ran is None: el batch no calificó para el Job de shards (batch
         # chico) incluso con el interruptor prendido -- cae al camino de
@@ -932,9 +1033,30 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     try:
         with zipfile.ZipFile(temp_filename, "r") as z:
             xml_entries = [fi for fi in z.infolist() if is_valid_xml_entry(fi)]
+
+            # Manifiesto completo (job_id -> filename) escrito a GCS ANTES de
+            # iterar el ZIP -- misma función (build_manifest) que ya usa el
+            # camino de sharding grande para no depender de Redis para saber
+            # qué archivos pertenecen al batch. Con esto, el sadd incremental
+            # de más abajo (dentro de flush_chunk) puede ser puramente
+            # best-effort: si Redis falla a media extracción, los endpoints
+            # de lectura (_batch_progress_snapshot, list_ready_files, etc.)
+            # tienen este manifiesto como respaldo de membresía en vez de
+            # quedar con archivos "huérfanos" que existen en GCS pero de los
+            # que nadie sabe que pertenecen al batch.
+            manifest = build_manifest(xml_entries, batch_id)
+            try:
+                await asyncio.to_thread(
+                    _batch_manifest_blob(batch_id).upload_from_string,
+                    json.dumps(manifest),
+                    content_type="application/json",
+                )
+            except Exception as manifest_err:
+                print(f"Aviso: no se pudo escribir el manifiesto de {batch_id} en GCS: {manifest_err}")
+
             # Total real conocido de inmediato: el frontend deja de ver 0% fijo
             # desde los primeros segundos, en vez de hasta que todo el ZIP termine.
-            await redis_client.set(f"pdf:extracting_total:{batch_id}", len(xml_entries), ex=BATCH_METADATA_TTL_SECONDS)
+            await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_total:{batch_id}", len(xml_entries), ex=BATCH_METADATA_TTL_SECONDS))
 
             # "Artillería pesada" (Capa 1, docs/propuesta-arquitectura-batch.md):
             # apagado por defecto (BATCH_JOB_ENABLED=false) — should_use_batch_job
@@ -974,13 +1096,21 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                 nonlocal flushed_chunks
                 # a) Redis: estado "pending" + registro incremental del batch
                 #    (mismo pipeline, así el TTL del set nunca queda huérfano
-                #    si el proceso muere a mitad de camino)
-                async with redis_client.pipeline(transaction=False) as pipe:
-                    for jid, _ in current_chunk:
-                        pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
-                    pipe.sadd(f"pdf:batch_ids:{batch_id}", *[jid for jid, _ in current_chunk])
-                    pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
-                    await pipe.execute()
+                #    si el proceso muere a mitad de camino). Best-effort desde
+                #    que existe el manifiesto en GCS (arriba): un fallo aquí ya
+                #    no deja archivos huérfanos, solo hace que el progreso
+                #    incremental por Redis se retrase hasta que Redis se
+                #    recupere -- b) y c) (el trabajo real) nunca dependen de
+                #    que esto tenga éxito.
+                async def _write_chunk_pending():
+                    async with redis_client.pipeline(transaction=False) as pipe:
+                        for jid, _ in current_chunk:
+                            pipe.set(f"pdf:status:{jid}", b"pending", ex=1800)
+                        pipe.sadd(f"pdf:batch_ids:{batch_id}", *[jid for jid, _ in current_chunk])
+                        pipe.expire(f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS)
+                        await pipe.execute()
+
+                await safe_redis_call(_write_chunk_pending)
 
                 # El aviso de progreso es cosmético -- un fallo aquí (Redis,
                 # Pusher, lo que sea) NUNCA debe impedir que b) y c) corran de
@@ -1032,7 +1162,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                         if isinstance(result, Exception):
                             print(f"Error subiendo XML {jid} a GCS: {result}")
                             failed_jids.add(jid)
-                            await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                            await safe_redis_call(lambda jid=jid: redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
                 else:
                     for jid, xml_data in current_chunk:
                         try:
@@ -1041,7 +1171,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                         except Exception as e:
                             print(f"Error subiendo XML {jid} a GCS: {e}")
                             failed_jids.add(jid)
-                            await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                            await safe_redis_call(lambda jid=jid: redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
 
                 chunk_elapsed = time.perf_counter() - upload_start
                 total_upload_seconds += chunk_elapsed
@@ -1067,7 +1197,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                             await asyncio.to_thread(enqueue_pdf_generation, job_id=jid, xml_b64="", template_id=template_id, batch_id=batch_id)
                         except Exception as ex:
                             print(f"Error registrando en Tasks {jid}: {ex}")
-                            await redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS)
+                            await safe_redis_call(lambda jid=jid: redis_client.set(f"pdf:status:{jid}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
 
             for file_info in xml_entries:
                 # Determinístico (no uuid4): si Cloud Tasks reintenta esta
@@ -1099,15 +1229,15 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                     print(f"[process_zip_in_background] Job de shards disparado para batch {batch_id}: {op_name}")
                 except Exception as job_err:
                     print(f"Error disparando Cloud Run Job para batch {batch_id}: {job_err}")
-                    await redis_client.set(
+                    await safe_redis_call(lambda: redis_client.set(
                         f"pdf:extracting_error:{batch_id}",
                         f"No se pudo disparar el Job de shards: {job_err}",
                         ex=3600,
-                    )
+                    ))
 
     except Exception as e:
         print(f"Error crítico procesando ZIP en background: {e}")
-        await redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600)
+        await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600))
     finally:
         print(f"[process_zip_in_background] {batch_id}: extracción+subida (sin contar descarga) "
               f"tomó {time.perf_counter() - extraction_start:.1f}s, de los cuales "
@@ -1120,8 +1250,8 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             print(f"[process_zip_in_background] {batch_id}: distribución por chunk (n={n}): "
                   f"min={sorted_chunks[0]:.2f}s mediana={median:.2f}s p90={p90:.2f}s "
                   f"max={sorted_chunks[-1]:.2f}s")
-        await redis_client.delete(f"pdf:extracting:{batch_id}")
-        await redis_client.delete(lock_key)
+        await safe_redis_call(lambda: redis_client.delete(f"pdf:extracting:{batch_id}"))
+        await safe_redis_call(lambda: redis_client.delete(lock_key))
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
         # El ZIP original ya no se necesita para nada más una vez extraído

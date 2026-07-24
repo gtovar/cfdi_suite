@@ -485,9 +485,17 @@ class BatchMetadataTtlTests(unittest.TestCase):
     def test_remote_zip_shard_read_activo_no_descarga_el_zip_completo(self) -> None:
         """Con REMOTE_ZIP_SHARD_READ=true y un batch que sí califica para el
         Job de shards: nunca debe llamar blob.download_to_filename (nunca
-        baja el ZIP completo), nunca debe subir nada a xml_temp/, sí debe
-        llamar trigger_batch_shard_job con el gcs_path, y NO debe borrar el
-        ZIP original (decisión de diseño: se deja al lifecycle de GCS)."""
+        baja el ZIP completo), nunca debe subir contenido de XML individual a
+        xml_temp/{job_id}.xml (la ruta remota evita mover ese contenido
+        pesado por la red de esta instancia -- ver docstring de
+        _try_remote_manifest_path), sí debe llamar trigger_batch_shard_job
+        con el gcs_path, y NO debe borrar el ZIP original (decisión de
+        diseño: se deja al lifecycle de GCS).
+
+        Actualizado 2026-07-23 (auditoría de resiliencia): sí sube un
+        manifiesto pequeño (job_id -> filename) a xml_temp/_manifest_{batch_id}.json
+        -- reusa el prefijo xml_temp/ solo para heredar su regla de lifecycle
+        de 1 día, no mueve contenido de XML. Ver _batch_manifest_blob."""
         fake_infolist = [self._make_zip_info(f"factura_{i}.xml") for i in range(30)]
         mock_rz = MagicMock()
         mock_rz.infolist.return_value = fake_infolist
@@ -515,8 +523,10 @@ class BatchMetadataTtlTests(unittest.TestCase):
 
         self.assertTrue(ran)
         mock_blob.download_to_filename.assert_not_called()
-        for call in mock_bucket.blob.call_args_list:
-            self.assertNotIn("xml_temp/", call.args[0] if call.args else "")
+        blob_paths = [call.args[0] for call in mock_bucket.blob.call_args_list if call.args]
+        for path in blob_paths:
+            if path.startswith("xml_temp/"):
+                self.assertEqual(path, "xml_temp/_manifest_batch-remote.json")
         mock_trigger.assert_called_once_with(
             "batch-remote", 30, "default", "uploads/batch-remote.zip"
         )

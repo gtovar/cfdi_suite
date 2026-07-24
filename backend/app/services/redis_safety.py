@@ -49,3 +49,16 @@ async def safe_redis_call(coro_factory: Callable[[], Awaitable[T]], *, on_quota_
             on_quota_error()
         print(f"[redis_safety] aviso: operación de Redis no completada: {e}")
         return None
+
+
+def safe_redis_call_sync(fn: Callable[[], T], *, on_quota_error: Callable[[], None] = mark_degraded) -> T | None:
+    """Igual que safe_redis_call pero para el cliente síncrono `redis.Redis`
+    (ej. app.routers.batch, que corre sobre ese cliente en vez de
+    `redis.asyncio`). Ej.: `safe_redis_call_sync(lambda: redis_client.hmset(...))`."""
+    try:
+        return fn()
+    except Exception as e:
+        if is_redis_quota_error(e):
+            on_quota_error()
+        print(f"[redis_safety] aviso: operación de Redis (sync) no completada: {e}")
+        return None

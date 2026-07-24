@@ -62,17 +62,21 @@ def enqueue_zip_extraction(gcs_path: str, batch_id: str, template_id: str):
     response = client.create_task(request={"parent": parent, "task": task})
     return response.name
 
-def enqueue_cfdi_analysis(batch_id: str, filename: str, redis_key: str):
-    """Inyecta el análisis asíncrono de un CFDI a la cola de Cloud Tasks."""
+def enqueue_cfdi_analysis(batch_id: str, filename: str, gcs_path: str):
+    """Inyecta el análisis asíncrono de un CFDI a la cola de Cloud Tasks.
+
+    gcs_path apunta al XML ya subido a GCS (xml_temp_analysis/{batch_id}/{filename})
+    -- antes era una llave de Redis con TTL de 1h y sin respaldo si Upstash
+    perdía el valor (ver auditoría de resiliencia 2026-07-23); GCS es durable."""
     client = get_tasks_client()  # <-- ¡Fijamos esto! Antes llamabas a client.queue_path pero la variable local no existía en esta función.
     parent = client.queue_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME)
-    
+
     payload = {
         "batch_id": batch_id,
         "filename": filename,
-        "redis_key": redis_key  # <-- Enviamos la ruta de acceso en lugar del string pesado
+        "gcs_path": gcs_path  # <-- Enviamos la ruta de acceso en lugar del string pesado
     }
-    
+
     task = {
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
@@ -87,9 +91,6 @@ def enqueue_cfdi_analysis(batch_id: str, filename: str, redis_key: str):
         if "Task size too large" in str(e):
             # Le avisamos a Sentry adjuntando el nombre del archivo culpable
             sentry_sdk.set_tag("batch_id", batch_id)
-            sentry_sdk.set_context("archivo_culpable", {
-                "nombre": filename,
-                "tamaño_caracteres": len(xml_str)
-            })
+            sentry_sdk.set_context("archivo_culpable", {"nombre": filename})
             sentry_sdk.capture_exception(e)
         raise e # Lo volvemos a lanzar pa

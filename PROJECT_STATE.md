@@ -5,6 +5,81 @@
 main
 
 ## Último cambio
+**2026-07-24: barrido exhaustivo de Redis tras la pregunta directa del usuario
+("¿ya lo metiste en todos lados?") — la respuesta honesta era NO. Se encontraron y
+cerraron 3 huecos reales, clasificados por arquitectura (no todos son el mismo tipo de
+problema). CÓDIGO LISTO Y CON TESTS (276 passed); FALTA la prueba real en navegador con
+un .zip de verdad (PDF y análisis) contra producción — ver "Pendiente" abajo.**
+
+- **Bucket 1 — extracción de ZIP para PDFs (batches <500 archivos), mismo patrón de
+  siempre pero con un hueco real**: `process_zip_in_background` (y su hermano tras el
+  interruptor `REMOTE_ZIP_SHARD_READ`, `_try_remote_manifest_path`) escribían la
+  membresía del batch (`pdf:batch_ids`) SOLO en un Set de Redis, incremental, sin ningún
+  respaldo — a diferencia de lo que yo mismo había resumido antes (que el camino de
+  sharding grande tenía un "manifest.json en GCS"; no lo tiene, lo reconstruye del ZIP).
+  **Fix real (no el tradeoff binario "best-effort vs. fail-closed" que se planteó al
+  inicio)**: se escribe un manifiesto completo (job_id → filename, vía `build_manifest`,
+  ya usado en el camino grande) a `xml_temp/_manifest_{batch_id}.json` ANTES de iterar el
+  ZIP. Con eso, el `sadd` incremental de Redis pasa a ser puramente best-effort
+  (`safe_redis_call`), y los 4 endpoints de lectura (`_batch_progress_snapshot`,
+  `list_ready_files`, `batch_estimated_size`, `download_batch_zip`) caen a ese manifiesto
+  cuando Redis no responde, en vez de reportar 500 o "lote no encontrado" para un batch
+  real. El detalle fino de estado (done/error/converting) SÍ degrada a "no disponible
+  temporalmente" en vez de reconstruirse golpeando GCS por archivo (podría ser miles) —
+  decisión explícita: graceful, no omnisciente. `list_ready_files` es la única excepción
+  razonable (si Redis no responde el detalle, sí pregunta a GCS `blob.exists()` por
+  archivo, porque esa ruta existe justo para decidir qué se puede descargar).
+  Adicionalmente se encontró y protegió una llamada real (no la del manifiesto) en
+  `internal_generate_pdf` línea ~137: una lectura legacy de Redis (`pdf:xml:{job_id}`,
+  "por si quedaron tareas viejas") sin envolver, que podía abortar la generación con 500
+  aunque el XML sí existiera en GCS (la ruta real hoy).
+- **Bucket 2 — `batch_shard_worker.py:180`**: NO es un bug. Es el insumo de qué XMLs le
+  tocan a esa tarea del shard (mismo criterio que el lock de idempotencia) — se dejó
+  fail-closed a propósito, con comentario explícito en el código.
+- **Bucket 3 — `app/routers/batch.py` (análisis de CFDI por lote, función DISTINTA a
+  generar PDFs)**: este era el hueco más profundo. Usaba Redis como **almacén principal
+  del contenido del XML** (no solo coordinación) con TTL de 1h y CERO respaldo — si
+  Upstash perdía la llave antes de que Cloud Tasks la leyera, el archivo se perdía para
+  siempre. El resultado del análisis YA CALCULADO tampoco tenía respaldo fuera de Redis.
+  **Migrado a GCS** (reusando el prefijo `xml_temp/` solo para heredar su lifecycle de 1
+  día, sin tocar infra): el XML se sube a `xml_temp/analysis_{batch_id}/{filename}` y se
+  le pasa a Cloud Tasks la ruta (no el contenido); el resultado del análisis se persiste
+  en `xml_temp/analysis_results_{batch_id}/{filename}.json` ANTES de tocar Redis; los
+  contadores (`hmset`/`expire`/`rpush`/`hincrby`) pasan a ser best-effort
+  (`safe_redis_call_sync`, nuevo en `redis_safety.py` para el cliente síncrono de este
+  router). `get_batch_status` reconstruye desde GCS si Redis no responde. De paso se
+  arregló un bug preexistente en `task_dispatcher.py` (`enqueue_cfdi_analysis`):
+  referenciaba una variable `xml_str` inexistente en el manejo de "Task size too large".
+  **Bug propio encontrado y corregido antes de comitear** (atrapado por el asesor, no por
+  los tests): el rename del campo del payload de Cloud Tasks (`redis_key` → `gcs_path`)
+  rompía las tareas YA encoladas antes del deploy — `batch_worker_task` ahora acepta
+  ambos campos (`payload.get("gcs_path") or payload.get("redis_key")`), degradando a un
+  error limpio por archivo en vez de un KeyError → 500 → reintento infinito durante la
+  ventana del deploy.
+- **Guardrail permanente** (`backend/tests/test_redis_resilience_guardrail.py`): escanea
+  el AST de `pdf.py`/`batch.py`/`batch_shard_worker.py` buscando llamadas a
+  `redis_client.*`/`pipe.*` sin envolver en `safe_redis_call`/`safe_redis_call_sync`, con
+  un ALLOWLIST explícito para los 3 casos deliberadamente sin envolver (documentados con
+  su razón). Es "flag for review", no un gate ciego — verificado inyectando una llamada
+  falsa sin proteger y confirmando que el test la atrapa, luego revertido.
+- **Tests nuevos**: `test_redis_resilience_guardrail.py` (2), `test_batch_manifest_fallback.py`
+  (4, cobertura del respaldo en GCS para Bucket 1), `test_batch_analysis_resilience.py` (8,
+  cobertura de Bucket 3 incluyendo el fallback de payload viejo). Total backend: **276
+  passed, 0 failed** (antes 264).
+- **Hueco menor, documentado, NO arreglado a propósito**: `batch.py` construye las rutas
+  de GCS con el nombre de archivo tal cual lo subió el usuario
+  (`analysis_{batch_id}/{fname}`) — dos archivos con el mismo nombre en el mismo lote
+  colisionan (mismo comportamiento que ya tenía la llave de Redis original, no es una
+  regresión). Solo importa si Redis está degradado Y hay nombres duplicados: el conteo de
+  `total_files` reconstruido desde GCS subestimaría. Aceptado, no arreglado esta ronda.
+- **Pendiente real (no cerrado)**: nunca se probó un `.zip` de verdad contra producción
+  esta sesión — solo XMLs sueltos. Falta: (1) confirmación del usuario para desplegar,
+  (2) subir un ZIP real de PDFs y un lote real de análisis vía navegador contra
+  producción, idealmente con la cuota de Redis todavía degradada si sigue disponible esa
+  condición, para cerrar honestamente el hueco que el usuario señaló.
+
+---
+
 **2026-07-24 (madrugada, cierre final de la sesión): los 2 pendientes que quedaron
 anotados (commit ajeno `eeec527` y cambios sin commitear en `ConversionMasivaPage.tsx`)
 ya se revisaron, pasaron por decision-expander, y se cerraron — ya no quedan hallazgos
