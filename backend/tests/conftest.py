@@ -17,10 +17,27 @@ import os
 
 import pytest
 
+from backend.app.services import redis_safety
+
 
 # pytest gestiona esta variable por su cuenta alrededor de cada fase
 # (setup/call/teardown) de cada test -- no es una fuga de un test real.
 _PYTEST_OWNED_VARS = {"PYTEST_CURRENT_TEST"}
+
+
+@pytest.fixture(autouse=True)
+def _reset_redis_degraded_flag():
+    """redis_safety._degraded_until es un reloj de pared real
+    (time.monotonic()), global al proceso -- un test que simula un error de
+    cuota (mark_degraded()) deja la bandera "degradada" prendida hasta 60s
+    después, contaminando cualquier test que corra en esa ventana. Se vuelve
+    crítico en cuanto safe_redis_call cortocircuita en base a is_degraded():
+    sin este reset, tests que ni siquiera tocan Redis fallarían solo al
+    correr en conjunto (nunca en aislamiento), porque heredarían la bandera
+    prendida de un test anterior."""
+    redis_safety._degraded_until = 0.0
+    yield
+    redis_safety._degraded_until = 0.0
 
 
 @pytest.fixture(autouse=True, scope="session")

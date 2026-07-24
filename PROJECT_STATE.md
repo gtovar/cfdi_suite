@@ -1465,3 +1465,30 @@ descargas si se hubiera desplegado sin probar.
   de pedir `/ready-files`, con una reconciliación única al terminar o restaurar batch.
 - Vercel: descartado como problema real — no había integración git rota, era un `.vercel/` local
   sobrante (ya borrado). El deploy real es 100% GitHub Actions (`deploy-frontend.yml`).
+
+## Experimento: mismo bug ("0 listos para siempre" con Redis caído) resuelto por 3 herramientas (2026-07-24)
+
+El usuario corrió el mismo bug (mget de Redis respondiendo puros `None` sin tronar, ver arriba)
+por separado con Aider, OpenCode y Claude, cada uno en su propia rama, para comparar el enfoque.
+Ramas ya borradas tras la síntesis (hashes solo en reflog de aquí en adelante):
+- Aider (`aider-propuesta`, `ef669a5`).
+- OpenCode (`opencode-propuesta`): quedó idéntica a `main` -- no se pudo recuperar ningún trabajo
+  de OpenCode en esta comparación.
+- Claude, primer intento (`claude-propuesta-solucion`, `0dd4f2c`, fix real en `3829093`): por un
+  incidente de directorio compartido (HEAD movido por otra terminal), este intento terminó
+  construido, sin saberlo, encima del código de Aider (`claude-propuesta` quedó en el mismo commit
+  que `aider-propuesta`) -- diseño de alto nivel independiente, implementación no.
+- Claude, segundo intento, aislado en worktree desde `4f1b64d` (`claude-independiente`, `39ca516`):
+  sin ver el código de las otras dos.
+
+**Veredicto** (síntesis aplicada directamente a `main`, este commit): el diseño de Aider ganó en
+la parte central del bug -- reconciliación contra GCS **por-job** (solo los jobs cuyo status en
+Redis vino `None`, nunca los que ya reportaron pending/converting/error) en vez de la versión
+"todo o nada" de Claude, más un `Semaphore(8)` acotando la concurrencia contra GCS, más la UX de
+descarga parcial en el frontend (botón visible con al menos un archivo listo, no solo al 100%).
+El único hueco real que ninguno de los otros dos cubrió: `_batch_progress_snapshot` (la barra de
+%) seguía sin reconciliarse -- solo `list_ready_files` tenía el fix. La síntesis final extiende la
+reconciliación por-job también ahí, y retira deliberadamente la detección "puros None -> marcar
+degradado globalmente" que Claude había agregado por su cuenta: con reconciliación por-job ya no
+hace falta, y mantenerla arriesgaba silenciar Redis para TODOS los lotes activos de la instancia
+por 60s solo porque un lote viejo (TTL vencido) perdió su propio detalle.

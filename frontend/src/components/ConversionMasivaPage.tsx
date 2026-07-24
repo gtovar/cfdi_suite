@@ -98,6 +98,17 @@ interface ConversionMasivaPageProps {
 const ACTIVE_BATCH_KEY = 'cfdi-active-batch';
 const ACTIVE_BATCH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+// Red de seguridad para la descarga de PDFs: si Redis pierde el detalle de
+// status de ESTE lote (ver _reconcile_none_statuses_with_gcs en pdf.py),
+// batchProgress.status puede quedarse sin llegar nunca a 'done' aunque
+// todos los PDFs ya existan en Storage. Mismo intervalo que el safety-net
+// de watchBatchProgress (pdf-download.ts) -- list_ready_files ya reconcilia
+// contra GCS los jobs que Redis no puede confirmar, así que este refresco
+// eventualmente refleja la realidad aunque Redis nunca reporte "done". Solo
+// corre mientras falten archivos (readyFileIds.length < total) -- en el
+// camino sano, los readyIds de cada tick de Pusher ya bastan.
+const READY_FILES_POLL_MS = 75_000;
+
 export default function ConversionMasivaPage({ templateId, onProgressUpdate, restoreBatchId }: ConversionMasivaPageProps) {
   // Estados para el flujo tradicional (XMLs sueltos)
   const [entries, setEntries] = useState<ConversionEntry[]>([]);
@@ -116,6 +127,20 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   const [readyFileIds, setReadyFileIds] = useState<string[]>([]);
   const [wasRestored, setWasRestored] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+
+  // Señal de "lote totalmente terminado" independiente del status derivado
+  // de Redis -- si Redis perdió el detalle de status de este lote (ver
+  // _reconcile_none_statuses_with_gcs en pdf.py), batchProgress.status
+  // puede quedarse en "processing" para siempre aunque todos los PDFs ya
+  // existan en Storage. readyFileIds (alimentado también por el polling de
+  // más abajo, respaldado en GCS) es la señal independiente de que en
+  // verdad ya no falta nada. Impulsa los avisos de "lote completado"
+  // (badge, banner, widget flotante) -- el botón de descarga en sí no
+  // espera a esto: aparece apenas hay AL MENOS un archivo listo (ver
+  // "Botón único de descarga consolidada" más abajo), para poder bajar lo
+  // que ya está aunque falte el resto.
+  const zipReady = batchProgress?.status === 'done'
+    || (!!batchProgress?.total && readyFileIds.length >= batchProgress.total);
 
   // Progreso de descarga (0-100%) del ZIP consolidado y de PDFs individuales.
   // null = sin descarga en curso; percentage null = tamaño desconocido (no
@@ -299,7 +324,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   // red responda.
   useEffect(() => {
     if (!isZipMode || !batchId) return;
-    if (batchProgress?.status === 'done') {
+    if (zipReady && batchProgress?.total) {
       onProgressUpdate?.({ completed: batchProgress.total, total: batchProgress.total, phase: 'done' });
     } else if (phase === 'running') {
       onProgressUpdate?.({ completed: batchProgress?.done ?? 0, total: batchProgress?.total ?? 0, phase: 'processing' });
@@ -308,7 +333,31 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     // App.tsx le pasa una arrow function nueva en cada render — incluirla
     // aquí crearía un ciclo (efecto llama setState en App → nuevo closure →
     // deps cambian → el efecto vuelve a correr → …), no solo un lint nit.
-  }, [batchProgress, phase, isZipMode, batchId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [batchProgress, readyFileIds, phase, isZipMode, batchId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ver comentario de READY_FILES_POLL_MS: re-consulta /ready-files mientras
+  // falten archivos, sin esperar a un tick de Pusher ni al status "done" --
+  // ambos pueden no llegar nunca si Redis perdió el detalle de status de
+  // este lote en particular.
+  useEffect(() => {
+    if (!batchId || !isZipMode || phase !== 'running') return;
+    const total = batchProgress?.total ?? 0;
+    if (total > 0 && readyFileIds.length >= total) return;
+
+    const tid = setInterval(() => {
+      fetchReadyFileIds(batchId)
+        .then((ids) => {
+          setReadyFileIds((prev) => {
+            const seen = new Set(prev);
+            const additions = ids.filter((jid) => !seen.has(jid));
+            return additions.length ? [...prev, ...additions] : prev;
+          });
+        })
+        .catch(() => {});
+    }, READY_FILES_POLL_MS);
+
+    return () => clearInterval(tid);
+  }, [batchId, isZipMode, phase, batchProgress?.total, readyFileIds.length]);
 
   function handleRetryBatchConnection() {
     if (batchId) void listenToBatch(batchId);
@@ -601,7 +650,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
       {wasRestored && isZipMode && batchId && (
         <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
           <CheckCircle2 size={14} className="shrink-0" />
-          {batchProgress?.status === 'done'
+          {zipReady
             ? 'Recuperamos tu lote anterior — ya está listo.'
             : 'Recuperamos tu lote anterior — sigue procesándose en la nube.'}
         </div>
@@ -661,12 +710,12 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                   <Loader2 size={12} className="animate-spin" /> Preparando tus facturas...
                 </span>
               )}
-              {batchProgress.status === 'processing' && (
+              {batchProgress.status === 'processing' && !zipReady && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
                   <Loader2 size={12} className="animate-spin" /> Convirtiendo en ráfaga...
                 </span>
               )}
-              {batchProgress.status === 'done' && (
+              {zipReady && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
                   <CheckCircle2 size={12} /> Lote completado con éxito
                 </span>
@@ -790,8 +839,13 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
             )}
 
             {/* Botón único de descarga consolidada, o su barra de progreso
-                mientras fetch + ReadableStream trae el ZIP */}
-            {batchProgress.status === 'done' && (
+                mientras fetch + ReadableStream trae el ZIP. Aparece apenas
+                hay AL MENOS un archivo listo (no espera a zipReady) --
+                download_batch_zip ya tolera lotes parciales (salta en
+                silencio los jobs cuyo PDF todavía no existe), así que el
+                usuario puede bajar lo que ya está sin esperar a que Redis
+                confirme el resto. */}
+            {(zipReady || readyFileIds.length > 0) && (
               zipDownloadProgress ? (
                 <div className="mt-2 w-full rounded-xl border border-green-200 bg-green-50 px-4 py-3">
                   <div className="mb-2 flex items-center justify-between text-xs font-medium text-green-800">
@@ -820,7 +874,10 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                   onClick={handleDownloadBatchZip}
                   className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-700 shadow-sm"
                 >
-                  <Download size={16} /> Descargar paquete de PDFs final (.ZIP)
+                  <Download size={16} />{' '}
+                  {!zipReady && batchProgress.total > 0
+                    ? `Descargar los ${readyFileIds.length} de ${batchProgress.total} listos`
+                    : `Descargar paquete de PDFs final (.ZIP)`}
                 </button>
               )
             )}

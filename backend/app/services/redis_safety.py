@@ -16,6 +16,7 @@ completo.
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Awaitable, Callable, TypeVar
 
@@ -26,6 +27,12 @@ T = TypeVar("T")
 _degraded_until: float = 0.0
 _COOLDOWN_SECONDS = 60
 
+# Interruptor manual: con REDIS_DISABLED=true el sistema opera 100% desde GCS,
+# como si Redis no existiera -- palanca de ops para una caída larga conocida
+# o una decisión de negocio, sin esperar a que cada llamada truene una por
+# una. Mismo patrón que BATCH_JOB_ENABLED/REMOTE_ZIP_SHARD_READ en pdf.py.
+REDIS_DISABLED = os.getenv("REDIS_DISABLED", "false").lower() == "true"
+
 
 def mark_degraded() -> None:
     global _degraded_until
@@ -35,13 +42,21 @@ def mark_degraded() -> None:
 def is_degraded() -> bool:
     """Solo lee un valor en memoria -- nunca hace red. Ver Paso 6 del plan:
     /api/health depende de esto para no gastar cuota de Redis él mismo."""
-    return time.monotonic() < _degraded_until
+    return REDIS_DISABLED or time.monotonic() < _degraded_until
 
 
 async def safe_redis_call(coro_factory: Callable[[], Awaitable[T]], *, on_quota_error: Callable[[], None] = mark_degraded) -> T | None:
     """Ejecuta una llamada a Redis (ej. `lambda: redis_client.set(...)`);
     nunca propaga. Si el error es un agotamiento real de cuota, activa la
-    bandera de degradación."""
+    bandera de degradación.
+
+    Freno automático: si la instancia ya está degradada (o REDIS_DISABLED),
+    ni siquiera se intenta la red -- durante una caída sostenida, con varios
+    usuarios activos, insistirle a Redis en cada poll podría sumar cientos de
+    miles de intentos inútiles en media hora. El cooldown (_COOLDOWN_SECONDS)
+    limita cuántas veces por minuto se vuelve a intentar de verdad."""
+    if is_degraded():
+        return None
     try:
         return await coro_factory()
     except Exception as e:
@@ -55,6 +70,8 @@ def safe_redis_call_sync(fn: Callable[[], T], *, on_quota_error: Callable[[], No
     """Igual que safe_redis_call pero para el cliente síncrono `redis.Redis`
     (ej. app.routers.batch, que corre sobre ese cliente en vez de
     `redis.asyncio`). Ej.: `safe_redis_call_sync(lambda: redis_client.hmset(...))`."""
+    if is_degraded():
+        return None
     try:
         return fn()
     except Exception as e:

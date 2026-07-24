@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 import unittest
+from unittest.mock import patch
 
 from backend.app.services import redis_safety
 from backend.app.services.redis_errors import is_redis_quota_error
@@ -77,6 +78,93 @@ class SafeRedisCallTests(unittest.TestCase):
         # Simula que el cooldown ya pasó sin dormir de verdad en el test.
         redis_safety._degraded_until = time.monotonic() - 1
         self.assertFalse(redis_safety.is_degraded())
+
+
+class FrenoAutomaticoTests(unittest.TestCase):
+    """Si is_degraded() ya es verdad, safe_redis_call/safe_redis_call_sync ni
+    siquiera intentan la red -- durante una caída sostenida, con varios
+    usuarios activos, insistirle a Redis en cada poll podría sumar cientos de
+    miles de intentos inútiles en media hora. Se prueba el cortocircuito
+    real (el coro/función nunca se invoca), no solo que el resultado sea
+    None (que también pasaría si el coro corriera y fallara)."""
+
+    def setUp(self) -> None:
+        redis_safety._degraded_until = 0.0
+
+    def test_safe_redis_call_no_invoca_el_coro_si_esta_degradado(self) -> None:
+        calls = []
+
+        async def would_call():
+            calls.append(1)
+            return "no debería llegar aquí"
+
+        redis_safety.mark_degraded()
+        result = _run(redis_safety.safe_redis_call(would_call))
+        self.assertIsNone(result)
+        self.assertEqual(calls, [], "el coro se invocó pese a is_degraded() == True")
+
+    def test_safe_redis_call_invoca_el_coro_normalmente_si_no_esta_degradado(self) -> None:
+        calls = []
+
+        async def would_call():
+            calls.append(1)
+            return "valor"
+
+        self.assertFalse(redis_safety.is_degraded())
+        result = _run(redis_safety.safe_redis_call(would_call))
+        self.assertEqual(result, "valor")
+        self.assertEqual(calls, [1])
+
+    def test_safe_redis_call_sync_no_invoca_la_funcion_si_esta_degradado(self) -> None:
+        calls = []
+
+        def would_call():
+            calls.append(1)
+            return "valor"
+
+        redis_safety.mark_degraded()
+        result = redis_safety.safe_redis_call_sync(would_call)
+        self.assertIsNone(result)
+        self.assertEqual(calls, [])
+
+
+class RedisDisabledKillSwitchTests(unittest.TestCase):
+    """REDIS_DISABLED -- interruptor manual para operar deliberadamente sin
+    Redis (caída larga conocida, o decisión de negocio), sin esperar a que
+    cada llamada truene una por una."""
+
+    def setUp(self) -> None:
+        redis_safety._degraded_until = 0.0
+
+    def test_safe_redis_call_no_intenta_la_red_si_esta_deshabilitado(self) -> None:
+        attempted = False
+
+        async def would_be_called():
+            nonlocal attempted
+            attempted = True
+            return "valor"
+
+        with patch.object(redis_safety, "REDIS_DISABLED", True):
+            result = _run(redis_safety.safe_redis_call(would_be_called))
+        self.assertIsNone(result)
+        self.assertFalse(attempted)
+
+    def test_safe_redis_call_sync_no_intenta_la_red_si_esta_deshabilitado(self) -> None:
+        attempted = False
+
+        def would_be_called():
+            nonlocal attempted
+            attempted = True
+            return "valor"
+
+        with patch.object(redis_safety, "REDIS_DISABLED", True):
+            result = redis_safety.safe_redis_call_sync(would_be_called)
+        self.assertIsNone(result)
+        self.assertFalse(attempted)
+
+    def test_is_degraded_es_true_mientras_este_deshabilitado(self) -> None:
+        with patch.object(redis_safety, "REDIS_DISABLED", True):
+            self.assertTrue(redis_safety.is_degraded())
 
 
 if __name__ == "__main__":

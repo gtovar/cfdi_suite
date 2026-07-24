@@ -93,18 +93,33 @@ class BatchProgressSnapshotManifestFallbackTests(unittest.TestCase):
         self.assertEqual(snapshot["status"], "error")
         self.assertEqual(snapshot["message"], "Lote no encontrado")
 
-    def test_detalle_de_estado_degrada_sin_reconstruir_por_gcs(self) -> None:
+    def test_detalle_de_estado_se_reconcilia_por_job_contra_gcs(self) -> None:
         """Si Redis responde el total/membresía pero NO el detalle de status
-        (mget), no se reconstruye golpeando GCS por cada archivo (podrían ser
-        miles) -- se reporta degradado explícitamente."""
+        (mget truena), cada job se reconcilia individualmente contra GCS
+        (_reconcile_none_statuses_with_gcs) en vez de reportar un mensaje
+        genérico de "no disponible" -- el % de avance sigue siendo preciso
+        aunque Redis esté agotado."""
         mock_redis = AsyncMock()
         mock_redis.get = AsyncMock(side_effect=[None, None])  # extracting_error, extracting_total
         mock_redis.smembers = AsyncMock(return_value={b"job-1", b"job-2"})
         mock_redis.mget = AsyncMock(side_effect=_redis_down)
 
         manifest = {"job-1": "a.xml", "job-2": "b.xml"}
+
+        def _blob(path):
+            blob = MagicMock()
+            if path == "xml_temp/_manifest_batch-y.json":
+                blob.download_as_bytes.return_value = json.dumps(manifest).encode()
+            elif path == "pdfs/job-1.pdf":
+                blob.exists = MagicMock(return_value=True)   # ya convertido de verdad
+            elif path == "pdfs/job-2.pdf":
+                blob.exists = MagicMock(return_value=False)  # aún no
+            return blob
+
+        mock_bucket = MagicMock()
+        mock_bucket.blob.side_effect = _blob
         mock_storage_client = MagicMock()
-        mock_storage_client.bucket.return_value = _make_manifest_bucket(manifest)
+        mock_storage_client.bucket.return_value = mock_bucket
 
         with (
             patch.object(pdf_router, "redis_client", mock_redis),
@@ -117,7 +132,10 @@ class BatchProgressSnapshotManifestFallbackTests(unittest.TestCase):
             snapshot = _run(pdf_router._batch_progress_snapshot("batch-y"))
 
         self.assertEqual(snapshot["status"], "processing")
-        self.assertIn("no disponible", snapshot.get("message", ""))
+        self.assertEqual(snapshot["done"], 1)
+        self.assertEqual(snapshot["pending"], 1)
+        self.assertEqual(snapshot["percentage"], 50)
+        self.assertNotIn("no disponible", snapshot.get("message", ""))
 
 
 @unittest.skipIf(pdf_router is None, f"backend no disponible: {_IMPORT_ERROR}")

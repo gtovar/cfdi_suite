@@ -12,6 +12,7 @@ function flushMicrotasks() {
 
 const watchBatchProgress = vi.fn(() => new Promise<void>(() => {})); // nunca resuelve — solo probamos si se llamó
 const fetchReadyFileIds = vi.fn(async () => []);
+const fetchZipEstimatedSize = vi.fn(async () => null as { estimatedBytes: number; knownCount: number; totalCount: number } | null);
 
 vi.mock('../lib/pdf-download', async () => {
   const actual = await vi.importActual<typeof import('../lib/pdf-download')>('../lib/pdf-download');
@@ -19,6 +20,7 @@ vi.mock('../lib/pdf-download', async () => {
     ...actual,
     watchBatchProgress: (...args: Parameters<typeof watchBatchProgress>) => watchBatchProgress(...args),
     fetchReadyFileIds: (...args: Parameters<typeof fetchReadyFileIds>) => fetchReadyFileIds(...args),
+    fetchZipEstimatedSize: (...args: Parameters<typeof fetchZipEstimatedSize>) => fetchZipEstimatedSize(...args),
   };
 });
 
@@ -39,6 +41,8 @@ describe('ConversionMasivaPage — recuperación de lote (Fase 3)', () => {
     localStorage.clear();
     watchBatchProgress.mockClear();
     fetchReadyFileIds.mockClear();
+    fetchZipEstimatedSize.mockClear();
+    fetchZipEstimatedSize.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -172,5 +176,124 @@ describe('ConversionMasivaPage — recuperación de lote (Fase 3)', () => {
     });
 
     expect(container.textContent).not.toContain('Error en el lote');
+  });
+
+  // Reproduce el hallazgo real de producción 2026-07-24: si Redis pierde el
+  // detalle de status de un lote, batchProgress.status puede quedarse en
+  // "processing" (degradado) para siempre, aunque todos los PDFs ya existan
+  // en Storage -- list_ready_files sí los ve (reconcilia contra GCS). El
+  // botón de descarga no debe depender solo de status === 'done'.
+  it('el botón de descarga aparece vía readyFileIds aunque el status se quede degradado para siempre', async () => {
+    fetchReadyFileIds.mockResolvedValueOnce(['job-1', 'job-2', 'job-3', 'job-4', 'job-5']);
+    watchBatchProgress.mockImplementationOnce(async (_id, onProgress) => {
+      onProgress({
+        status: 'processing',
+        total: 5,
+        done: 0,
+        error: 0,
+        converting: 0,
+        pending: 5,
+        percentage: 0,
+      });
+      return new Promise<void>(() => {}); // nunca resuelve -- status nunca llega a "done"
+    });
+
+    await act(async () => {
+      ({ container } = renderReact(<ConversionMasivaPage restoreBatchId="shared-xyz" />));
+      await flushMicrotasks();
+    });
+
+    const zipButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Descargar paquete de PDFs final')
+      || b.textContent?.includes('Descargar los'),
+    );
+    expect(zipButton).toBeTruthy();
+    expect(container.textContent).toContain('Lote completado con éxito');
+  });
+
+  it('con solo algunos archivos listos, el botón ofrece la descarga parcial con su propia etiqueta', async () => {
+    fetchReadyFileIds.mockResolvedValueOnce(['job-1', 'job-2']); // solo 2 de 5
+    watchBatchProgress.mockImplementationOnce(async (_id, onProgress) => {
+      onProgress({ status: 'processing', total: 5, done: 2, error: 0, converting: 1, pending: 2, percentage: 40 });
+      return new Promise<void>(() => {});
+    });
+
+    await act(async () => {
+      ({ container } = renderReact(<ConversionMasivaPage restoreBatchId="shared-xyz" />));
+      await flushMicrotasks();
+    });
+
+    const zipButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Descargar los 2 de 5 listos'),
+    );
+    expect(zipButton).toBeTruthy();
+    // Todavía no está "completo" -- ni el badge ni el banner de "listo" deben mostrarse.
+    expect(container.textContent).not.toContain('Lote completado con éxito');
+  });
+
+  it('sin ningún archivo listo, el botón de descarga no aparece', async () => {
+    fetchReadyFileIds.mockResolvedValueOnce([]);
+    watchBatchProgress.mockImplementationOnce(async (_id, onProgress) => {
+      onProgress({ status: 'processing', total: 5, done: 0, error: 0, converting: 1, pending: 4, percentage: 0 });
+      return new Promise<void>(() => {});
+    });
+
+    await act(async () => {
+      ({ container } = renderReact(<ConversionMasivaPage restoreBatchId="shared-xyz" />));
+      await flushMicrotasks();
+    });
+
+    const zipButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Descargar paquete de PDFs final')
+      || b.textContent?.includes('Descargar los'),
+    );
+    expect(zipButton).toBeFalsy();
+  });
+
+  // El botón de descarga ahora es alcanzable durante una degradación (tests
+  // de arriba) -- eso expone el estimado de tamaño (batch_estimated_size) a
+  // un caso que antes casi nunca se ejercitaba con el botón visible: Redis
+  // sin los tamaños de ningún PDF (knownCount: 0) durante la misma caída. Si
+  // eso se tratara como "0 bytes" en vez de "desconocido", handleDownloadBatchZip
+  // tomaría el camino de fetch + ReadableStream (retiene el ZIP completo en
+  // memoria) en vez de la descarga nativa -- para un lote grande, eso
+  // tronaría la pestaña.
+  it('con el estimado degradado (knownCount: 0) la descarga cae a la ruta nativa, no a la de memoria', async () => {
+    fetchReadyFileIds.mockResolvedValueOnce(['job-1', 'job-2', 'job-3', 'job-4', 'job-5']);
+    fetchZipEstimatedSize.mockResolvedValueOnce({ estimatedBytes: 0, knownCount: 0, totalCount: 5 });
+    watchBatchProgress.mockImplementationOnce(async (_id, onProgress) => {
+      onProgress({ status: 'processing', total: 5, done: 0, error: 0, converting: 0, pending: 5, percentage: 0 });
+      return new Promise<void>(() => {});
+    });
+
+    const assign = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, assign },
+    });
+
+    try {
+      await act(async () => {
+        ({ container } = renderReact(<ConversionMasivaPage restoreBatchId="shared-xyz" />));
+        await flushMicrotasks();
+      });
+
+      const zipButton = Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('Descargar paquete de PDFs final')
+        || b.textContent?.includes('Descargar los'),
+      );
+      expect(zipButton).toBeTruthy();
+
+      await act(async () => {
+        zipButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flushMicrotasks();
+      });
+
+      expect(assign).toHaveBeenCalledWith(expect.stringContaining('shared-xyz'));
+      expect(container.textContent).not.toContain('Descargando ZIP');
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    }
   });
 });

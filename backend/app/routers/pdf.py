@@ -390,6 +390,56 @@ async def _load_batch_manifest(batch_id: str) -> dict[str, str] | None:
         return None
 
 
+async def _resolve_job_ids(batch_id: str) -> list[str]:
+    """Membresía del batch: Redis (pdf:batch_ids) con el manifiesto de GCS
+    como respaldo. Extraído porque el mismo bloque se repetía en
+    list_ready_files, batch_estimated_size y download_batch_zip."""
+    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
+    job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
+    if not job_ids:
+        manifest = await _load_batch_manifest(batch_id)
+        if manifest:
+            job_ids = list(manifest.keys())
+    return job_ids
+
+
+async def _reconcile_none_statuses_with_gcs(
+    job_ids: list[str], status_by_job: dict[str, str | None]
+) -> None:
+    """Completa in-place, contra GCS, el status de los jobs cuyo valor en
+    Redis vino `None` -- ya sea porque el mget completo no respondió (dict
+    vacío) o porque esa key puntual se perdió (hallazgo real de producción
+    2026-07-24: con Redis agotado, Upstash no truena `mget`, entrega puros
+    `None` sin excepción).
+
+    Deliberadamente NO reconcilia los jobs que Redis reportó explícitamente
+    como pending/converting/error -- solo los `None`, así el costo en el
+    camino sano (Redis vivo, todo con status real) sigue siendo cero. Tampoco
+    se condiciona a is_degraded(): esa bandera es por-instancia y la lectura
+    puede caer en otra instancia (repetiría el bug multi-instancia ya
+    documentado en pdf_progress) -- se reconcilia siempre que haga falta,
+    job por job, sin depender de memoria compartida entre requests.
+    """
+    to_check = [jid for jid in job_ids if status_by_job.get(jid) is None]
+    if not to_check:
+        return
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+    # Tope de concurrencia obligatorio -- sin esto, un batch grande atascado
+    # encolaría miles de llamadas HEAD detrás de los hilos del executor por
+    # defecto y mataría de hambre cualquier otro asyncio.to_thread de la
+    # misma instancia (subidas, descargas, etc.). Mismo valor que el
+    # prefetch de download_batch_zip.
+    sem = asyncio.Semaphore(8)
+
+    async def _exists(jid: str) -> tuple[str, bool]:
+        async with sem:
+            return jid, await asyncio.to_thread(bucket.blob(f"pdfs/{jid}.pdf").exists)
+
+    for jid, exists in await asyncio.gather(*[_exists(jid) for jid in to_check]):
+        status_by_job[jid] = "done" if exists else "pending"
+
+
 async def _batch_progress_snapshot(batch_id: str) -> dict:
     """Estado actual del lote calculado desde Redis (fuente de verdad para el
     detalle done/error/converting) con el manifiesto de GCS como respaldo de
@@ -460,25 +510,23 @@ async def _batch_progress_snapshot(batch_id: str) -> dict:
         keys = [f"pdf:status:{jid}" for jid in registered_ids]
         statuses = await safe_redis_call(lambda: redis_client.mget(keys))
 
-    if statuses is None and registered_ids:
-        # Redis no respondió para el detalle de estado -- no lo reconstruimos
-        # golpeando GCS por cada archivo del batch (podrían ser miles); se
-        # reporta degradado en vez de fingir precisión. El detalle vuelve en
-        # cuanto Redis se recupera; mientras tanto el trabajo real sigue
-        # corriendo igual (no depende de esta lectura).
-        return {
-            "status": "processing",
-            "total": total,
-            "done": 0,
-            "error": 0,
-            "converting": 0,
-            "pending": total,
-            "percentage": 0,
-            "message": "Progreso no disponible temporalmente (reconectando)",
-        }
+    # status_by_job queda vacío si el mget completo no respondió
+    # (safe_redis_call devolvió None) -- en ese caso TODOS los jobs quedan
+    # como None más abajo, igual que si Redis hubiera respondido puros None
+    # para cada key. _reconcile_none_statuses_with_gcs completa contra GCS
+    # solo los jobs cuyo status quedó None (nunca los que Redis ya reportó
+    # explícitamente), así el % de avance sigue siendo preciso incluso con
+    # Redis agotado, en vez de congelarse en un mensaje genérico de "no
+    # disponible" mientras el trabajo real ya avanzó.
+    status_by_job: dict[str, str | None] = {}
+    if statuses is not None:
+        for jid, status_bytes in zip(registered_ids, statuses):
+            status_by_job[jid] = status_bytes.decode("utf-8") if status_bytes else None
 
-    for status_bytes in (statuses or []):
-        status = status_bytes.decode("utf-8") if status_bytes else "pending"
+    await _reconcile_none_statuses_with_gcs(registered_ids, status_by_job)
+
+    for jid in registered_ids:
+        status = status_by_job.get(jid) or "pending"
         if status == "done":
             done += 1
         elif status == "error":
@@ -536,38 +584,29 @@ async def list_ready_files(batch_id: str):
     IDs de los archivos ya convertidos (status 'done') hasta ahora — el
     frontend la usa para ir llenando la tabla de descargas individuales
     conforme avanza el lote, sin esperar a que todo el batch termine.
+
+    Hallazgo real de producción 2026-07-24: con Redis agotado, Upstash NO
+    truena `mget` -- responde una lista de puros `None` sin excepción. Por
+    eso cada job se reconcilia contra GCS individualmente cuando su status
+    vino `None` (ver _reconcile_none_statuses_with_gcs) -- nunca los que
+    Redis ya reportó explícitamente pending/converting/error, para que el
+    costo en el camino sano (Redis vivo) siga siendo cero.
     """
-    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
-    job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
-    if not job_ids:
-        manifest = await _load_batch_manifest(batch_id)
-        if manifest:
-            job_ids = list(manifest.keys())
+    job_ids = await _resolve_job_ids(batch_id)
     if not job_ids:
         return {"jobIds": []}
 
     keys = [f"pdf:status:{jid}" for jid in job_ids]
     statuses = await safe_redis_call(lambda: redis_client.mget(keys))
 
-    if statuses is None:
-        # Redis no respondió el detalle de estado -- esta ruta existe para
-        # decidir qué archivos ya se pueden descargar, así que aquí sí vale
-        # la pena preguntarle a GCS directo (misma señal que ya usa la
-        # descarga individual) en vez de reportar "nada listo".
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(BUCKET_NAME)
+    status_by_job: dict[str, str | None] = {}
+    if statuses is not None:
+        for jid, status_bytes in zip(job_ids, statuses):
+            status_by_job[jid] = status_bytes.decode("utf-8") if status_bytes else None
 
-        async def _exists(jid: str) -> bool:
-            return await asyncio.to_thread(bucket.blob(f"pdfs/{jid}.pdf").exists)
+    await _reconcile_none_statuses_with_gcs(job_ids, status_by_job)
 
-        exists_flags = await asyncio.gather(*[_exists(jid) for jid in job_ids])
-        ready = [jid for jid, exists in zip(job_ids, exists_flags) if exists]
-        return {"jobIds": ready}
-
-    ready = [
-        jid for jid, status_bytes in zip(job_ids, statuses)
-        if status_bytes and status_bytes.decode("utf-8") == "done"
-    ]
+    ready = [jid for jid in job_ids if status_by_job.get(jid) == "done"]
     return {"jobIds": ready}
 
 
@@ -581,12 +620,7 @@ async def batch_estimated_size(batch_id: str):
     grande y conviene la descarga nativa del navegador sin progreso.
     El ZIP comprime, así que el tamaño final real será algo menor a esta suma.
     """
-    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
-    job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
-    if not job_ids:
-        manifest = await _load_batch_manifest(batch_id)
-        if manifest:
-            job_ids = list(manifest.keys())
+    job_ids = await _resolve_job_ids(batch_id)
     if not job_ids:
         return {"estimatedBytes": 0, "knownCount": 0, "totalCount": 0}
 
@@ -603,12 +637,7 @@ async def batch_estimated_size(batch_id: str):
 
 @router.get("/cfdi/pdf/batch/{batch_id}/download")
 async def download_batch_zip(batch_id: str):
-    registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
-    job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
-    if not job_ids:
-        manifest = await _load_batch_manifest(batch_id)
-        if manifest:
-            job_ids = list(manifest.keys())
+    job_ids = await _resolve_job_ids(batch_id)
     if not job_ids:
         raise HTTPException(status_code=404, detail="El lote especificado no existe o ya expiró.")
     storage_client = storage.Client()
