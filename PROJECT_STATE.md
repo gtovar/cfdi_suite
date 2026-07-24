@@ -4,6 +4,20 @@
 ## Checkpoint activo
 main
 
+## Deuda técnica pendiente (explícita, no olvidada)
+- **Centralizar el acceso a Redis.** Hoy hay 3 conexiones/clientes separados
+  (`pdf.py` async, `batch_shard_worker.py` su propia conexión async independiente,
+  `batch.py` un cliente síncrono distinto) y las llaves (`f"pdf:status:{job_id}"`,
+  `f"batch:{batch_id}"`, etc.) se construyen inline en cada función, sin pasar por
+  ninguna capa compartida. Diagnóstico del usuario 2026-07-24, confirmado: por eso
+  "proteger Redis" fue repetir el mismo parche en ~20 sitios en vez de un cambio en un
+  solo lugar, y por eso se escaparon varios la primera pasada (ver barrido de esa misma
+  fecha más abajo). Relacionado: `process_zip_in_background` viola single-responsibility
+  (lock+descarga+unzip+manifiesto+GCS+Cloud-Tasks+progreso+limpieza en una función) —
+  eso fue lo que dejó la membresía del batch escondida sin protección propia. Decisión
+  2026-07-24: NO se aborda ahora (para no tocar código recién probado justo antes de la
+  verificación real en producción) — queda como tarea aparte para una sesión futura.
+
 ## Último cambio
 **2026-07-24: barrido exhaustivo de Redis tras la pregunta directa del usuario
 ("¿ya lo metiste en todos lados?") — la respuesta honesta era NO. Se encontraron y
