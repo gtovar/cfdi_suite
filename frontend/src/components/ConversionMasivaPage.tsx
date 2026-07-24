@@ -678,19 +678,32 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
               )}
             </div>
 
-            {/* Aviso de conexión perdida tras agotar reintentos: el lote sigue vivo en el
-                servidor, solo se perdió la conexión de progreso. Se puede reintentar sin
-                volver a subir el ZIP. */}
+            {/* Aviso de conexión perdida o error crítico del backend */}
             {batchError && (
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
-                <p className="text-xs text-amber-800">
-                  Se perdió la conexión de progreso en tiempo real, pero tu lote sigue procesándose en la nube. {batchError}
+              <div className={clsx(
+                "flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5",
+                batchError === 'Tiempo de espera agotado en el navegador'
+                  ? "border-amber-200 bg-amber-50"
+                  : "border-red-200 bg-red-50"
+              )}>
+                <p className={clsx(
+                  "text-xs",
+                  batchError === 'Tiempo de espera agotado en el navegador' ? "text-amber-800" : "text-red-800"
+                )}>
+                  {batchError === 'Tiempo de espera agotado en el navegador'
+                    ? "Se perdió la conexión de progreso en tiempo real, pero tu lote sigue procesándose en la nube."
+                    : `Error en el lote: ${batchError}`}
                 </p>
                 <button
-                  onClick={handleRetryBatchConnection}
-                  className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                  onClick={batchError === 'Tiempo de espera agotado en el navegador' ? handleRetryBatchConnection : clearAll}
+                  className={clsx(
+                    "shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors",
+                    batchError === 'Tiempo de espera agotado en el navegador'
+                      ? "bg-amber-600 hover:bg-amber-700"
+                      : "bg-red-600 hover:bg-red-700"
+                  )}
                 >
-                  Reintentar conexión
+                  {batchError === 'Tiempo de espera agotado en el navegador' ? "Reintentar conexión" : "Limpiar y empezar"}
                 </button>
               </div>
             )}

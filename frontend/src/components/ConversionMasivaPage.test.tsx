@@ -1,7 +1,14 @@
 // @vitest-environment happy-dom
 
+import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderReact } from '../test/renderReact';
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+function flushMicrotasks() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 const watchBatchProgress = vi.fn(() => new Promise<void>(() => {})); // nunca resuelve — solo probamos si se llamó
 const fetchReadyFileIds = vi.fn(async () => []);
@@ -109,5 +116,61 @@ describe('ConversionMasivaPage — recuperación de lote (Fase 3)', () => {
     await Promise.resolve();
 
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('?batch=shared-xyz'));
+  });
+
+  // watchBatchProgress() solo produce exactamente 2 mensajes de rechazo
+  // reales (ver pdf-download.ts): timeout de cliente (el batch sigue vivo
+  // en el servidor -- banner ámbar, se puede reintentar la conexión) o un
+  // error crítico reportado por el servidor vía Pusher (el batch murió de
+  // verdad -- banner rojo, no tiene caso "reintentar conexión", solo limpiar
+  // y empezar de nuevo).
+  it('banner ámbar + "Reintentar conexión" cuando se agota el timeout del navegador', async () => {
+    // El banner de error vive dentro de {isZipMode && batchProgress && (...)}
+    // -- en producción real siempre llegan ticks de progreso antes de un
+    // timeout/error, así que el mock debe simular al menos uno primero.
+    watchBatchProgress.mockImplementationOnce(async (_id, onProgress) => {
+      onProgress({ status: 'processing', total: 5, done: 1, error: 0, converting: 1, pending: 3, percentage: 20 });
+      throw new Error('Tiempo de espera agotado en el navegador');
+    });
+
+    await act(async () => {
+      ({ container } = renderReact(<ConversionMasivaPage restoreBatchId="shared-xyz" />));
+      await flushMicrotasks();
+    });
+
+    expect(container.textContent).toContain(
+      'Se perdió la conexión de progreso en tiempo real, pero tu lote sigue procesándose en la nube.',
+    );
+    expect(container.textContent).not.toContain('Error en el lote');
+
+    const retryButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Reintentar conexión'),
+    );
+    expect(retryButton).toBeTruthy();
+  });
+
+  it('banner ROJO + "Limpiar y empezar" cuando el servidor reporta un error crítico real', async () => {
+    watchBatchProgress.mockImplementationOnce(async (_id, onProgress) => {
+      onProgress({ status: 'processing', total: 5, done: 1, error: 0, converting: 1, pending: 3, percentage: 20 });
+      throw new Error('Ocurrió un error crítico en el lote');
+    });
+
+    await act(async () => {
+      ({ container } = renderReact(<ConversionMasivaPage restoreBatchId="shared-xyz" />));
+      await flushMicrotasks();
+    });
+
+    expect(container.textContent).toContain('Error en el lote: Ocurrió un error crítico en el lote');
+
+    const clearButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Limpiar y empezar'),
+    );
+    expect(clearButton).toBeTruthy();
+
+    act(() => {
+      clearButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).not.toContain('Error en el lote');
   });
 });
