@@ -78,12 +78,29 @@ es justo lo que hace el snapshot inicial) y puede ganarle a esa propagación.
 encontrado"` ya no es terminal de inmediato -- se reintenta hasta 6 veces
 cada 500ms (cubre la ventana observada con margen) antes de darse por
 vencido. Un error real y distinto (`pdf:extracting_error`, con otro mensaje)
-sigue siendo terminal sin reintentos. Verificado en vivo tras el fix: el
-mismo lote de 14 XMLs completó en pantalla sin mostrar el error falso.
+sigue siendo terminal sin reintentos.
 
 Tests: 2 nuevos en `pdf-download.test.ts` (se recupera del "no encontrado"
 transitorio; sí termina en error si persiste más allá de los reintentos).
 119 tests frontend, todos verdes.
+
+**DESPLEGADO Y VERIFICADO EN VIVO** (commit `4cb7314`, tras `0bd6d54` del
+rediseño hint-only -- ambos en producción). Con un ZIP real de 14 XMLs
+(`frontend/src/cfdi/benchmark/fixtures/` + `backend/test-fixtures/`, subido
+por la UI real): sin el fix, "Lote no encontrado" apareció y el watch murió;
+con el fix, la pantalla avanzó limpio a 92% (13/14), `readyIds` llenó la
+tabla de descargas individuales correctamente (mismo dato que antes solo
+viajaba en el extinto evento `progress`), y los botones de descarga
+individual funcionaron. **Nota para la próxima sesión, sin resolver aquí,
+fuera de alcance de esta verificación**: el archivo 14 del lote de prueba
+(deliberadamente incluí `malformed-xml.xml` y `missing-comprobante.xml`
+entre los fixtures para forzar casos de error) se quedó indefinidamente en
+`pending` sin pasar nunca a `done` ni a `error` -- no se investigó la causa
+raíz (podría ser el pipeline de conversión colgándose con XML corrupto en
+vez de fallar limpio, o simplemente un reintento de Cloud Tasks con backoff
+largo que no le di tiempo a completar). No confirmado si es un bug real o
+solo cuestión de esperar más -- si aparece de nuevo, investigar
+`internal_generate_pdf`/`_process_one` con un XML deliberadamente corrupto.
 
 ## Último cambio (anterior)
 **2026-07-25: rediseño hint-only del progreso de batch -- causa raíz, no parche**
@@ -1456,17 +1473,21 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**Fase 2 de centralización de Redis, el desacople de Pusher/Redis (`publish_batch_signal`),
-el atasco de `watchBatchProgress` con pestaña oculta al arrancar, Y el rediseño hint-only
-del progreso de batch CERRADOS en código -- ver "Deuda técnica pendiente" y "Último cambio"
-arriba. El rediseño hint-only (2026-07-25) NO está desplegado todavía -- pendiente de
-confirmación explícita antes del deploy.** Queda:
+**TODO lo de Redis/Pusher/progreso de batch de esta sesión (Fase 2 de
+centralización, desacople Pusher/Redis, atasco de pestaña oculta, rediseño
+hint-only, y el fix de "Lote no encontrado") está CERRADO: desplegado en
+producción Y verificado en vivo con datos reales -- ver "Deuda técnica
+pendiente" y "Último cambio" arriba. Nada de esto queda pendiente de deploy
+ni de verificación para la próxima sesión.** Queda:
 1. Decidir qué hacer con el `export default` de `PdfTemplateBuilder.tsx`
    (componente no renderizado hoy, solo se reusa su tipo/constante) — diferido a
    propósito a una sesión aparte, sin relación con Redis.
 2. Confirmar si la cuota de Upstash ya se liberó (reset mensual) o si conviene
    subir de plan — seguía agotada la última vez que se verificó (2026-07-25).
-3. Confirmar deploy del rediseño hint-only (2026-07-25, ver "Último cambio").
+3. **Nuevo, sin confirmar si es bug real**: un XML deliberadamente corrupto
+   (`malformed-xml.xml`) en un lote de prueba se quedó en `pending` sin
+   pasar nunca a `done`/`error` -- ver detalle en "Último cambio". Investigar
+   solo si vuelve a aparecer con datos reales de un usuario.
 
 ## Historial: plan de resiliencia Redis Fase 1 original (previo a lo de arriba)
 **Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales), el hallazgo
