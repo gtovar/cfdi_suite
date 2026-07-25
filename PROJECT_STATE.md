@@ -51,6 +51,40 @@ main
   114 frontend, todos verdes.
 
 ## Último cambio
+**2026-07-24: corregido el atasco de `watchBatchProgress` cuando la pestaña arranca oculta**
+(`frontend/src/lib/pdf-download.ts`). Hallazgo de la sesión anterior (ver entrada de
+2026-07-25 debajo) quedó documentado como "no es un bug, es protección deliberada" —
+**esa conclusión era incompleta**. Comparando contra el fix ya aplicado en
+`subscribeWithRetry` (SSE legacy, incidente 2026-07-23) se vio que el snapshot INICIAL
+de `fetchSnapshot()` (dentro de `watchBatchProgress`, la ruta Pusher activa en
+producción) usaba el mismo guard `document.hidden` que las reconexiones, sin la
+excepción que `subscribeWithRetry` sí tiene para su primer intento. Confirmado con un
+test que reproduce el escenario (pestaña oculta desde el arranque, lote ya terminado en
+el backend): `fetch` nunca se llamaba (ni snapshot inicial, ni red de seguridad de 75s,
+ni siquiera el evento `signal` diseñado justo para sobrevivir a Redis degradado), y la
+promesa se quedaba colgada para siempre — mismo patrón del incidente original, por la
+ruta Pusher en vez de SSE.
+
+**Fix** (mismo patrón que `hasConnectedOnce` en `subscribeWithRetry`): bandera
+`hasFetchedOnce` en `fetchSnapshot`. El snapshot inicial se intenta siempre, sin
+importar `document.hidden`; los intentos SIGUIENTES (red de seguridad, `visibilitychange`,
+`state_change`, `signal`) siguen respetando la visibilidad exactamente igual que antes —
+la protección contra gastar cuota en pestañas que nadie mira queda intacta para
+reconexiones, solo se corrigió el contacto inicial.
+
+**Riesgo residual, aceptado a propósito, no resuelto por este fix**: si Redis está
+degradado (sin eventos `progress`) Y la pestaña permanece oculta durante TODO el ciclo
+de vida del lote (no solo al arranque), el snapshot inicial captura el estado correcto
+en ese momento, pero si el lote termina después y la pestaña sigue oculta, `signal`
+sigue gateado y el atasco puede volver a ocurrir. Es un caso compuesto (dos fallos
+simultáneos) de baja probabilidad — se decidió no ampliar el alcance del fix a ese caso,
+pasado por `decision-expander` dos veces antes de codear.
+
+Tests: 2 nuevos en `pdf-download.test.ts` (regresión del atasco + confirmación de que
+las reconexiones posteriores siguen respetando `document.hidden`). 117/117 frontend
+verdes. **NO desplegado todavía** — pendiente de confirmación explícita antes de deploy.
+
+## Último cambio (anterior)
 **2026-07-25: desacoplado el aviso en vivo de Pusher de la salud de Redis**
 (`publish_batch_signal`, `backend/app/services/realtime.py`). Hallazgo posterior a la
 Fase 2, encontrado probando en navegador real contra producción a pedido explícito del
@@ -1289,22 +1323,17 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**Fase 2 de centralización de Redis Y el desacople de Pusher/Redis (`publish_batch_signal`)
-CERRADOS: desplegados y verificados — ver "Deuda técnica pendiente" y "Último cambio"
-arriba.** Queda:
+**Fase 2 de centralización de Redis, el desacople de Pusher/Redis (`publish_batch_signal`)
+Y el atasco de `watchBatchProgress` con pestaña oculta al arrancar CERRADOS: código +
+tests verdes — ver "Deuda técnica pendiente" y "Último cambio" arriba. El fix de
+`watchBatchProgress` (2026-07-24) NO está desplegado todavía — pendiente de confirmación
+explícita antes del deploy.** Queda:
 1. Decidir qué hacer con el `export default` de `PdfTemplateBuilder.tsx`
    (componente no renderizado hoy, solo se reusa su tipo/constante) — diferido a
    propósito a una sesión aparte, sin relación con Redis.
 2. Confirmar si la cuota de Upstash ya se liberó (reset mensual) o si conviene
    subir de plan — seguía agotada la última vez que se verificó (2026-07-25).
-3. **Sugerencia menor, sin urgencia**: al probar en navegador esta sesión se encontró
-   que `document.hidden` puede quedar en `true` en una pestaña de Chrome automatizada
-   sin foco real, bloqueando toda la reconciliación de `watchBatchProgress` -- no es un
-   bug de la app (es la protección deliberada contra gastar cuota con pestañas nadie
-   mirando), pero vale la pena tenerlo presente para la próxima sesión que pruebe en
-   navegador: si el navegador automatizado no tiene foco, ningún mecanismo basado en
-   `fetchSnapshot()` se va a disparar solo, hay que forzar `visibilitychange` o esperar
-   a una interacción real que le dé foco a la pestaña.
+3. Confirmar deploy del fix de `watchBatchProgress` (2026-07-24, ver "Último cambio").
 
 ## Historial: plan de resiliencia Redis Fase 1 original (previo a lo de arriba)
 **Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales), el hallazgo

@@ -93,7 +93,7 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
     // EventSource nunca llegaba a crearse, y el job se quedaba viéndose
     // "Convirtiendo..." para siempre aunque el PDF ya estuviera listo -- solo
     // se hubiera reconectado si el usuario volvía a esa pestaña.
-    let hasConnectedOnce = false;
+    let hasAttemptedOnce = false;
     const onVisibility = () => {
       if (document.hidden) es?.close();
       else if (!settled) connect();
@@ -102,8 +102,8 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
 
     const connect = () => {
       if (settled) return;
-      if (hasConnectedOnce && document.hidden) return;
-      hasConnectedOnce = true;
+      if (hasAttemptedOnce && document.hidden) return;
+      hasAttemptedOnce = true;
       es?.close();
       es = new EventSource(url);
 
@@ -313,8 +313,18 @@ export function watchBatchProgress(
       2_700_000,
     );
 
+    // Mismo patrón que `hasAttemptedOnce` en subscribeWithRetry más arriba en
+    // este archivo: el snapshot INICIAL se intenta siempre, sin importar
+    // document.hidden -- confirmado en vivo (2026-07-24) que si la pestaña
+    // arranca oculta, ninguna reconciliación posterior (red de seguridad,
+    // visibilitychange, signal) llega a dispararse, y un lote ya terminado se
+    // queda sin detectar para siempre. Solo los intentos SIGUIENTES respetan
+    // la visibilidad, para no quemar cuota con pestañas que nadie mira.
+    let hasAttemptedOnce = false;
     const fetchSnapshot = async () => {
-      if (settled || document.hidden) return;
+      if (settled) return;
+      if (hasAttemptedOnce && document.hidden) return;
+      hasAttemptedOnce = true;
       const controller = new AbortController();
       const timeoutTid = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);
       try {

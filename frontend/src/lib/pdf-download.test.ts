@@ -248,6 +248,37 @@ describe('watchBatchProgress', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('pide el snapshot inicial aunque la pestaña arranque oculta -- regresión del atasco confirmado en vivo (2026-07-24)', async () => {
+    // Sin este fix: fetch nunca se llama, ni con la red de seguridad ni con
+    // 'signal', y un lote ya terminado se queda sin detectar para siempre
+    // (mismo patrón que el incidente de subscribeWithRetry, 2026-07-23).
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: 'done', total: 10, done: 10, error: 0, converting: 0, pending: 0, percentage: 100 }), { status: 200 }),
+    );
+
+    mockDocument.hidden = true;
+    const promise = watchBatchProgress('batch-1', () => {});
+
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial -- debe dispararse pese a hidden
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await expect(promise).resolves.toBeUndefined(); // se resuelve sin necesitar visibilitychange
+  });
+
+  it('tras el snapshot inicial, la pestaña oculta desde el arranque SÍ sigue bloqueando reconexiones posteriores (protección de cuota intacta)', async () => {
+    mockDocument.hidden = true;
+    watchBatchProgress('batch-1', () => {});
+
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial (call #1) -- se dispara pese a hidden
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(75_000); // red de seguridad -- sigue oculta, no debe repetir
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    mockChannelHandlers['signal']?.({ kind: 'job_done' });
+    await vi.advanceTimersByTimeAsync(0); // 'signal' tampoco reconcilia mientras siga oculta
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('resuelve y deja de vigilar (incluida la red de seguridad y el listener de visibilitychange) cuando el batch termina', async () => {
     const promise = watchBatchProgress('batch-1', () => {});
     await vi.advanceTimersByTimeAsync(0);
