@@ -1169,6 +1169,44 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
+**Fase 2 del plan de resiliencia Redis: centralizar el acceso (módulo
+`batch_state_store.py`).** Diseño completo ya escrito y revisado en
+`docs/aider/plan3-redis-cache-aside-unificado-2026-07-24.md` §4.1 y §8 (leerlo
+primero — no rediseñar desde cero). Contexto para quien retome esto:
+
+- **Por qué se difirió hasta ahora**: plan4 (Fase 1, ejecutada y verificada en
+  producción real el 2026-07-24 — ver "Último cambio" arriba) decidió a propósito
+  NO tocar este refactor hasta verificar el fix quirúrgico en producción. ESA
+  condición ya se cumplió. La Fase 2 no estaba bloqueada por ninguna duda técnica,
+  solo por secuencia (arreglar+verificar primero, refactorizar después).
+- **Qué es**: hoy hay 3 clientes de Redis separados (`pdf.py` async, `batch.py`
+  síncrono, `batch_shard_worker.py` su propia conexión async) con llaves inline en
+  cada función. plan3 §4.1 diseña un módulo de funciones (`load_manifest`,
+  `get_batch_snapshot`, `get_ready_job_ids`, `get_estimated_size`,
+  `get_membership_for_download`) que reciben `redis_client`/`bucket` por
+  parámetro — mismo patrón que ya usa `batch_progress.py` — para que los 3
+  archivos compartan la misma lógica sin necesitar una sola conexión física.
+  Los 4 endpoints de `pdf.py` quedan como wrappers de 1-2 líneas.
+- **OJO — el código real de `pdf.py` cambió desde que se escribió plan3**: la
+  reconciliación por-job contra GCS (que plan3 diseña como parte NUEVA de
+  `get_ready_job_ids`) YA EXISTE en producción hoy, como `_reconcile_none_statuses_with_gcs`
+  y `_resolve_job_ids` (agregadas en la sesión de síntesis de 3 herramientas del
+  2026-07-24, después de plan3/plan4). Quien haga la Fase 2 debe MOVER esas
+  funciones ya existentes al módulo nuevo, no reescribirlas desde el pseudocódigo
+  de plan3 — leer el código real primero (`backend/app/routers/pdf.py`), plan3
+  como guía de estructura/nombres, no como fuente de verdad del comportamiento.
+- **Decisiones ya cerradas que siguen valiendo**: TTL de `pending` (1800s) se
+  queda igual (load-bearing para el auto-cura); cooldown del freno automático
+  (`is_degraded()`) se queda en 60s; costo de GCS en un batch grande atascado se
+  difiere hasta que sea un problema medible (mitigación futura: prefijo
+  `pdfs/{batch_id}/{job_id}.pdf` para poder `list()` en vez de N `exists()`).
+- **Pendientes menores, sin relación con Redis**: decidir qué hacer con el
+  `export default` de `PdfTemplateBuilder.tsx` (componente no renderizado hoy,
+  solo se reusa su tipo/constante — ver "Último cambio"); confirmar si la cuota
+  de Upstash ya se liberó (reset mensual) o si conviene subir de plan — seguía
+  agotada al cerrar esta sesión.
+
+## Historial: plan de resiliencia Redis Fase 1 original (previo a lo de arriba)
 **Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales), el hallazgo
 de frontend (UI atascada), y los 6 tests preexistentes (4 causas reales) DESPLEGADOS Y
 VERIFICADOS EN VIVO EN PRODUCCIÓN — incidente original resuelto en la práctica, cero
