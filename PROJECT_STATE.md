@@ -51,6 +51,62 @@ main
   114 frontend, todos verdes.
 
 ## Último cambio
+**2026-07-25: desacoplado el aviso en vivo de Pusher de la salud de Redis**
+(`publish_batch_signal`, `backend/app/services/realtime.py`). Hallazgo posterior a la
+Fase 2, encontrado probando en navegador real contra producción a pedido explícito del
+usuario: `_publish_batch_tick`/`publish_batch_tick` viven completos dentro de
+`safe_redis_call` en los 6 sitios donde se llaman (`internal_generate_pdf` en `pdf.py`;
+`_process_one`/`_process_one_remote`/`run_shard` en `batch_shard_worker.py`) — con Redis
+degradado, esa llamada se corta ANTES de intentar Pusher, y el usuario se queda sin
+ningún aviso en vivo hasta el respaldo periódico de 75s del frontend. **Rastreado hasta
+la causa real, no solo el síntoma**: el encuadre "Redis/Pusher" como una sola categoría
+nace en `docs/propuestas-resiliencia-redis-pusher-2026-07-22.md` (un día antes del
+incidente que motivó todo el esfuerzo) y se heredó sin cuestionar en la mesa de 4
+agentes del 23 de julio y en los planes 1-4 — ninguno volvió a preguntar si Pusher
+(servicio externo sin relación técnica con Redis) de verdad necesitaba compartir
+destino. Memoria nueva sobre esto: `feedback_encuadres_heredados_sin_cuestionar.md`.
+
+- **Auditoría dirigida previa** (no relectura genérica) de los ~25 call sites de
+  `safe_redis_call`/`safe_redis_call_sync`: este es el ÚNICO patrón de "efecto no-Redis
+  atrapado" en el código — no hay más instancias. De paso confirmó que `app.routers.batch`
+  (análisis) YA hacía esto bien (su `pusher_client.trigger()` vive fuera de
+  `safe_redis_call_sync`) — el fix lleva `pdf.py`/`batch_shard_worker.py` a ese mismo
+  criterio.
+- **Fix**: `publish_batch_signal(batch_id, kind)` — aviso mínimo
+  (`{kind: "job_done"|"job_error"}`, sin contador ni lista de IDs), SIEMPRE intentado, cero
+  lectura de Redis, con throttle LOCAL (`time.monotonic`, sin Redis) para no arriesgar el
+  plan de Pusher en batches grandes — los errores nunca se frenan por el throttle, mismo
+  criterio que `definitive_error` en el payload rico. Frontend (`pdf-download.ts`): nuevo
+  handler del evento `signal` que reusa `fetchSnapshot()` (mismo mecanismo que ya usa en
+  reconexiones de Pusher). **Límite real, no resuelto (no se puede resolver sin otro
+  almacén de coordinación)**: el conteo exacto (`done/total/percentage`) sigue
+  dependiendo de Redis — eso es estructural, confirmado con `decision-expander` antes de
+  codear.
+- Tests nuevos en los 3 niveles: `test_batch_signal_resilience.py` (10, incluye Redis
+  truenando en TODA operación), 1 en `test_batch_shard_job.py`, 1 en
+  `pdf-download.test.ts`. 302 tests backend + 115 frontend, todos verdes. Commit
+  `d02750a`, **DESPLEGADO** (backend `cfdi-suite-api-00138-hs2` 100% tráfico + frontend
+  Vercel, ambos ✓).
+- **Verificación en navegador real, con hallazgo honesto sobre sus límites**: subiendo
+  batches reales (3 y 20 XMLs) contra Redis genuinamente degradado (confirmado en logs),
+  el backend seguía correcto de inmediato (`curl` directo), pero la pestaña automatizada
+  de Chrome nunca reflejó el cambio en vivo. Investigado a fondo (no aceptado a ciegas):
+  `document.hidden` era `true` en esa pestaña (`document.hasFocus()` también `false`) --
+  eso bloquea la PRIMERA línea de `fetchSnapshot()` (`if (settled || document.hidden)
+  return`), y por lo tanto TODOS los caminos de reconciliación de `watchBatchProgress`
+  (snapshot inicial, respaldo de 75s, `state_change`, y el `signal` nuevo) por igual --
+  no es un defecto del fix, es una propiedad de la pestaña automatizada sin foco real.
+  Forzando `document.hidden=false` vía `javascript_tool` (solo como diagnóstico) y
+  disparando `visibilitychange`, la UI corrigió en ~3s (`Lote completado con éxito`,
+  100%, 20/20) -- confirma que el mecanismo funciona de punta a punta en cuanto se le
+  permite ejecutar. **Lo que queda como no observado en vivo, honestamente**: el
+  beneficio de latencia específico del aviso `signal` (segundos vs. 75s) bajo Redis
+  degradado con una pestaña real con foco -- probado por separado a nivel unitario
+  (backend: `publish_batch_signal` se llama con Redis truenando en TODO; frontend: el
+  handler de `signal` dispara `fetchSnapshot()`), no de punta a punta en vivo por esta
+  limitación del entorno de automatización.
+
+## Historial (Fase 2 de centralización de Redis, previo a lo de arriba)
 **2026-07-24/25 (Fase 2 del plan de resiliencia Redis): centralizado el acceso a Redis en
 `backend/app/services/batch_state_store.py` para el dominio de PDFs (`pdf.py` +
 `batch_shard_worker.py`); `batch.py` (análisis, dominio distinto) se dejó fuera a
@@ -1233,14 +1289,22 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**Fase 2 del plan de resiliencia Redis (centralizar el acceso) CERRADA: desplegada y
-verificada en producción real — ver "Deuda técnica pendiente" y "Último cambio"
+**Fase 2 de centralización de Redis Y el desacople de Pusher/Redis (`publish_batch_signal`)
+CERRADOS: desplegados y verificados — ver "Deuda técnica pendiente" y "Último cambio"
 arriba.** Queda:
 1. Decidir qué hacer con el `export default` de `PdfTemplateBuilder.tsx`
    (componente no renderizado hoy, solo se reusa su tipo/constante) — diferido a
    propósito a una sesión aparte, sin relación con Redis.
 2. Confirmar si la cuota de Upstash ya se liberó (reset mensual) o si conviene
-   subir de plan — seguía agotada la última vez que se verificó.
+   subir de plan — seguía agotada la última vez que se verificó (2026-07-25).
+3. **Sugerencia menor, sin urgencia**: al probar en navegador esta sesión se encontró
+   que `document.hidden` puede quedar en `true` en una pestaña de Chrome automatizada
+   sin foco real, bloqueando toda la reconciliación de `watchBatchProgress` -- no es un
+   bug de la app (es la protección deliberada contra gastar cuota con pestañas nadie
+   mirando), pero vale la pena tenerlo presente para la próxima sesión que pruebe en
+   navegador: si el navegador automatizado no tiene foco, ningún mecanismo basado en
+   `fetchSnapshot()` se va a disparar solo, hay que forzar `visibilitychange` o esperar
+   a una interacción real que le dé foco a la pestaña.
 
 ## Historial: plan de resiliencia Redis Fase 1 original (previo a lo de arriba)
 **Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales), el hallazgo
