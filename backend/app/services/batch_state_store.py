@@ -5,7 +5,7 @@ membresía del batch, manifiesto de respaldo en GCS. Leído/escrito por dos
 procesos separados (el servicio FastAPI y cada tarea del Cloud Run Job de
 shards) que comparten el mismo Redis (Upstash) y el mismo bucket de GCS pero
 NO una conexión física -- cada función recibe redis_client/bucket por
-parámetro, mismo patrón que app.services.batch_progress.
+parámetro.
 
 Movido tal cual desde app/routers/pdf.py (sin cambio de comportamiento) al
 centralizar el acceso a Redis -- no reescrito desde
@@ -28,8 +28,13 @@ from __future__ import annotations
 import asyncio
 import json
 
-from .batch_progress import BATCH_METADATA_TTL_SECONDS
 from .redis_safety import safe_redis_call
+
+# TTL de las claves de metadata de un batch en Redis (batch_ids, extracting_total,
+# status por job). Debe ser >= al lifecycle real de GCS sobre pdfs/uploads/xml_temp
+# (1 día, ver infra/gcs-lifecycle.json). Duplicado a propósito en app.routers.pdf
+# (misma constante, mismo valor) -- ver comentario ahí.
+BATCH_METADATA_TTL_SECONDS = 86400
 
 
 def batch_manifest_blob(bucket, batch_id: str):
@@ -168,6 +173,7 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
         }
 
     done = error = converting = 0
+    ready_ids: list[str] = []
     statuses = None
     if registered_ids:
         keys = [f"pdf:status:{jid}" for jid in registered_ids]
@@ -192,6 +198,7 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
         status = status_by_job.get(jid) or "pending"
         if status == "done":
             done += 1
+            ready_ids.append(jid)
         elif status == "error":
             error += 1
         elif status == "converting":
@@ -209,7 +216,12 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
         "error": error,
         "converting": converting,
         "pending": pending,
-        "percentage": int((processed / total) * 100)
+        "percentage": int((processed / total) * 100),
+        # Mismo dato que get_ready_job_ids, calculado gratis del loop de
+        # arriba (sin MGET extra) -- reemplaza a readyIds del extinto canal
+        # de datos de Pusher ('progress'): con hint-only, la lista de listos
+        # para descarga individual viaja aquí, en el único snapshot.
+        "readyIds": ready_ids,
     }
 
 

@@ -20,10 +20,10 @@ def _run(coro):
 @unittest.skipIf(pdf_router is None, f"backend no disponible: {_IMPORT_ERROR}")
 class BatchMetadataTtlTests(unittest.TestCase):
     """Las claves de metadata de un batch (batch_ids, extracting_total,
-    ready_recent, done_count, error_count) deben vivir tanto como el
-    lifecycle real de GCS (24h, Fase 1) — no los 3600s (1h) originales.
-    Con TTL corto, un batch terminado hace más de 1h pero cuyos PDFs
-    todavía existen en Storage se reporta como "Lote no encontrado".
+    pdf:status:*) deben vivir tanto como el lifecycle real de GCS (24h,
+    Fase 1) — no los 3600s (1h) originales. Con TTL corto, un batch
+    terminado hace más de 1h pero cuyos PDFs todavía existen en Storage se
+    reporta como "Lote no encontrado".
     """
 
     def setUp(self) -> None:
@@ -31,20 +31,6 @@ class BatchMetadataTtlTests(unittest.TestCase):
             pdf_router.BATCH_METADATA_TTL_SECONDS,
             86400,
             "el TTL objetivo debe alinearse al lifecycle de GCS confirmado en Fase 1",
-        )
-
-    def test_publish_batch_tick_sets_counter_ttl_to_24h(self) -> None:
-        with (
-            patch.object(pdf_router, "redis_client") as mock_redis,
-            patch.object(pdf_router, "publish_batch_progress"),
-        ):
-            mock_redis.incr = AsyncMock()
-            mock_redis.expire = AsyncMock()
-            mock_redis.get = AsyncMock(return_value=None)  # sin total -> corta rápido
-            _run(pdf_router._publish_batch_tick("batch-1"))
-
-        mock_redis.expire.assert_any_call(
-            "pdf:done_count:batch-1", pdf_router.BATCH_METADATA_TTL_SECONDS
         )
 
     def test_process_zip_in_background_sets_extracting_total_and_batch_ids_ttl(self) -> None:
@@ -143,7 +129,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             unittest.mock.ANY, pdf_router.BATCH_METADATA_TTL_SECONDS
         )
 
-    def test_internal_generate_pdf_sets_ready_recent_ttl(self) -> None:
+    def test_internal_generate_pdf_sets_status_ttl(self) -> None:
         from backend.app.routers.pdf import GeneratePdfPayload
 
         mock_request = MagicMock()
@@ -171,20 +157,13 @@ class BatchMetadataTtlTests(unittest.TestCase):
             patch.object(pdf_router, "redis_client") as mock_redis,
             patch.object(pdf_router, "generate", return_value=b"%PDF-fake"),
             patch.object(pdf_router, "PDF_PROCESS_POOL", None),
-            patch.object(pdf_router, "publish_batch_progress"),
         ):
             mock_redis.get = AsyncMock(return_value=None)
             mock_redis.set = AsyncMock()
             mock_redis.delete = AsyncMock()
-            mock_redis.rpush = AsyncMock()
-            mock_redis.expire = AsyncMock()
-            mock_redis.incr = AsyncMock()
 
             _run(pdf_router.internal_generate_pdf(payload, mock_request))
 
-        mock_redis.expire.assert_any_call(
-            "pdf:ready_recent:batch-3", pdf_router.BATCH_METADATA_TTL_SECONDS
-        )
         mock_redis.set.assert_any_call(
             "pdf:status:job-9", b"done", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
         )
@@ -212,7 +191,6 @@ class BatchMetadataTtlTests(unittest.TestCase):
         with (
             patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
             patch.object(pdf_router, "redis_client") as mock_redis,
-            patch.object(pdf_router, "publish_batch_progress"),
         ):
             mock_redis.get = AsyncMock(return_value=None)
             mock_redis.set = AsyncMock()
@@ -549,7 +527,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             patch.object(pdf_router, "get_gcs_authorized_session", return_value=MagicMock()),
             patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
             patch.object(pdf_router, "redis_client", mock_redis),
-            patch.object(pdf_router, "publish_batch_progress"),
+            patch.object(pdf_router, "publish_batch_signal"),
         ):
             ran = _run(pdf_router.process_zip_in_background("uploads/batch-remote.zip", "batch-remote", "default"))
 

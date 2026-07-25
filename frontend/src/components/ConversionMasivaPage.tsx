@@ -232,11 +232,13 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   // conexión se reportan en batchError para mostrarse inline, sin alert()
   // bloqueante.
   //
-  // Los IDs listos para descarga individual viajan dentro de cada tick
-  // (progress.readyIds) en vez de pedirse aparte — antes esto disparaba un
-  // GET /ready-files por tick (O(n) sobre todo el batch en Redis, ~371
-  // llamadas en un lote de 2,000). Al terminar se reconcilia una vez con
-  // fetchReadyFileIds por si algún tick con readyIds no llegó a publicarse.
+  // Los IDs listos para descarga individual viajan dentro de cada snapshot
+  // de /status (progress.readyIds, lista completa recalculada gratis en
+  // get_batch_snapshot) en vez de pedirse aparte -- evita un GET /ready-files
+  // adicional (O(n) sobre todo el batch en Redis) por cada reconciliación.
+  // El filtro por IDs ya vistos de abajo hace esto seguro aunque la lista
+  // completa (no un delta) llegue en cada snapshot. Al terminar se
+  // reconcilia una vez más con fetchReadyFileIds por si acaso.
   const listenToBatch = useCallback(async (id: string) => {
     setBatchError(null);
     setBatchConnState(null);

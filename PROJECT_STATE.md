@@ -51,6 +51,93 @@ main
   114 frontend, todos verdes.
 
 ## Último cambio
+**2026-07-25: rediseño hint-only del progreso de batch -- causa raíz, no parche**
+(`backend/app/services/realtime.py`, `batch_progress.py` [borrado],
+`app/routers/pdf.py`, `app/workers/batch_shard_worker.py`,
+`app/services/batch_state_store.py`, `frontend/src/lib/pdf-download.ts`).
+
+Contexto: tras cerrar el fix puntual de `watchBatchProgress` (entrada de abajo),
+se le pidió a la sesión ir a la causa raíz de la complejidad acumulada del
+subsistema de progreso, no solo documentarla (producción sin usuarios reales
+todavía, costo/tiempo no eran restricción). Pasado por decision-expander +
+advisor tres veces (causa raíz, decisión bloqueante, plan de ejecución) antes
+de tocar código -- ver razonamiento completo en el historial de esta sesión.
+
+**Causa raíz identificada**: no había una única fuente de verdad de lectura ni
+una única política de "cuándo puedo leer". El push de Pusher se usaba como
+canal de DATOS (`'progress'`, payload completo calculado con contadores de
+Redis sin respaldo en GCS -- `pdf:done_count`/`pdf:error_count`/`pdf:ready_recent`)
+Y como canal de AVISO (`'signal'`, ya diseñado hint-only) a la vez. Esa
+duplicación es de donde salían `maxProcessed` (guardia de orden para datos que
+podían llegar desordenados) y el incidente de acoplamiento Pusher/Redis
+(2026-07-25, entrada de abajo).
+
+**Decisión bloqueante (la tomó el usuario, no la IA)**: el aviso en vivo pasa a
+ser SOLO HINT -- Pusher avisa "algo cambió", el cliente siempre relee
+`/status`. El polling de 75s ya garantizaba corrección eventual sin Pusher;
+esto solo formalizó esa garantía como el único camino.
+
+**Verificado antes de tocar código** (no asumido): el camino de lectura del
+backend YA estaba unificado -- `batch_state_store.get_batch_snapshot` es la
+única función que calcula el estado real, usada tanto por `/status` como por
+el SSE legacy. Eso redujo el trabajo real a borrar código muerto, no a
+rediseñar el backend desde cero.
+
+**Cambios**:
+- Borrado completo: `batch_progress.py` (`publish_batch_tick`), `publish_batch_progress`
+  en `realtime.py`, sus 8 call sites (2 en `pdf.py`, 4 en `batch_shard_worker.py`
+  vía `publish_batch_tick`, 2 más en `pdf.py` que llamaban `publish_batch_progress`
+  directo en la fase de EXTRACCIÓN del ZIP -- encontrados en una segunda pasada de
+  verificación, no en el plan original, confirma que vale la pena correr los
+  tests después de cada bloque en vez de asumir el plan completo). Las llaves
+  `pdf:done_count`/`pdf:error_count`/`pdf:ready_recent` y sus `rpush`/`expire`
+  quedaron huérfanas y también se borraron.
+- `get_batch_snapshot` ahora incluye `readyIds` (jobs con status `done`) calculado
+  gratis del mismo loop que ya cuenta done/error/converting -- sin MGET extra.
+  Reemplaza al `readyIds` que antes viajaba solo en el payload de `'progress'`
+  (evita la regresión que hubiera dejado la tabla de descargas individuales de
+  `ConversionMasivaPage.tsx` actualizándose cada 75s en vez de cada snapshot).
+- Frontend (`watchBatchProgress`): eliminados `channel.bind('progress', handle)`
+  y `maxProcessed`. `'signal'` es hoy el único evento en vivo.
+- Extraído `createLivenessGate()` (patrón "primer intento incondicional, siguientes
+  gateados por `document.hidden`"), compartido entre `subscribeWithRetry` (SSE) y
+  `fetchSnapshot` (Pusher) -- antes duplicado con nombres distintos
+  (`hasConnectedOnce`/`hasFetchedOnce`), ahora una sola función.
+- `BATCH_METADATA_TTL_SECONDS` (que vivía en `batch_progress.py`) se movió a
+  `batch_state_store.py` -- `batch_shard_worker.py` y el propio `batch_state_store.py`
+  dependían de esa importación; se habría roto el import de todo el módulo si
+  se borraba `batch_progress.py` sin mover la constante primero (encontrado
+  leyendo el archivo antes de borrar, no después de que fallara).
+
+**Riesgo residual, ya documentado antes y sin cambios por este rediseño**: Redis
+degradado + pestaña oculta durante TODO el ciclo del lote sigue sin cobertura
+total (ver entrada de 2026-07-24 abajo) -- el hint-only no lo agrava ni lo
+resuelve, es el mismo límite estructural de fondo.
+
+**Nota de tamaño, no urgente**: `get_batch_snapshot` ahora serializa la lista
+COMPLETA de `readyIds` en cada llamada. El SSE legacy `/progress` (`pdf.py`,
+`batch_progress()`) llama a esta misma función hasta una vez por segundo
+durante 600 iteraciones -- en un lote de ~2,000 jobs casi terminado, eso es
+~72KB por tick. Sin impacto real hoy: esa ruta SSE ya no es el camino activo
+de batch (`watchBatchProgress`/Pusher lo es), pero si algo alguna vez vuelve
+a depender de esa ruta, vale la pena revisarlo primero.
+
+**Guard de concurrencia, encontrado por el advisor antes de comitear**: quitar
+`maxProcessed` sin reemplazo dejaba `fetchSnapshot()` sin protección contra
+respuestas en vuelo resolviendo fuera de orden (`signal` cada ~3s contra un
+`/status` que no es instantáneo -- MGET + reconciliación GCS -- puede dejar
+2+ peticiones simultáneas). Corregido con un guard de secuencia (`fetchSeq`,
+en `pdf-download.ts`): solo se aplica el resultado de la petición MÁS
+RECIENTE emitida, las que resuelven tarde se descartan. Cubierto con test.
+
+**Verificado, NO desplegado todavía**: 299 tests backend + 117 frontend, todos
+verdes (se borró un test que probaba `'progress'`, evento que ya no existe, y
+se agregó uno nuevo para el guard de secuencia de abajo). `npm run build` y
+`tsc --noEmit` limpios (los 6 errores de tipos en
+`ConversionMasivaPage.test.tsx` son preexistentes en `main`, confirmado con
+`git stash`, no introducidos aquí).
+
+## Último cambio (anterior)
 **2026-07-24: corregido el atasco de `watchBatchProgress` cuando la pestaña arranca oculta**
 (`frontend/src/lib/pdf-download.ts`). Hallazgo de la sesión anterior (ver entrada de
 2026-07-25 debajo) quedó documentado como "no es un bug, es protección deliberada" —
@@ -95,7 +182,7 @@ Tests: 2 nuevos en `pdf-download.test.ts` (regresión del atasco + confirmación
 las reconexiones posteriores siguen respetando `document.hidden`). 117/117 frontend
 verdes. **NO desplegado todavía** — pendiente de confirmación explícita antes de deploy.
 
-## Último cambio (anterior)
+## Último cambio (anterior-2)
 **2026-07-25: desacoplado el aviso en vivo de Pusher de la salud de Redis**
 (`publish_batch_signal`, `backend/app/services/realtime.py`). Hallazgo posterior a la
 Fase 2, encontrado probando en navegador real contra producción a pedido explícito del
@@ -1334,14 +1421,17 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**Fase 2 de centralización de Redis, el desacople de Pusher/Redis (`publish_batch_signal`)
-Y el atasco de `watchBatchProgress` con pestaña oculta al arrancar CERRADOS: desplegados y
-verificados en vivo — ver "Deuda técnica pendiente" y "Último cambio" arriba.** Queda:
+**Fase 2 de centralización de Redis, el desacople de Pusher/Redis (`publish_batch_signal`),
+el atasco de `watchBatchProgress` con pestaña oculta al arrancar, Y el rediseño hint-only
+del progreso de batch CERRADOS en código -- ver "Deuda técnica pendiente" y "Último cambio"
+arriba. El rediseño hint-only (2026-07-25) NO está desplegado todavía -- pendiente de
+confirmación explícita antes del deploy.** Queda:
 1. Decidir qué hacer con el `export default` de `PdfTemplateBuilder.tsx`
    (componente no renderizado hoy, solo se reusa su tipo/constante) — diferido a
    propósito a una sesión aparte, sin relación con Redis.
 2. Confirmar si la cuota de Upstash ya se liberó (reset mensual) o si conviene
    subir de plan — seguía agotada la última vez que se verificó (2026-07-25).
+3. Confirmar deploy del rediseño hint-only (2026-07-25, ver "Último cambio").
 
 ## Historial: plan de resiliencia Redis Fase 1 original (previo a lo de arriba)
 **Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales), el hallazgo

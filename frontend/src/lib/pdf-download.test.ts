@@ -218,11 +218,9 @@ describe('watchBatchProgress', () => {
   });
 
   it('un evento "signal" (aviso mínimo, sin Redis) dispara una reconciliación inmediata', async () => {
-    // Hallazgo 2026-07-25: con Redis degradado, el backend nunca llega a
-    // disparar el evento 'progress' (el payload rico depende de contadores
-    // de Redis) -- 'signal' es el aviso mínimo que SIEMPRE se intenta
-    // (ver publish_batch_signal, backend/app/services/realtime.py). El
-    // frontend no necesita el dato: solo reconciliar contra /status.
+    // 'signal' es el único evento en vivo (rediseño hint-only 2026-07-25):
+    // no trae dato, solo dispara la reconciliación real contra /status (ver
+    // publish_batch_signal, backend/app/services/realtime.py).
     watchBatchProgress('batch-1', () => {});
     await vi.advanceTimersByTimeAsync(0); // snapshot inicial
 
@@ -232,20 +230,38 @@ describe('watchBatchProgress', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('NO pide snapshots extra mientras Pusher solo entregue ticks normales de progreso', async () => {
-    watchBatchProgress('batch-1', () => {});
+  it('descarta una respuesta vieja que resuelve después de una más nueva (guardia de secuencia)', async () => {
+    // Encontrado por el advisor antes de comitear el rediseño hint-only:
+    // quitar maxProcessed sin reemplazo dejaba dos fetchSnapshot() en vuelo
+    // (aquí, dos 'signal' seguidos) sin protección si resuelven fuera de
+    // orden -- la respuesta vieja llegando después retrocedería la barra.
+    let resolveOlder!: (r: Response) => void;
+    let resolveNewer!: (r: Response) => void;
+    const olderPromise = new Promise<Response>((r) => { resolveOlder = r; });
+    const newerPromise = new Promise<Response>((r) => { resolveNewer = r; });
+
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'processing', total: 10, done: 0, error: 0, converting: 0, pending: 10, percentage: 0 }), { status: 200 }))
+      .mockImplementationOnce(() => olderPromise) // disparada primero (signal #1) -- resuelve TARDE
+      .mockImplementationOnce(() => newerPromise); // disparada segundo (signal #2) -- resuelve PRIMERO
+
+    const progressCalls: Array<{ done: number }> = [];
+    watchBatchProgress('batch-1', (p) => progressCalls.push(p));
     await vi.advanceTimersByTimeAsync(0); // snapshot inicial
 
-    // 3 ticks de 20s = 60s transcurridos, por debajo del primer disparo de
-    // la red de seguridad (75s) -- confirma que los ticks de progreso en sí
-    // mismos no generan ninguna llamada a fetch, sin cruzar el reloj
-    // independiente de la red de seguridad (probado aparte).
-    for (let i = 0; i < 3; i++) {
-      await vi.advanceTimersByTimeAsync(20_000);
-      mockChannelHandlers['progress']?.({ status: 'processing', total: 10, done: i + 1, error: 0, converting: 0, pending: 10 - i - 1, percentage: (i + 1) * 10 });
-    }
+    mockChannelHandlers['signal']?.({ kind: 'job_done' }); // dispara fetch #2 (older, aún sin resolver)
+    mockChannelHandlers['signal']?.({ kind: 'job_done' }); // dispara fetch #3 (newer, aún sin resolver)
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    resolveNewer(new Response(JSON.stringify({ status: 'processing', total: 10, done: 5, error: 0, converting: 0, pending: 5, percentage: 50 }), { status: 200 }));
+    await vi.advanceTimersByTimeAsync(0);
+    resolveOlder(new Response(JSON.stringify({ status: 'processing', total: 10, done: 2, error: 0, converting: 0, pending: 8, percentage: 20 }), { status: 200 }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // La última actualización real reportada es la de la respuesta más
+    // nueva (done=5) -- la vieja (done=2) se descartó al resolver tarde, no
+    // debe haber sobreescrito después.
+    expect(progressCalls[progressCalls.length - 1].done).toBe(5);
   });
 
   it('pide el snapshot inicial aunque la pestaña arranque oculta -- regresión del atasco confirmado en vivo (2026-07-24)', async () => {
@@ -281,9 +297,13 @@ describe('watchBatchProgress', () => {
 
   it('resuelve y deja de vigilar (incluida la red de seguridad y el listener de visibilitychange) cuando el batch termina', async () => {
     const promise = watchBatchProgress('batch-1', () => {});
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial (status 'processing', del mock por defecto)
 
-    mockChannelHandlers['progress']?.({ status: 'done', total: 10, done: 10, error: 0, converting: 0, pending: 0, percentage: 100 });
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: 'done', total: 10, done: 10, error: 0, converting: 0, pending: 0, percentage: 100 }), { status: 200 }),
+    );
+    mockChannelHandlers['signal']?.({ kind: 'job_done' });
+    await vi.advanceTimersByTimeAsync(0);
     await expect(promise).resolves.toBeUndefined();
 
     const callsAtFinish = vi.mocked(globalThis.fetch).mock.calls.length;

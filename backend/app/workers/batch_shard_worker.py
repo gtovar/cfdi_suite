@@ -39,11 +39,10 @@ import redis.asyncio as aioredis
 from google.cloud import storage
 from remotezip import RemoteZip
 
-from ..services.batch_progress import BATCH_METADATA_TTL_SECONDS, publish_batch_tick
 from ..services.batch_state_store import mark_job_converting, mark_job_done, mark_job_error
 from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.pdf_pipeline import generate
-from ..services.realtime import publish_batch_progress, publish_batch_signal
+from ..services.realtime import publish_batch_signal
 from ..services.redis_safety import safe_redis_call
 from ..services.zip_manifest import build_manifest
 
@@ -155,9 +154,6 @@ async def run_shard() -> None:
             for job_id in my_shard:
                 try:
                     await _process_one_remote(rz, bucket, job_id, manifest[job_id], template_id)
-                    await safe_redis_call(lambda: redis_client.rpush(f"pdf:ready_recent:{batch_id}", job_id))
-                    await safe_redis_call(lambda: redis_client.expire(f"pdf:ready_recent:{batch_id}", BATCH_METADATA_TTL_SECONDS))
-                    await safe_redis_call(lambda: publish_batch_tick(redis_client, publish_batch_progress, batch_id))
                     # Aviso mínimo, SIEMPRE se intenta -- ver publish_batch_signal.
                     await asyncio.to_thread(publish_batch_signal, batch_id, "job_done")
                 except Exception as exc:
@@ -167,7 +163,6 @@ async def run_shard() -> None:
                     # docs/plan-implementacion-resiliencia-redis-2026-07-23.md).
                     print(f"[batch_shard_worker] error procesando {job_id}: {exc}")
                     await mark_job_error(redis_client, job_id)
-                    await safe_redis_call(lambda: publish_batch_tick(redis_client, publish_batch_progress, batch_id, definitive_error=True))
                     await asyncio.to_thread(publish_batch_signal, batch_id, "job_error")
         finally:
             rz.close()
@@ -198,9 +193,6 @@ async def run_shard() -> None:
     for job_id in my_shard:
         try:
             await _process_one(bucket, job_id, template_id)
-            await safe_redis_call(lambda: redis_client.rpush(f"pdf:ready_recent:{batch_id}", job_id))
-            await safe_redis_call(lambda: redis_client.expire(f"pdf:ready_recent:{batch_id}", BATCH_METADATA_TTL_SECONDS))
-            await safe_redis_call(lambda: publish_batch_tick(redis_client, publish_batch_progress, batch_id))
             # Aviso mínimo, SIEMPRE se intenta -- ver publish_batch_signal.
             await asyncio.to_thread(publish_batch_signal, batch_id, "job_done")
         except Exception as exc:
@@ -210,7 +202,6 @@ async def run_shard() -> None:
             # fallo de Redis durante el reporte (ver Paso 2 del plan).
             print(f"[batch_shard_worker] error procesando {job_id}: {exc}")
             await mark_job_error(redis_client, job_id)
-            await safe_redis_call(lambda: publish_batch_tick(redis_client, publish_batch_progress, batch_id, definitive_error=True))
             await asyncio.to_thread(publish_batch_signal, batch_id, "job_error")
 
 

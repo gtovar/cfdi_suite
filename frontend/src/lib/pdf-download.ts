@@ -25,9 +25,30 @@ export interface BatchProgressPayload {
   message?: string;
   // Solo presente durante status "extracting" — cuántos XMLs ya se subieron.
   extracted?: number;
-  // Job IDs terminados desde el tick anterior — evita que el frontend tenga
-  // que volver a pedir /ready-files (O(n) sobre todo el batch) en cada tick.
+  // Lista COMPLETA (no delta) de job IDs con status "done" hasta este
+  // snapshot -- calculada gratis dentro de get_batch_snapshot (mismo loop
+  // que cuenta done/error/converting, sin MGET extra). El consumidor
+  // (ConversionMasivaPage) ya filtra por IDs vistos, así que recibir la
+  // lista completa en cada snapshot es seguro -- evita tener que volver a
+  // pedir /ready-files (O(n) sobre todo el batch) aparte mientras el lote
+  // corre.
   readyIds?: string[];
+}
+
+// Patrón compartido por subscribeWithRetry (SSE) y fetchSnapshot (Pusher,
+// dentro de watchBatchProgress): el intento INICIAL siempre se hace, sin
+// importar document.hidden -- confirmado en vivo (2026-07-23 en SSE,
+// 2026-07-24 en Pusher) que si el intento inicial también respeta
+// document.hidden, un job/lote ya terminado se queda sin detectar para
+// siempre cuando la pestaña arranca oculta. Los intentos SIGUIENTES sí
+// respetan la visibilidad, para no quemar cuota con pestañas que nadie mira.
+function createLivenessGate() {
+  let hasAttemptedOnce = false;
+  return (): boolean => {
+    if (hasAttemptedOnce && document.hidden) return false;
+    hasAttemptedOnce = true;
+    return true;
+  };
 }
 
 export function triggerBlobDownload(blob: Blob, filename: string): void {
@@ -93,7 +114,7 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
     // EventSource nunca llegaba a crearse, y el job se quedaba viéndose
     // "Convirtiendo..." para siempre aunque el PDF ya estuviera listo -- solo
     // se hubiera reconectado si el usuario volvía a esa pestaña.
-    let hasAttemptedOnce = false;
+    const canAttempt = createLivenessGate();
     const onVisibility = () => {
       if (document.hidden) es?.close();
       else if (!settled) connect();
@@ -102,8 +123,7 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
 
     const connect = () => {
       if (settled) return;
-      if (hasAttemptedOnce && document.hidden) return;
-      hasAttemptedOnce = true;
+      if (!canAttempt()) return;
       es?.close();
       es = new EventSource(url);
 
@@ -268,10 +288,11 @@ export async function startZipConversion(
 //    cadena de setTimeout que se reprograma a sí misma) cada
 //    SAFETY_NET_INTERVAL_MS -- estructuralmente inmune al defecto de
 //    arriba, porque no depende de que su propio callback tenga éxito para
-//    seguir latiendo. Deliberadamente largo: los ticks intermedios de
-//    progreso se autocorrigen solos con el siguiente evento de Pusher: lo
-//    único que esta red debe garantizar es que el evento TERMINAL
-//    (done/error) nunca se pierda para siempre.
+//    seguir latiendo. Deliberadamente largo: cada snapshot ya trae el
+//    estado COMPLETO y actual (hint-only, ver 'signal' más abajo -- no hay
+//    ticks parciales que puedan perderse), lo único que esta red debe
+//    garantizar es que el evento TERMINAL (done/error) nunca se pierda
+//    para siempre si 'signal' también se perdiera.
 // 3. Reconciliar al volver la pestaña a primer plano (visibilitychange,
 //    mismo patrón que ya usa subscribeWithRetry más abajo en este archivo).
 const SAFETY_NET_INTERVAL_MS = 75_000;
@@ -290,7 +311,6 @@ export function watchBatchProgress(
 
   return new Promise((resolve, reject) => {
     let settled = false;
-    let maxProcessed = -1;
     let pusher: Pusher | null = null;
     let safetyNetTid: ReturnType<typeof setInterval> | undefined;
     let overallTid: ReturnType<typeof setTimeout> | undefined;
@@ -313,23 +333,30 @@ export function watchBatchProgress(
       2_700_000,
     );
 
-    // Mismo patrón que `hasAttemptedOnce` en subscribeWithRetry más arriba en
-    // este archivo: el snapshot INICIAL se intenta siempre, sin importar
-    // document.hidden -- confirmado en vivo (2026-07-24) que si la pestaña
-    // arranca oculta, ninguna reconciliación posterior (red de seguridad,
-    // visibilitychange, signal) llega a dispararse, y un lote ya terminado se
-    // queda sin detectar para siempre. Solo los intentos SIGUIENTES respetan
-    // la visibilidad, para no quemar cuota con pestañas que nadie mira.
-    let hasAttemptedOnce = false;
+    const canAttempt = createLivenessGate();
+    // Guardia de secuencia -- reemplaza a maxProcessed (que ordenaba el
+    // payload de 'progress', ya eliminado). Con 'signal' cada ~3s contra un
+    // /status que hace MGET + reconciliación GCS (no instantáneo), dos
+    // fetchSnapshot() pueden quedar en vuelo a la vez (disparados por
+    // signal, red de seguridad, state_change, visibilitychange) y resolver
+    // fuera de orden. Sin esto, una respuesta vieja llegando después de una
+    // más nueva retrocedería la barra -- exactamente el defecto que
+    // maxProcessed evitaba, ahora en el camino de lectura en vez del de
+    // datos. Solo se aplica el resultado de la petición MÁS RECIENTE
+    // emitida; las anteriores que resuelven tarde se descartan.
+    let fetchSeq = 0;
     const fetchSnapshot = async () => {
       if (settled) return;
-      if (hasAttemptedOnce && document.hidden) return;
-      hasAttemptedOnce = true;
+      if (!canAttempt()) return;
+      const mySeq = ++fetchSeq;
       const controller = new AbortController();
       const timeoutTid = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);
       try {
         const res = await fetch(statusUrl, { signal: controller.signal });
-        if (res.ok) handle(await res.json() as BatchProgressPayload);
+        if (res.ok) {
+          const data = await res.json() as BatchProgressPayload;
+          if (mySeq === fetchSeq) handle(data);
+        }
       } catch {
         // Transitorio (red caída, timeout, respuesta no exitosa ya
         // descartada por !res.ok arriba): no hace falta reaccionar aquí --
@@ -343,11 +370,6 @@ export function watchBatchProgress(
 
     const handle = (data: BatchProgressPayload) => {
       if (settled) return;
-      const processed = (data.done ?? 0) + (data.error ?? 0);
-      // Los ticks de Pusher y los snapshots pueden llegar fuera de orden:
-      // nunca retroceder la barra mientras el lote siga en proceso.
-      if (data.status === 'processing' && processed < maxProcessed) return;
-      maxProcessed = Math.max(maxProcessed, processed);
       onProgress(data);
       if (data.status === 'done') finish(resolve);
       else if (data.status === 'error') finish(() => reject(new Error(data.message || 'Ocurrió un error crítico en el lote')));
@@ -368,14 +390,14 @@ export function watchBatchProgress(
       if (states.current !== states.previous) void fetchSnapshot();
     });
     const channel = pusher.subscribe('pdf-batch-' + batchId);
-    channel.bind('progress', handle);
-    // 'signal': aviso mínimo (solo {kind: 'job_done'|'job_error'}, sin
-    // contador ni lista de IDs) que el backend dispara SIEMPRE, incluso con
-    // Redis degradado (ver publish_batch_signal en realtime.py -- a
-    // diferencia de 'progress', que si Redis está caído no llega nunca,
-    // porque el tick completo vive dentro de un wrapper que corta antes de
-    // tocar Pusher). Mismo patrón que 'state_change' de abajo: no trae
-    // datos, solo dispara la reconciliación real contra /status.
+    // 'signal': único evento en vivo -- aviso mínimo (solo {kind:
+    // 'job_done'|'job_error'}, sin contador ni lista de IDs) que el backend
+    // dispara SIEMPRE, incluso con Redis degradado (ver publish_batch_signal
+    // en realtime.py). No trae datos, solo dispara la reconciliación real
+    // contra /status -- una sola fuente de verdad, un solo camino de
+    // lectura (2026-07-25, rediseño hint-only: eliminado el evento
+    // 'progress', que cargaba un payload aparte calculado con contadores de
+    // Redis sin respaldo en GCS -- ver PROJECT_STATE.md).
     channel.bind('signal', () => { void fetchSnapshot(); });
 
     void fetchSnapshot(); // snapshot inicial -- Pusher no cuenta la historia, solo eventos nuevos

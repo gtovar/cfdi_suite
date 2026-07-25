@@ -1,8 +1,6 @@
 """
 Tests de la Capa 1 (Cloud Run Job de shards, docs/propuesta-arquitectura-batch.md):
-partición determinística en batch_shard_worker, umbral en batch_job_trigger,
-y que la lógica de progreso compartida (batch_progress) se comporte igual
-que el _publish_batch_tick original que reemplazó (ver test_pdf_batch_ttl.py).
+partición determinística en batch_shard_worker y umbral en batch_job_trigger.
 """
 from __future__ import annotations
 
@@ -14,12 +12,11 @@ import zipfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
-    from backend.app.services import batch_job_trigger, batch_progress
+    from backend.app.services import batch_job_trigger
     from backend.app.workers import batch_shard_worker
     from backend.app.workers.batch_shard_worker import shard_slice
 except ModuleNotFoundError as error:
     batch_job_trigger = None
-    batch_progress = None
     batch_shard_worker = None
     shard_slice = None
     _IMPORT_ERROR = error
@@ -154,7 +151,7 @@ class RunShardZipGcsPathTests(unittest.TestCase):
             patch.object(batch_shard_worker, "get_gcs_authorized_session", return_value=MagicMock()),
             patch.object(batch_shard_worker.storage, "Client", return_value=MagicMock()),
             patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
-            patch.object(batch_shard_worker, "publish_batch_tick", new=AsyncMock()),
+            patch.object(batch_shard_worker, "publish_batch_signal"),
         ):
             asyncio.run(batch_shard_worker.run_shard())
 
@@ -191,7 +188,7 @@ class RunShardZipGcsPathTests(unittest.TestCase):
             patch.object(batch_shard_worker, "redis_client", mock_redis),
             patch.object(batch_shard_worker.storage, "Client", return_value=mock_storage_client),
             patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
-            patch.object(batch_shard_worker, "publish_batch_tick", new=AsyncMock()),
+            patch.object(batch_shard_worker, "publish_batch_signal"),
         ):
             os.environ.pop("ZIP_GCS_PATH", None)  # por si una prueba anterior lo dejó puesto
             asyncio.run(batch_shard_worker.run_shard())
@@ -199,20 +196,17 @@ class RunShardZipGcsPathTests(unittest.TestCase):
         mock_redis.smembers.assert_called_once_with("pdf:batch_ids:batch-old")
         mock_bucket.blob.assert_any_call("xml_temp/job-1.xml")
 
-    def test_fallo_de_redis_en_tick_de_error_no_tumba_el_resto_del_shard(self) -> None:
-        """El defecto gemelo del incidente 2026-07-23 (ver Paso 2 de
-        docs/plan-implementacion-resiliencia-redis-2026-07-23.md): antes,
-        un fallo de Redis DENTRO del except del loop (publish_batch_tick
-        definitive_error=True) escapaba el `for`, subía hasta main() y
-        disparaba sys.exit(1) -- reintentando la tarea COMPLETA de hasta
-        100 XMLs. Con safe_redis_call, un XML que falla (aquí: job-1,
-        xml inexistente) no debe impedir que job-2 se procese, y run_shard()
-        no debe propagar la excepción."""
+    def test_fallo_de_un_xml_no_tumba_el_resto_del_shard(self) -> None:
+        """El defecto del incidente 2026-07-23 (ver Paso 2 de
+        docs/plan-implementacion-resiliencia-redis-2026-07-23.md): antes, una
+        excepción DENTRO del except del loop escapaba el `for`, subía hasta
+        main() y disparaba sys.exit(1) -- reintentando la tarea COMPLETA de
+        hasta 100 XMLs. Un XML que falla (aquí: job-1, xml inexistente) no
+        debe impedir que job-2 se procese, y run_shard() no debe propagar la
+        excepción."""
         mock_redis = AsyncMock()
         mock_redis.smembers = AsyncMock(return_value={b"job-1", b"job-2"})
         mock_redis.set = AsyncMock()
-        mock_redis.rpush = AsyncMock()
-        mock_redis.expire = AsyncMock()
 
         mock_blob_missing = MagicMock()
         mock_blob_missing.exists.return_value = False
@@ -228,13 +222,6 @@ class RunShardZipGcsPathTests(unittest.TestCase):
         mock_storage_client = MagicMock()
         mock_storage_client.bucket.return_value = mock_bucket
 
-        # publish_batch_tick lanza SIEMPRE que se le pase definitive_error
-        # (simula la cuota de Redis agotada justo en el reporte de error de
-        # job-1) -- el resto del shard (job-2) debe procesarse igual.
-        async def flaky_tick(redis_client, publish_fn, batch_id, definitive_error=False):
-            if definitive_error:
-                raise Exception("max requests limit exceeded. Limit: 500000, Usage: 500000.")
-
         env = {
             "BATCH_ID": "batch-flaky",
             "TEMPLATE_ID": "default",
@@ -247,26 +234,22 @@ class RunShardZipGcsPathTests(unittest.TestCase):
             patch.object(batch_shard_worker, "redis_client", mock_redis),
             patch.object(batch_shard_worker.storage, "Client", return_value=mock_storage_client),
             patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
-            patch.object(batch_shard_worker, "publish_batch_tick", new=flaky_tick),
+            patch.object(batch_shard_worker, "publish_batch_signal"),
         ):
             os.environ.pop("ZIP_GCS_PATH", None)
-            # No debe propagar la excepción del tick fallido.
+            # No debe propagar la excepción de job-1.
             asyncio.run(batch_shard_worker.run_shard())
 
-        # job-2 sí se procesó pese al fallo de Redis en el reporte de job-1.
+        # job-2 sí se procesó pese al fallo de job-1.
         mock_blob_ok.upload_from_string.assert_called_once()
 
-    def test_publish_batch_signal_se_llama_aunque_publish_batch_tick_truene(self) -> None:
-        """Hallazgo 2026-07-25: publish_batch_tick (el payload rico) vive
-        dentro de safe_redis_call -- si truena (Redis degradado), el aviso
-        de Pusher se pierde por completo. publish_batch_signal es el aviso
-        mínimo que NO depende de Redis y debe dispararse siempre, en los
-        dos loops de run_shard() (con y sin ZIP_GCS_PATH)."""
+    def test_publish_batch_signal_se_llama_al_procesar_un_job(self) -> None:
+        """publish_batch_signal es el único aviso en vivo de progreso (ver
+        realtime.py) -- debe dispararse en los dos loops de run_shard() (con
+        y sin ZIP_GCS_PATH) tras cada job procesado."""
         mock_redis = AsyncMock()
         mock_redis.smembers = AsyncMock(return_value={b"job-1"})
         mock_redis.set = AsyncMock()
-        mock_redis.rpush = AsyncMock()
-        mock_redis.expire = AsyncMock()
 
         mock_blob = MagicMock()
         mock_blob.exists.return_value = True
@@ -275,9 +258,6 @@ class RunShardZipGcsPathTests(unittest.TestCase):
         mock_bucket.blob.return_value = mock_blob
         mock_storage_client = MagicMock()
         mock_storage_client.bucket.return_value = mock_bucket
-
-        async def tick_siempre_truena(*args, **kwargs):
-            raise Exception("max requests limit exceeded. Limit: 500000, Usage: 500000.")
 
         env = {
             "BATCH_ID": "batch-signal",
@@ -291,58 +271,12 @@ class RunShardZipGcsPathTests(unittest.TestCase):
             patch.object(batch_shard_worker, "redis_client", mock_redis),
             patch.object(batch_shard_worker.storage, "Client", return_value=mock_storage_client),
             patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
-            patch.object(batch_shard_worker, "publish_batch_tick", new=tick_siempre_truena),
             patch.object(batch_shard_worker, "publish_batch_signal") as mock_signal,
         ):
             os.environ.pop("ZIP_GCS_PATH", None)
             asyncio.run(batch_shard_worker.run_shard())
 
         mock_signal.assert_called_once_with("batch-signal", "job_done")
-
-
-@unittest.skipIf(batch_progress is None, f"backend no disponible: {_IMPORT_ERROR}")
-class PublishBatchTickSharedLogicTests(unittest.TestCase):
-    """Misma cobertura que test_pdf_batch_ttl.py pero contra la función
-    compartida directamente (no el wrapper de pdf.py) -- confirma que el
-    Cloud Run Job (que llama esta función con SU PROPIA conexión de Redis,
-    no la de pdf.py) obtiene el mismo comportamiento de umbral/TTL."""
-
-    def test_incrementa_contador_y_fija_ttl(self) -> None:
-        mock_redis = AsyncMock()
-        mock_redis.get = AsyncMock(return_value=None)  # sin total -> corta rápido
-        mock_publish = MagicMock()
-
-        _run(batch_progress.publish_batch_tick(mock_redis, mock_publish, "batch-x"))
-
-        mock_redis.incr.assert_awaited_with("pdf:done_count:batch-x")
-        mock_redis.expire.assert_awaited_with(
-            "pdf:done_count:batch-x", batch_progress.BATCH_METADATA_TTL_SECONDS
-        )
-        mock_publish.assert_not_called()  # sin total conocido, no publica nada
-
-    def test_publica_al_llegar_al_total(self) -> None:
-        mock_redis = AsyncMock()
-
-        async def fake_get(key):
-            if "extracting_total" in key:
-                return b"1"
-            if "done_count" in key:
-                return b"1"
-            if "error_count" in key:
-                return b"0"
-            return None
-
-        mock_redis.get = AsyncMock(side_effect=fake_get)
-        mock_redis.lpop = AsyncMock(return_value=[b"job-1"])
-        mock_publish = MagicMock()
-
-        _run(batch_progress.publish_batch_tick(mock_redis, mock_publish, "batch-y"))
-
-        mock_publish.assert_called_once()
-        args, _ = mock_publish.call_args
-        self.assertEqual(args[0], "batch-y")
-        self.assertEqual(args[1]["status"], "done")
-        self.assertEqual(args[1]["percentage"], 100)
 
 
 if __name__ == "__main__":

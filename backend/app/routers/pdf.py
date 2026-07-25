@@ -34,9 +34,8 @@ tracer = trace.get_tracer(__name__)
 import redis.asyncio as aioredis
 
 from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
-from ..services.realtime import publish_batch_progress, publish_batch_signal
+from ..services.realtime import publish_batch_signal
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
-from ..services.batch_progress import publish_batch_tick
 from ..services.zip_manifest import is_valid_xml_entry, compute_job_id, build_manifest
 from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
@@ -61,10 +60,10 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
 
 # TTL de las claves de metadata de un batch en Redis (batch_ids, extracting_total,
-# ready_recent, done_count, error_count). Debe ser >= al lifecycle real de GCS
-# sobre pdfs/uploads/xml_temp (1 día, ver infra/gcs-lifecycle.json) para que
-# _batch_progress_snapshot pueda seguir resolviendo un batch terminado mientras
-# sus PDFs todavía existen en Storage.
+# pdf:status:*). Debe ser >= al lifecycle real de GCS sobre pdfs/uploads/xml_temp
+# (1 día, ver infra/gcs-lifecycle.json) para que get_batch_snapshot pueda seguir
+# resolviendo un batch terminado mientras sus PDFs todavía existen en Storage.
+# Duplicada a propósito en batch_state_store.py (mismo valor) -- ver comentario ahí.
 BATCH_METADATA_TTL_SECONDS = 86400
 
 redis_client = aioredis.Redis(
@@ -103,23 +102,6 @@ class ExtractZipPayload(BaseModel):
     template_id: str
 
 
-async def _publish_batch_tick(batch_id: str, *, definitive_error: bool = False):
-    """Wrapper delgado sobre batch_progress.publish_batch_tick.
-
-    La lógica en sí (INCR, umbral de "publica cada N", payload de Pusher) vive
-    en app/services/batch_progress.py — compartida con el Cloud Run Job de
-    shards (app/workers/batch_shard_worker.py, Capa 1 de
-    docs/propuesta-arquitectura-batch.md). Este wrapper sigue existiendo tal
-    cual (mismo nombre, misma firma) porque tests/test_pdf_batch_ttl.py lo
-    llama directo y parchea `redis_client` a nivel de módulo — referenciarlo
-    aquí (no importado a valor fijo) preserva ese patrón de test.
-    """
-    await publish_batch_tick(
-        redis_client, publish_batch_progress, batch_id,
-        definitive_error=definitive_error, ttl_seconds=BATCH_METADATA_TTL_SECONDS,
-    )
-
-
 @router.post("/internal/generate-pdf")
 async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
     if "x-cloudtasks-queuename" not in request.headers:
@@ -155,11 +137,7 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
             print(f"Abortando Job {payload.job_id}: XML ya no existe ni en Redis ni en GCS.")
             await batch_state_store.mark_job_error(redis_client, payload.job_id, ttl_seconds=BATCH_METADATA_TTL_SECONDS)
             if payload.batch_id:
-                await safe_redis_call(lambda: _publish_batch_tick(payload.batch_id, definitive_error=True))
-                # Aviso mínimo, SIEMPRE se intenta (no envuelto en
-                # safe_redis_call) -- ver publish_batch_signal. Con Redis
-                # degradado, la línea de arriba se corta antes de llegar a
-                # Pusher; esta no depende de Redis para nada.
+                # Aviso mínimo, SIEMPRE se intenta -- ver publish_batch_signal.
                 await asyncio.to_thread(publish_batch_signal, payload.batch_id, "job_error")
             return Response(status_code=204)
 
@@ -215,9 +193,6 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 
     print(f"PDF {payload.job_id} guardado con éxito.")
     if payload.batch_id:
-        await safe_redis_call(lambda: redis_client.rpush(f"pdf:ready_recent:{payload.batch_id}", payload.job_id))
-        await safe_redis_call(lambda: redis_client.expire(f"pdf:ready_recent:{payload.batch_id}", BATCH_METADATA_TTL_SECONDS))
-        await safe_redis_call(lambda: _publish_batch_tick(payload.batch_id))
         # Aviso mínimo, SIEMPRE se intenta -- ver publish_batch_signal.
         await asyncio.to_thread(publish_batch_signal, payload.batch_id, "job_done")
     return {"status": "success", "message": "PDF generado"}
@@ -839,22 +814,14 @@ async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, templa
                 await pipe.execute()
         await safe_redis_call(_write_manifest_redis)
 
-        # Un solo aviso de progreso (100% extraído) -- a diferencia del
-        # camino de siempre, aquí no hay una fase de extracción larga que
-        # justifique ticks intermedios: construir el manifiesto solo lee el
-        # directorio central, no el contenido de los XMLs, así que esto
-        # termina en segundos sin importar el tamaño del batch.
-        try:
-            await asyncio.to_thread(publish_batch_progress, batch_id, {
-                "status": "extracting",
-                "total": total_xmls,
-                "extracted": total_xmls,
-                "done": 0, "error": 0, "converting": 0,
-                "pending": total_xmls,
-                "percentage": 100,
-            })
-        except Exception as pusher_err:
-            print(f"Aviso: tick de extracción no publicado para {batch_id}: {pusher_err}")
+        # Un solo aviso (100% extraído) -- a diferencia del camino de
+        # siempre, aquí no hay una fase de extracción larga que justifique
+        # ticks intermedios: construir el manifiesto solo lee el directorio
+        # central, no el contenido de los XMLs, así que esto termina en
+        # segundos sin importar el tamaño del batch. Aviso mínimo (hint-only,
+        # ver publish_batch_signal): el frontend relee /status, que ya
+        # calcula el % de extracción real desde pdf:batch_ids.
+        await asyncio.to_thread(publish_batch_signal, batch_id, "job_done")
 
         try:
             op_name = await asyncio.to_thread(
@@ -1033,23 +1000,18 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
 
                 await safe_redis_call(_write_chunk_pending)
 
-                # El aviso de progreso es cosmético -- un fallo aquí (Redis,
-                # Pusher, lo que sea) NUNCA debe impedir que b) y c) corran de
-                # verdad para este chunk, por eso todo esto va en su propio
-                # try/except, aislado del trabajo real.
+                # El aviso es cosmético -- un fallo aquí (Redis, Pusher, lo
+                # que sea) NUNCA debe impedir que b) y c) corran de verdad
+                # para este chunk, por eso va en su propio try/except,
+                # aislado del trabajo real. Aviso mínimo (hint-only, ver
+                # publish_batch_signal): el frontend relee /status, que ya
+                # calcula el % de extracción real desde pdf:batch_ids.
                 flushed_chunks += 1
                 try:
                     total_xmls = len(xml_entries)
                     extracted_so_far = await redis_client.scard(f"pdf:batch_ids:{batch_id}")
                     if flushed_chunks % 5 == 0 or extracted_so_far >= total_xmls:
-                        await asyncio.to_thread(publish_batch_progress, batch_id, {
-                            "status": "extracting",
-                            "total": total_xmls,
-                            "extracted": extracted_so_far,
-                            "done": 0, "error": 0, "converting": 0,
-                            "pending": total_xmls,
-                            "percentage": int(extracted_so_far / total_xmls * 100) if total_xmls else 0,
-                        })
+                        await asyncio.to_thread(publish_batch_signal, batch_id, "job_done")
                 except Exception as pusher_err:
                     print(f"Aviso: tick de extracción no publicado para {batch_id}: {pusher_err}")
 

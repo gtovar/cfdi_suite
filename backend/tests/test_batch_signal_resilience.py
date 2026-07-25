@@ -3,11 +3,15 @@ depende de Redis (publish_batch_signal, app/services/realtime.py).
 
 Hallazgo 2026-07-25 (verificado en vivo en producción, con la cuota de
 Upstash genuinamente agotada): `_publish_batch_tick`/`publish_batch_tick`
-viven completos dentro de `safe_redis_call` en pdf.py/batch_shard_worker.py
--- si Redis está degradado, esa llamada se corta ANTES de intentar Pusher, y
-el usuario se queda sin ningún aviso en vivo hasta el respaldo periódico de
-75s del frontend (`fetchSnapshot`, pdf-download.ts). `publish_batch_signal`
-es el fix: un aviso mínimo, SIEMPRE intentado, sin ninguna lectura de Redis.
+(entonces existentes) vivían completos dentro de `safe_redis_call` en
+pdf.py/batch_shard_worker.py -- si Redis estaba degradado, esa llamada se
+cortaba ANTES de intentar Pusher, y el usuario se quedaba sin ningún aviso en
+vivo hasta el respaldo periódico de 75s del frontend (`fetchSnapshot`,
+pdf-download.ts). `publish_batch_signal` fue el fix: un aviso mínimo, SIEMPRE
+intentado, sin ninguna lectura de Redis. 2026-07-25 (rediseño hint-only, ver
+PROJECT_STATE.md): `publish_batch_tick`/`publish_batch_progress` se
+eliminaron por completo -- `publish_batch_signal` es hoy el ÚNICO evento en
+vivo, no solo el de respaldo.
 """
 from __future__ import annotations
 
