@@ -76,6 +76,23 @@ errores/5xx en logs durante el arranque ni durante la verificación.**
   movimiento preservó el comportamiento. `estimated-size` (que a propósito NO tiene
   respaldo en GCS, decisión de plan3 documentada) mostró correctamente `knownCount: 0`
   en vez de romperse o mentir.
+- **Verificación adicional en navegador real (Chrome, no headless), a pedido explícito
+  del usuario, contra `cfdiinspector.vercel.app`** (las pruebas de arriba fueron
+  `curl` directo al backend): subida real de un .zip de 2 XMLs por "Conversión masiva".
+  El backend (`/status`, `/ready-files`) reportó `done: 2/2` correctamente desde el
+  primer momento (confirmado con `curl` en paralelo), pero la UI se quedó mostrando
+  "Desempaquetando y registrando lote en la nube..." con 0% por ~75-90s -- NO es un bug
+  nuevo de este refactor (backend no tocado por el frontend): coincide con el diseño ya
+  documentado de `watchBatchProgress` (Pusher en vivo + snapshot de respaldo cada 75s +
+  visibilitychange) -- Pusher no pareció entregar el evento en vivo dentro de la ventana
+  de prueba (posible particularidad de la pestaña automatizada, no confirmado si le
+  pasaría igual a un usuario real), y el respaldo periódico corrigió la UI sola a los
+  ~75-90s (`"Lote completado con éxito"`, 100%, 2/2 listos, sin recargar). Confirmado
+  también que la descarga del PDF individual desde la UI funciona (petición a
+  `/download-url` exitosa). Sin errores de consola en ningún momento. **No es un hallazgo
+  que bloquee nada** -- documentado por transparencia, ya que el usuario pidió
+  explícitamente la prueba en navegador. Si se quiere investigar por qué Pusher no
+  entregó el evento en vivo esta vez, es trabajo de frontend, sin relación con la Fase 2.
 - Pendiente sin dueño, diferido a propósito: decidir qué hacer con el `export default`
   de `PdfTemplateBuilder.tsx` (sesión aparte); confirmar si la cuota de Upstash ya se
   liberó (reset mensual) o si conviene subir de plan -- sigue agotada, confirmado de
