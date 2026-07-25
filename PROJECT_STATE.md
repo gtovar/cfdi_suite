@@ -51,14 +51,35 @@ main
   114 frontend, todos verdes.
 
 ## Último cambio
-**2026-07-24 (Fase 2 del plan de resiliencia Redis): centralizado el acceso a Redis en
+**2026-07-24/25 (Fase 2 del plan de resiliencia Redis): centralizado el acceso a Redis en
 `backend/app/services/batch_state_store.py` para el dominio de PDFs (`pdf.py` +
 `batch_shard_worker.py`); `batch.py` (análisis, dominio distinto) se dejó fuera a
 propósito con `decision-expander` de por medio. Ver detalle completo en "Deuda técnica
 pendiente" arriba (entrada resuelta). 291 tests backend + 114 frontend, todos verdes.
-NO DESPLEGADO TODAVÍA — pendiente de confirmación explícita del usuario antes de
-`git push`. Pendiente sin dueño, diferido a propósito: decidir qué hacer con el
-`export default` de `PdfTemplateBuilder.tsx` (sesión aparte).**
+Commit `3b299db`, **DESPLEGADO** (`deploy-backend.yml` run 30139914210, ✓, 3m1s;
+`cfdi-suite-api-00137-2lk`, 100% del tráfico confirmado por `status.traffic`). Cero
+errores/5xx en logs durante el arranque ni durante la verificación.**
+
+- **Verificación real en producción, no solo curl trivial** (los 3 caminos que toca este
+  refactor): (1) PDF individual (`start` → `download-url` → PDF de 27,974 bytes válido,
+  1 página); (2) batch de PDFs por ZIP (`start-zip` con 2 XMLs → `status`
+  `done, 2/2, 100%` → `ready-files` con los 2 job_ids → `download` con el ZIP de 2 PDFs
+  válidos); (3) análisis de CFDI por lote, `batch.py` (`analyze` con 2 XMLs → `status`
+  `done, 2/2 completados`, resultados correctos).
+- **Hallazgo real durante la verificación, no buscado a propósito**: la cuota de Upstash
+  seguía genuinamente agotada (mismo mensaje del incidente histórico, confirmado en logs:
+  `max requests limit exceeded. Limit: 500000, Usage: 500000`, un solo aviso en la ventana
+  de prueba -- el freno automático de `is_degraded()` cortó el resto sin reintentar). El
+  batch de PDFs por ZIP reportó `done: 2/2` correctamente A PESAR de esto, gracias a la
+  reconciliación contra GCS que este mismo refactor movió (sin reescribir) a
+  `batch_state_store.py` -- confirma en producción real, no solo en mocks, que el
+  movimiento preservó el comportamiento. `estimated-size` (que a propósito NO tiene
+  respaldo en GCS, decisión de plan3 documentada) mostró correctamente `knownCount: 0`
+  en vez de romperse o mentir.
+- Pendiente sin dueño, diferido a propósito: decidir qué hacer con el `export default`
+  de `PdfTemplateBuilder.tsx` (sesión aparte); confirmar si la cuota de Upstash ya se
+  liberó (reset mensual) o si conviene subir de plan -- sigue agotada, confirmado de
+  nuevo en esta misma verificación.
 
 **2026-07-24 (antes de lo de arriba): comparación real de 3 herramientas (Claude, Aider,
 OpenCode) resolviendo el mismo bug ("0 listos para siempre" con Redis caído) cada una en
@@ -1195,15 +1216,13 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 `gcloud run services update-traffic cfdi-suite-api --region=us-central1 --to-latest`.
 
 ## Próximo paso
-**Fase 2 del plan de resiliencia Redis (centralizar el acceso) YA ESTÁ HECHA en
-local — ver "Deuda técnica pendiente" y "Último cambio" arriba.** Falta:
-1. **Confirmación explícita del usuario antes de `git push` a `main`** (dispara
-   `deploy-backend.yml` automático a Cloud Run). Nada de esto se ha desplegado
-   todavía.
-2. Decidir qué hacer con el `export default` de `PdfTemplateBuilder.tsx`
+**Fase 2 del plan de resiliencia Redis (centralizar el acceso) CERRADA: desplegada y
+verificada en producción real — ver "Deuda técnica pendiente" y "Último cambio"
+arriba.** Queda:
+1. Decidir qué hacer con el `export default` de `PdfTemplateBuilder.tsx`
    (componente no renderizado hoy, solo se reusa su tipo/constante) — diferido a
    propósito a una sesión aparte, sin relación con Redis.
-3. Confirmar si la cuota de Upstash ya se liberó (reset mensual) o si conviene
+2. Confirmar si la cuota de Upstash ya se liberó (reset mensual) o si conviene
    subir de plan — seguía agotada la última vez que se verificó.
 
 ## Historial: plan de resiliencia Redis Fase 1 original (previo a lo de arriba)
