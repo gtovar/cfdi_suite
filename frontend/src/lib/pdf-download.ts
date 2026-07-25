@@ -357,7 +357,16 @@ export function watchBatchProgress(
       // a 'connected', el hueco real donde Pusher pierde mensajes).
       if (states.current !== states.previous) void fetchSnapshot();
     });
-    pusher.subscribe('pdf-batch-' + batchId).bind('progress', handle);
+    const channel = pusher.subscribe('pdf-batch-' + batchId);
+    channel.bind('progress', handle);
+    // 'signal': aviso mínimo (solo {kind: 'job_done'|'job_error'}, sin
+    // contador ni lista de IDs) que el backend dispara SIEMPRE, incluso con
+    // Redis degradado (ver publish_batch_signal en realtime.py -- a
+    // diferencia de 'progress', que si Redis está caído no llega nunca,
+    // porque el tick completo vive dentro de un wrapper que corta antes de
+    // tocar Pusher). Mismo patrón que 'state_change' de abajo: no trae
+    // datos, solo dispara la reconciliación real contra /status.
+    channel.bind('signal', () => { void fetchSnapshot(); });
 
     void fetchSnapshot(); // snapshot inicial -- Pusher no cuenta la historia, solo eventos nuevos
     safetyNetTid = setInterval(() => { void fetchSnapshot(); }, SAFETY_NET_INTERVAL_MS);

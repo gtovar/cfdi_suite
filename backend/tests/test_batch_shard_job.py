@@ -256,6 +256,49 @@ class RunShardZipGcsPathTests(unittest.TestCase):
         # job-2 sí se procesó pese al fallo de Redis en el reporte de job-1.
         mock_blob_ok.upload_from_string.assert_called_once()
 
+    def test_publish_batch_signal_se_llama_aunque_publish_batch_tick_truene(self) -> None:
+        """Hallazgo 2026-07-25: publish_batch_tick (el payload rico) vive
+        dentro de safe_redis_call -- si truena (Redis degradado), el aviso
+        de Pusher se pierde por completo. publish_batch_signal es el aviso
+        mínimo que NO depende de Redis y debe dispararse siempre, en los
+        dos loops de run_shard() (con y sin ZIP_GCS_PATH)."""
+        mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(return_value={b"job-1"})
+        mock_redis.set = AsyncMock()
+        mock_redis.rpush = AsyncMock()
+        mock_redis.expire = AsyncMock()
+
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_as_bytes.return_value = b"<xml/>"
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        async def tick_siempre_truena(*args, **kwargs):
+            raise Exception("max requests limit exceeded. Limit: 500000, Usage: 500000.")
+
+        env = {
+            "BATCH_ID": "batch-signal",
+            "TEMPLATE_ID": "default",
+            "SHARD_SIZE": "5",
+            "CLOUD_RUN_TASK_INDEX": "0",
+        }
+
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(batch_shard_worker, "redis_client", mock_redis),
+            patch.object(batch_shard_worker.storage, "Client", return_value=mock_storage_client),
+            patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
+            patch.object(batch_shard_worker, "publish_batch_tick", new=tick_siempre_truena),
+            patch.object(batch_shard_worker, "publish_batch_signal") as mock_signal,
+        ):
+            os.environ.pop("ZIP_GCS_PATH", None)
+            asyncio.run(batch_shard_worker.run_shard())
+
+        mock_signal.assert_called_once_with("batch-signal", "job_done")
+
 
 @unittest.skipIf(batch_progress is None, f"backend no disponible: {_IMPORT_ERROR}")
 class PublishBatchTickSharedLogicTests(unittest.TestCase):

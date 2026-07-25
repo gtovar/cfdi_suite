@@ -217,6 +217,21 @@ describe('watchBatchProgress', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('un evento "signal" (aviso mínimo, sin Redis) dispara una reconciliación inmediata', async () => {
+    // Hallazgo 2026-07-25: con Redis degradado, el backend nunca llega a
+    // disparar el evento 'progress' (el payload rico depende de contadores
+    // de Redis) -- 'signal' es el aviso mínimo que SIEMPRE se intenta
+    // (ver publish_batch_signal, backend/app/services/realtime.py). El
+    // frontend no necesita el dato: solo reconciliar contra /status.
+    watchBatchProgress('batch-1', () => {});
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial
+
+    mockChannelHandlers['signal']?.({ kind: 'job_done' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('NO pide snapshots extra mientras Pusher solo entregue ticks normales de progreso', async () => {
     watchBatchProgress('batch-1', () => {});
     await vi.advanceTimersByTimeAsync(0); // snapshot inicial

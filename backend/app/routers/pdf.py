@@ -34,7 +34,7 @@ tracer = trace.get_tracer(__name__)
 import redis.asyncio as aioredis
 
 from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
-from ..services.realtime import publish_batch_progress
+from ..services.realtime import publish_batch_progress, publish_batch_signal
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
 from ..services.batch_progress import publish_batch_tick
 from ..services.zip_manifest import is_valid_xml_entry, compute_job_id, build_manifest
@@ -156,6 +156,11 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
             await batch_state_store.mark_job_error(redis_client, payload.job_id, ttl_seconds=BATCH_METADATA_TTL_SECONDS)
             if payload.batch_id:
                 await safe_redis_call(lambda: _publish_batch_tick(payload.batch_id, definitive_error=True))
+                # Aviso mínimo, SIEMPRE se intenta (no envuelto en
+                # safe_redis_call) -- ver publish_batch_signal. Con Redis
+                # degradado, la línea de arriba se corta antes de llegar a
+                # Pusher; esta no depende de Redis para nada.
+                await asyncio.to_thread(publish_batch_signal, payload.batch_id, "job_error")
             return Response(status_code=204)
 
         with tracer.start_as_current_span("generacion_pdf_intensiva"):
@@ -213,6 +218,8 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         await safe_redis_call(lambda: redis_client.rpush(f"pdf:ready_recent:{payload.batch_id}", payload.job_id))
         await safe_redis_call(lambda: redis_client.expire(f"pdf:ready_recent:{payload.batch_id}", BATCH_METADATA_TTL_SECONDS))
         await safe_redis_call(lambda: _publish_batch_tick(payload.batch_id))
+        # Aviso mínimo, SIEMPRE se intenta -- ver publish_batch_signal.
+        await asyncio.to_thread(publish_batch_signal, payload.batch_id, "job_done")
     return {"status": "success", "message": "PDF generado"}
 
 @router.post("/cfdi/pdf/start")

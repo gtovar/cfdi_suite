@@ -34,24 +34,22 @@ SAFE_WRAPPER_NAMES = {"safe_redis_call", "safe_redis_call_sync"}
 # ya tomada y documentada en el código fuente en esa misma línea/bloque.
 ALLOWLIST: set[tuple[str, int]] = {
     (
-        "app/workers/batch_shard_worker.py", 185,
+        "app/workers/batch_shard_worker.py", 188,
     ),  # smembers de pdf:batch_ids en el camino "de siempre" (sin
         # ZIP_GCS_PATH) -- es el INSUMO de qué XMLs le tocan a esta tarea, no
         # un reporte; ver comentario ahí mismo. Fail-closed a propósito.
-        # (línea actualizada 2026-07-24, Fase 2 de centralización de Redis:
-        # mover las escrituras de status a batch_state_store.mark_job_* movió
-        # esta línea de 186 a 185 -- verificado corriendo el test, no a ojo.)
+        # (línea actualizada 2026-07-25, desacople Pusher/Redis: agregar
+        # publish_batch_signal en los 2 loops movió esta línea de 185 a 188 --
+        # verificado corriendo el test, no a ojo.)
     (
-        "app/routers/pdf.py", 1036,
+        "app/routers/pdf.py", 1043,
     ),  # scard cosmético dentro de flush_chunk -- ya vive en su propio
         # try/except (líneas de alrededor) que nunca deja que un fallo aquí
         # tumbe la subida real del chunk; no usa safe_redis_call por nombre
         # pero el efecto (nunca propaga) es el mismo.
-        # (línea actualizada 2026-07-24, Fase 2 de centralización de Redis:
-        # mover _batch_progress_snapshot/_reconcile_none_statuses_with_gcs/etc.
-        # a batch_state_store.py, más el hoist de storage.Client() en
-        # batch_progress/download_batch_zip, movió esta línea de 1187 a 1036 --
-        # verificado corriendo el test, no a ojo.)
+        # (línea actualizada 2026-07-25, desacople Pusher/Redis: agregar
+        # publish_batch_signal movió esta línea de 1036 a 1043 -- verificado
+        # corriendo el test, no a ojo.)
 }
 # NOTA 2026-07-24: el lock de idempotencia de process_zip_in_background
 # (antes en esta lista como deliberadamente fail-closed) pasó a best-effort
