@@ -40,6 +40,7 @@ from google.cloud import storage
 from remotezip import RemoteZip
 
 from ..services.batch_progress import BATCH_METADATA_TTL_SECONDS, publish_batch_tick
+from ..services.batch_state_store import mark_job_converting, mark_job_done, mark_job_error
 from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.pdf_pipeline import generate
 from ..services.realtime import publish_batch_progress
@@ -66,11 +67,11 @@ async def _process_one(bucket, job_id: str, template_id: str) -> None:
     blob_xml = bucket.blob(f"xml_temp/{job_id}.xml")
 
     if not await asyncio.to_thread(blob_xml.exists):
-        await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
+        await mark_job_error(redis_client, job_id)
         raise FileNotFoundError(f"xml_temp/{job_id}.xml no existe")
 
     xml_bytes = await asyncio.to_thread(blob_xml.download_as_bytes)
-    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"converting", ex=3600))
+    await mark_job_converting(redis_client, job_id)
 
     # Llamada directa, sin PDF_PROCESS_POOL: esta tarea YA es su propio
     # proceso aislado (una tarea de Cloud Run Job = un contenedor). El
@@ -88,8 +89,7 @@ async def _process_one(bucket, job_id: str, template_id: str) -> None:
     # <-- A partir de aquí el PDF ya está generado y subido -- el reporte de
     # abajo es best-effort, nunca puede hacer que este job se cuente como error.
 
-    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"done", ex=BATCH_METADATA_TTL_SECONDS))
-    await safe_redis_call(lambda: redis_client.set(f"pdf:size:{job_id}", str(len(pdf_bytes)).encode(), ex=86400))
+    await mark_job_done(redis_client, job_id, len(pdf_bytes))
     await asyncio.to_thread(blob_xml.delete)
 
 
@@ -98,7 +98,7 @@ async def _process_one_remote(rz: RemoteZip, bucket, job_id: str, filename: str,
     una lectura por rango (rz.read) en vez de xml_temp/{job_id}.xml -- sin
     paso intermedio de subida/descarga. No hay xml_temp que borrar aquí."""
     xml_bytes = await asyncio.to_thread(rz.read, filename)
-    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"converting", ex=3600))
+    await mark_job_converting(redis_client, job_id)
 
     pdf_bytes = generate(xml_bytes, template_id)
 
@@ -107,8 +107,7 @@ async def _process_one_remote(rz: RemoteZip, bucket, job_id: str, filename: str,
     # <-- A partir de aquí el PDF ya está generado y subido -- el reporte de
     # abajo es best-effort, nunca puede hacer que este job se cuente como error.
 
-    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"done", ex=BATCH_METADATA_TTL_SECONDS))
-    await safe_redis_call(lambda: redis_client.set(f"pdf:size:{job_id}", str(len(pdf_bytes)).encode(), ex=86400))
+    await mark_job_done(redis_client, job_id, len(pdf_bytes))
 
 
 def shard_slice(job_ids: list[str], task_index: int, shard_size: int) -> list[str]:
@@ -165,7 +164,7 @@ async def run_shard() -> None:
                     # tumbaba el shard completo vía sys.exit (ver Paso 2 de
                     # docs/plan-implementacion-resiliencia-redis-2026-07-23.md).
                     print(f"[batch_shard_worker] error procesando {job_id}: {exc}")
-                    await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
+                    await mark_job_error(redis_client, job_id)
                     await safe_redis_call(lambda: publish_batch_tick(redis_client, publish_batch_progress, batch_id, definitive_error=True))
         finally:
             rz.close()
@@ -205,7 +204,7 @@ async def run_shard() -> None:
             # ~99 XMLs del shard sí deben completarse. Tampoco debe tirarlo un
             # fallo de Redis durante el reporte (ver Paso 2 del plan).
             print(f"[batch_shard_worker] error procesando {job_id}: {exc}")
-            await safe_redis_call(lambda: redis_client.set(f"pdf:status:{job_id}", b"error", ex=BATCH_METADATA_TTL_SECONDS))
+            await mark_job_error(redis_client, job_id)
             await safe_redis_call(lambda: publish_batch_tick(redis_client, publish_batch_progress, batch_id, definitive_error=True))
 
 

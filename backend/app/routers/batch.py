@@ -30,6 +30,14 @@ BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
 def _analysis_bucket():
     return storage.Client().bucket(BUCKET_NAME)
 
+
+def _batch_hash_key(batch_id: str) -> str:
+    return f"batch:{batch_id}"
+
+
+def _batch_results_key(batch_id: str) -> str:
+    return f"batch:{batch_id}:results"
+
 # Configuración dinámica de Redis mediante variables de entorno
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
@@ -105,14 +113,14 @@ async def batch_analyze(files: list[UploadFile] = File(...)):
     # coordinación (contador de progreso), el contenido real de cada XML ya
     # no vive aquí (ver abajo), así que un fallo aquí no impide crear el
     # lote ni encolar el trabajo real.
-    safe_redis_call_sync(lambda: redis_client.hmset(f"batch:{batch_id}", {
+    safe_redis_call_sync(lambda: redis_client.hmset(_batch_hash_key(batch_id), {
         "total_files": len(contents),
         "completed_count": 0,
         "status": "processing"
     }))
     # Aseguramos la auto-limpieza de la memoria de Redis
-    safe_redis_call_sync(lambda: redis_client.expire(f"batch:{batch_id}", REDIS_TTL))
-    safe_redis_call_sync(lambda: redis_client.expire(f"batch:{batch_id}:results", REDIS_TTL))
+    safe_redis_call_sync(lambda: redis_client.expire(_batch_hash_key(batch_id), REDIS_TTL))
+    safe_redis_call_sync(lambda: redis_client.expire(_batch_results_key(batch_id), REDIS_TTL))
 
     bucket = _analysis_bucket()
 
@@ -175,7 +183,7 @@ async def _load_results_from_gcs(bucket, batch_id: str) -> list[dict]:
 @router.get("/status/{batch_id}")
 async def get_batch_status(batch_id: str):
     """Endpoint de consulta (polling) para el frontend y rehidratación de estado."""
-    batch_meta = safe_redis_call_sync(lambda: redis_client.hgetall(f"batch:{batch_id}"))
+    batch_meta = safe_redis_call_sync(lambda: redis_client.hgetall(_batch_hash_key(batch_id)))
     bucket = _analysis_bucket()
 
     if not batch_meta:
@@ -192,7 +200,7 @@ async def get_batch_status(batch_id: str):
         results = await _load_results_from_gcs(bucket, batch_id)
         return _build_status_response(total=len(submitted), completed=len(results), results=results)
 
-    raw_results = safe_redis_call_sync(lambda: redis_client.lrange(f"batch:{batch_id}:results", 0, -1))
+    raw_results = safe_redis_call_sync(lambda: redis_client.lrange(_batch_results_key(batch_id), 0, -1))
     results = [json.loads(r) for r in raw_results] if raw_results is not None else await _load_results_from_gcs(bucket, batch_id)
 
     completed = int(batch_meta.get("completed_count", 0))
@@ -290,8 +298,8 @@ async def batch_worker_task(request: Request):
     # Contadores/lista en Redis: best-effort desde que el resultado ya está a
     # salvo en GCS -- un fallo aquí solo retrasa lo que /status ve por Redis,
     # nunca pierde el resultado (get_batch_status cae a GCS si hace falta).
-    safe_redis_call_sync(lambda: redis_client.rpush(f"batch:{batch_id}:results", json.dumps(parsed_result)))
-    safe_redis_call_sync(lambda: redis_client.hincrby(f"batch:{batch_id}", "completed_count", 1))
+    safe_redis_call_sync(lambda: redis_client.rpush(_batch_results_key(batch_id), json.dumps(parsed_result)))
+    safe_redis_call_sync(lambda: redis_client.hincrby(_batch_hash_key(batch_id), "completed_count", 1))
 
     # Emitimos el evento en tiempo real solo si Pusher se inicializó correctamente
     if pusher_client:
