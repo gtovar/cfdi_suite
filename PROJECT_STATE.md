@@ -65,12 +65,23 @@ ni siquiera el evento `signal` diseñado justo para sobrevivir a Redis degradado
 promesa se quedaba colgada para siempre — mismo patrón del incidente original, por la
 ruta Pusher en vez de SSE.
 
-**Fix** (mismo patrón que `hasConnectedOnce` en `subscribeWithRetry`): bandera
-`hasFetchedOnce` en `fetchSnapshot`. El snapshot inicial se intenta siempre, sin
-importar `document.hidden`; los intentos SIGUIENTES (red de seguridad, `visibilitychange`,
-`state_change`, `signal`) siguen respetando la visibilidad exactamente igual que antes —
-la protección contra gastar cuota en pestañas que nadie mira queda intacta para
-reconexiones, solo se corrigió el contacto inicial.
+**Fix**: bandera `hasAttemptedOnce` en `fetchSnapshot` (renombrada de `hasFetchedOnce`
+para compartir nombre con el mismo patrón ya usado en `subscribeWithRetry`, antes
+`hasConnectedOnce` — inconsistencia señalada por el usuario, corregida antes de
+deployar). El snapshot inicial se intenta siempre, sin importar `document.hidden`; los
+intentos SIGUIENTES (red de seguridad, `visibilitychange`, `state_change`, `signal`)
+siguen respetando la visibilidad exactamente igual que antes — la protección contra
+gastar cuota en pestañas que nadie mira queda intacta para reconexiones, solo se
+corrigió el contacto inicial.
+
+**DESPLEGADO Y VERIFICADO EN VIVO** (commit `348467d`, GitHub Actions `deploy-frontend.yml`
+→ Vercel prod, https://cfdiinspector.vercel.app). Verificación real en navegador:
+navegando a `?batch=verificacion-fix-hidden-tab` en una pestaña con `document.hidden=true`
+y `document.hasFocus()=false` (confirmado por JS antes de la prueba), la UI mostró de
+inmediato "Error en el lote: Lote no encontrado" — el `GET /status` se disparó solo,
+capturado en la red del navegador, sin forzar `visibilitychange` ni dar foco a la
+pestaña. Antes del fix esa misma URL se habría quedado sin reaccionar. 117/117 tests
+frontend verdes.
 
 **Riesgo residual, aceptado a propósito, no resuelto por este fix**: si Redis está
 degradado (sin eventos `progress`) Y la pestaña permanece oculta durante TODO el ciclo
@@ -1324,16 +1335,13 @@ rompía en silencio todo deploy automático posterior vía `deploy-backend.yml`.
 
 ## Próximo paso
 **Fase 2 de centralización de Redis, el desacople de Pusher/Redis (`publish_batch_signal`)
-Y el atasco de `watchBatchProgress` con pestaña oculta al arrancar CERRADOS: código +
-tests verdes — ver "Deuda técnica pendiente" y "Último cambio" arriba. El fix de
-`watchBatchProgress` (2026-07-24) NO está desplegado todavía — pendiente de confirmación
-explícita antes del deploy.** Queda:
+Y el atasco de `watchBatchProgress` con pestaña oculta al arrancar CERRADOS: desplegados y
+verificados en vivo — ver "Deuda técnica pendiente" y "Último cambio" arriba.** Queda:
 1. Decidir qué hacer con el `export default` de `PdfTemplateBuilder.tsx`
    (componente no renderizado hoy, solo se reusa su tipo/constante) — diferido a
    propósito a una sesión aparte, sin relación con Redis.
 2. Confirmar si la cuota de Upstash ya se liberó (reset mensual) o si conviene
    subir de plan — seguía agotada la última vez que se verificó (2026-07-25).
-3. Confirmar deploy del fix de `watchBatchProgress` (2026-07-24, ver "Último cambio").
 
 ## Historial: plan de resiliencia Redis Fase 1 original (previo a lo de arriba)
 **Backend del plan de resiliencia Redis (Pasos 1-6 + 4 bugs adicionales), el hallazgo
