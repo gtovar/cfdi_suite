@@ -368,8 +368,28 @@ export function watchBatchProgress(
       }
     };
 
+    // "Lote no encontrado" justo tras crear el batch nosotros mismos (el
+    // caller acaba de recibir este batchId de /start-zip-gcs) es casi
+    // siempre transitorio, no un error real: confirmado en vivo (2026-07-25)
+    // que hay una ventana de ~300ms-1s entre que el backend responde y que
+    // pdf:extracting es visible para una lectura posterior (latencia de
+    // propagación de Redis/Upstash, no un fallo). Sin este margen, watchBatchProgress
+    // se rendía (reject terminal) mientras el lote seguía procesándose
+    // normalmente en el backend -- el usuario se quedaba con un error
+    // permanente en pantalla sin ninguna forma de verlo terminar. El mensaje
+    // debe coincidir exacto con get_batch_snapshot (batch_state_store.py).
+    const NOT_FOUND_MESSAGE = 'Lote no encontrado';
+    const NOT_FOUND_MAX_RETRIES = 6;
+    const NOT_FOUND_RETRY_DELAY_MS = 500;
+    let notFoundRetries = 0;
+
     const handle = (data: BatchProgressPayload) => {
       if (settled) return;
+      if (data.status === 'error' && data.message === NOT_FOUND_MESSAGE && notFoundRetries < NOT_FOUND_MAX_RETRIES) {
+        notFoundRetries++;
+        setTimeout(() => void fetchSnapshot(), NOT_FOUND_RETRY_DELAY_MS);
+        return;
+      }
       onProgress(data);
       if (data.status === 'done') finish(resolve);
       else if (data.status === 'error') finish(() => reject(new Error(data.message || 'Ocurrió un error crítico en el lote')));

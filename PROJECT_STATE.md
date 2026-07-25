@@ -51,6 +51,41 @@ main
   114 frontend, todos verdes.
 
 ## Último cambio
+**2026-07-25: corregido "Lote no encontrado" tratado como error terminal en la
+creación de un batch** (`frontend/src/lib/pdf-download.ts`, `watchBatchProgress`).
+
+Hallazgo real durante la verificación en navegador del rediseño hint-only
+(entrada de abajo): subiendo un ZIP real (3 y luego 14 XMLs de prueba), el
+frontend mostraba "Error en el lote: Lote no encontrado" de inmediato y se
+rendía (Pusher desconectado, listeners removidos) -- mientras el backend
+seguía procesando y terminaba el lote correctamente segundos después
+(confirmado con `curl` en vivo mientras la UI seguía mostrando el error).
+Reproducido 4/4 veces en navegador. **Pre-existente, no introducido por el
+rediseño de hoy** -- confirmado con `git diff` que nunca se tocó la rama
+`"Lote no encontrado"` de `get_batch_snapshot` ni el `finish(reject)` de
+`handle()`.
+
+**Causa raíz, aislada con un script Python golpeando la API directo (sin
+navegador, para descartar overhead del lado cliente)**: hay una ventana real
+de ~300ms-1s entre que `POST /start-zip-gcs` responde (tras `SET
+pdf:extracting` en Redis, ya `await`eado) y que esa escritura es visible para
+una lectura posterior -- consistente con latencia de propagación de
+Redis/Upstash entre conexiones, no con un fallo de la app. El cliente, al
+acabar de crear el batch él mismo, relee `/status` de inmediato (correcto,
+es justo lo que hace el snapshot inicial) y puede ganarle a esa propagación.
+
+**Fix**: en `handle()`, `status: 'error'` con mensaje exacto `"Lote no
+encontrado"` ya no es terminal de inmediato -- se reintenta hasta 6 veces
+cada 500ms (cubre la ventana observada con margen) antes de darse por
+vencido. Un error real y distinto (`pdf:extracting_error`, con otro mensaje)
+sigue siendo terminal sin reintentos. Verificado en vivo tras el fix: el
+mismo lote de 14 XMLs completó en pantalla sin mostrar el error falso.
+
+Tests: 2 nuevos en `pdf-download.test.ts` (se recupera del "no encontrado"
+transitorio; sí termina en error si persiste más allá de los reintentos).
+119 tests frontend, todos verdes.
+
+## Último cambio (anterior)
 **2026-07-25: rediseño hint-only del progreso de batch -- causa raíz, no parche**
 (`backend/app/services/realtime.py`, `batch_progress.py` [borrado],
 `app/routers/pdf.py`, `app/workers/batch_shard_worker.py`,
@@ -137,7 +172,7 @@ se agregó uno nuevo para el guard de secuencia de abajo). `npm run build` y
 `ConversionMasivaPage.test.tsx` son preexistentes en `main`, confirmado con
 `git stash`, no introducidos aquí).
 
-## Último cambio (anterior)
+## Último cambio (anterior-2)
 **2026-07-24: corregido el atasco de `watchBatchProgress` cuando la pestaña arranca oculta**
 (`frontend/src/lib/pdf-download.ts`). Hallazgo de la sesión anterior (ver entrada de
 2026-07-25 debajo) quedó documentado como "no es un bug, es protección deliberada" —
@@ -182,7 +217,7 @@ Tests: 2 nuevos en `pdf-download.test.ts` (regresión del atasco + confirmación
 las reconexiones posteriores siguen respetando `document.hidden`). 117/117 frontend
 verdes. **NO desplegado todavía** — pendiente de confirmación explícita antes de deploy.
 
-## Último cambio (anterior-2)
+## Último cambio (anterior-3)
 **2026-07-25: desacoplado el aviso en vivo de Pusher de la salud de Redis**
 (`publish_batch_signal`, `backend/app/services/realtime.py`). Hallazgo posterior a la
 Fase 2, encontrado probando en navegador real contra producción a pedido explícito del

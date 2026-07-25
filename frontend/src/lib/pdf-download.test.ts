@@ -184,6 +184,52 @@ describe('watchBatchProgress', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('reintenta "Lote no encontrado" antes de rendirse -- ventana de propagación tras crear el batch (confirmado en vivo 2026-07-25)', async () => {
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'error', message: 'Lote no encontrado' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'processing', total: 14, done: 0, error: 0, converting: 0, pending: 14, percentage: 0 }), { status: 200 }));
+
+    const progressCalls: Array<{ status: string }> = [];
+    const promise = watchBatchProgress('batch-1', (p) => progressCalls.push(p));
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial -- "Lote no encontrado"
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(progressCalls).toHaveLength(0); // no se propaga como error real todavía
+
+    await vi.advanceTimersByTimeAsync(500); // reintento tras el margen de propagación
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(progressCalls[0]?.status).toBe('processing'); // ya se recuperó
+
+    mockChannelHandlers['signal']?.({ kind: 'job_done' });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: 'done', total: 14, done: 14, error: 0, converting: 0, pending: 0, percentage: 100 }), { status: 200 }),
+    );
+    mockChannelHandlers['signal']?.({ kind: 'job_done' });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it('SÍ termina en error si "Lote no encontrado" persiste más allá de los reintentos', async () => {
+    // mockImplementation (no mockResolvedValue) -- una Response nueva por
+    // llamada, ya que el body solo se puede leer (.json()) una vez.
+    vi.mocked(globalThis.fetch).mockImplementation(async () =>
+      new Response(JSON.stringify({ status: 'error', message: 'Lote no encontrado' }), { status: 200 }),
+    );
+
+    const promise = watchBatchProgress('batch-1', () => {});
+    let rejected = false;
+    promise.catch(() => { rejected = true; });
+
+    await vi.advanceTimersByTimeAsync(0); // snapshot inicial (intento #1)
+    for (let i = 0; i < 7; i++) {
+      await vi.advanceTimersByTimeAsync(600); // 6 reintentos programados + el intento #7 (terminal) que los agota
+    }
+
+    expect(rejected).toBe(true);
+    await expect(promise).rejects.toThrow('Lote no encontrado');
+  });
+
   it('un state_change que sale de "connected" dispara una reconciliación inmediata', async () => {
     watchBatchProgress('batch-1', () => {});
     await vi.advanceTimersByTimeAsync(0); // snapshot inicial
