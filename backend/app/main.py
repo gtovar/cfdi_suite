@@ -47,9 +47,23 @@ async def _lifespan(app: FastAPI):
     yield
 
 # === INICIALIZACIÓN DE SENTRY ===
+
+def _sentry_strip_sensitive(event, hint):
+    breadcrumbs = event.get("breadcrumbs", {}).get("values")
+    if breadcrumbs:
+        for crumb in breadcrumbs:
+            url = (crumb.get("data") or {}).get("url")
+            if isinstance(url, str) and "?" in url:
+                crumb["data"]["url"] = url.split("?")[0]
+    request = event.get("request")
+    if request and isinstance(request.get("url"), str) and "?" in request["url"]:
+        request["url"] = request["url"].split("?")[0]
+    return event
+
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
-    traces_sample_rate=1.0, # Captura el 100% de las transacciones para medir rendimiento
+    traces_sample_rate=1.0,
+    before_send=_sentry_strip_sensitive,
 )
 
 app = FastAPI(title="cfdi-suite-api", version="0.1.0", lifespan=_lifespan)
