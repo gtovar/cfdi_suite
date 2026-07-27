@@ -1136,6 +1136,8 @@ function HeaderPreview({ html }) {
       ref={containerRef}
       style={{ width: '100%', height: `${Math.round(iframeH * scale)}px`, overflow: 'hidden', lineHeight: 0 }}
     >
+      {/* allow-same-origin sin allow-scripts: necesario para logo, nunca con scripts */
+      }
       <iframe
         srcDoc={html}
         title="Encabezado de factura"
