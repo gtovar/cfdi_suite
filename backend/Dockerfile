@@ -36,6 +36,21 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# El contenedor corría como root. En Cloud Run el panel lo calificó
+# NO_EXPLOTABLE (gVisor aísla el kernel), pero cuesta dos líneas y es lo que
+# limita el daño si el servicio se migra a GKE o se corre en local con Docker.
+# Va después del COPY para que el chown alcance los archivos ya copiados.
+RUN useradd -m -u 1000 app && chown -R app:app /app
+
+# HOME explícito, no opcional: credentials.py:9 y fiel_config.py:9 guardan la
+# llave Fernet y los datos cifrados en `Path.home()/.cfdi-suite`, y lo crean en
+# el primer uso con mkdir(mode=0o700). Path.home() lee la variable HOME antes
+# de caer al /etc/passwd, y si el runtime la deja heredada en /root el usuario
+# `app` no puede escribir ahí y el flujo de emisores/FIEL revienta. Fijándola
+# aquí el resultado es el mismo en Docker local, Cloud Run y GKE.
+ENV HOME=/home/app
+USER app
+
 ENV PYTHONUNBUFFERED=1
 
 # Un solo comando, limpio y directo para tu API
