@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ..fiel_config import delete_fiel, fiel_rfc, load_fiel, save_fiel
+from ..security import verify_user_identity
 from ..services.error_reporting import report
 
 router = APIRouter(prefix="/api/rfc", tags=["rfc"])
@@ -99,8 +100,11 @@ def validate_rfc_format(body: RfcValidateRequest) -> RfcFormatResult:
 
 
 @router.post("/validate/sat", response_model=RfcSatResult)
-def validate_rfc_sat(body: RfcValidateRequest) -> RfcSatResult:
-    fiel_data = load_fiel()
+def validate_rfc_sat(
+    body: RfcValidateRequest,
+    tenant_id: str = Depends(verify_user_identity),
+) -> RfcSatResult:
+    fiel_data = load_fiel(tenant_id)
     if not fiel_data:
         raise HTTPException(status_code=409, detail="FIEL no configurada. Configura tu e.Firma en Ajustes.")
 
@@ -125,8 +129,10 @@ def validate_rfc_sat(body: RfcValidateRequest) -> RfcSatResult:
 
 
 @fiel_router.get("/status", response_model=FielStatus)
-def get_fiel_status() -> FielStatus:
-    rfc = fiel_rfc()
+def get_fiel_status(
+    tenant_id: str = Depends(verify_user_identity),
+) -> FielStatus:
+    rfc = fiel_rfc(tenant_id)
     return FielStatus(configurada=rfc is not None, rfc=rfc)
 
 
@@ -135,6 +141,7 @@ async def configure_fiel(
     cer: UploadFile = File(...),
     key: UploadFile = File(...),
     password: str = Form(...),
+    tenant_id: str = Depends(verify_user_identity),
 ) -> FielStatus:
     cer_bytes = await cer.read()
     key_bytes = await key.read()
@@ -146,12 +153,14 @@ async def configure_fiel(
         report(exc, contexto="fiel_invalida")
         raise HTTPException(status_code=400, detail="La e.firma no es válida o la contraseña es incorrecta") from exc
 
-    save_fiel(cer_bytes, key_bytes, password)
-    rfc = fiel_rfc()
+    save_fiel(cer_bytes, key_bytes, password, tenant_id)
+    rfc = fiel_rfc(tenant_id)
     return FielStatus(configurada=True, rfc=rfc)
 
 
 @fiel_router.delete("/", response_model=FielStatus)
-def remove_fiel() -> FielStatus:
-    delete_fiel()
+def remove_fiel(
+    tenant_id: str = Depends(verify_user_identity),
+) -> FielStatus:
+    delete_fiel(tenant_id)
     return FielStatus(configurada=False, rfc=None)
