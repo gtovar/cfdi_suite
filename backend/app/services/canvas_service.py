@@ -5,6 +5,15 @@ Arquitectura: escribe páginas directo al stream PDF sin árbol en memoria (O(N)
 Para N > 2000 divide en chunks (mismas funciones, spawn-safe si algo externo
 las llama vía multiprocessing) — el aislamiento por proceso ahora vive un
 nivel arriba, en pdf_pipeline._POOL, que aísla el documento completo.
+
+Auditoría SSTI (#11, 2026-07-27): NO hay superficie de Server-Side Template
+Injection. Este archivo usa exclusivamente la API programática de ReportLab
+(rl_canvas) para dibujar texto, líneas y rectángulos en el PDF. No usa Jinja2,
+Mako, str.format() con input del usuario, ni eval/exec. Los datos de fila
+(conceptos del XML) se pasan directamente a drawString() como valores simples.
+La defensa contra HTML/script injection en la ruta de plantillas WeasyPrint
+la provee bleach en shell_service.py:save_html_template (#41) y el sandbox
+sin allow-scripts del iframe de preview (#40).
 """
 from __future__ import annotations
 
