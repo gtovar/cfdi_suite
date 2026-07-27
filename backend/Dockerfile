@@ -1,4 +1,19 @@
-FROM python:3.12-slim
+# Imagen base fijada por digest: el tag `3.12-slim` es mutable y hoy apunta a
+# una imagen distinta cada vez que Docker Hub lo republica, así que dos builds
+# del mismo commit pueden no producir el mismo contenedor.
+#
+# Para actualizarla (revisar el changelog de la base antes de subir el digest):
+#   TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/python:pull" \
+#     | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+#   curl -sI -H "Authorization: Bearer $TOKEN" \
+#     -H "Accept: application/vnd.oci.image.index.v1+json" \
+#     https://registry-1.docker.io/v2/library/python/manifests/3.12-slim \
+#     | grep -i docker-content-digest
+# (o `docker buildx imagetools inspect python:3.12-slim` si hay daemon)
+#
+# Digest tomado el 2026-07-26. Es el índice multi-arquitectura, no el manifest
+# de una sola plataforma: incluye linux/amd64, que es lo que corre Cloud Run.
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 WORKDIR /app
 
