@@ -30,6 +30,7 @@ from ..policy import ANALYZE_CFDI_XML_MAX_CHARS
 from ..services.redis_safety import safe_redis_call_sync
 from ..services.internal_auth import verify_cloud_tasks
 from ..services.error_reporting import report
+from ..rate_limits import rate_limit
 
 router = APIRouter(prefix="/api/cfdi/batch")
 
@@ -132,7 +133,10 @@ async def _read_upload(f: UploadFile) -> tuple[str, bytes]:
     return (f.filename or "archivo.xml", await f.read())
 
 @router.post("/analyze")
-async def batch_analyze(files: list[UploadFile] = File(...)):
+async def batch_analyze(
+    files: list[UploadFile] = File(...),
+    _rate=rate_limit(5),
+):
     if not files:
         raise HTTPException(400, "Se requiere al menos un archivo")
     if len(files) > MAX_FILES:

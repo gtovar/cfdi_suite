@@ -11,7 +11,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-# Importamos el parser nativo de Starlette para alterar su configuración global
 from starlette.formparsers import MultiPartParser
 
 from opentelemetry import trace
@@ -21,6 +20,7 @@ from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
+from .rate_limits import rate_limit
 from .security import verify_user_identity
 from .observability import record_analyze_cfdi_error
 from .routers.batch import router as batch_router
@@ -75,7 +75,7 @@ app = FastAPI(
     dependencies=[Depends(verify_user_identity)],
 )
 
-# ¡AQUÍ ESTÁ TU ALERTA AUTOMÁTICA!
+
 @app.exception_handler(InvalidArgument)
 async def google_invalid_argument_handler(request: Request, exc: InvalidArgument):
     # Enviar el error detallado a Sentry con esteroides
@@ -186,5 +186,8 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/cfdi/analyze", response_model=AnalyzeCfdiResponse)
-def analyze_cfdi(payload: AnalyzeCfdiRequest) -> AnalyzeCfdiResponse:
+def analyze_cfdi(
+    payload: AnalyzeCfdiRequest,
+    _rate=rate_limit(30),
+) -> AnalyzeCfdiResponse:
     return run_analyze_cfdi(payload.xml)

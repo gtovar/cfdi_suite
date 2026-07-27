@@ -18,6 +18,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from ..credentials import get as get_cred
+from ..rate_limits import rate_limit
 from ..security import verify_user_identity
 from ..services.error_reporting import report
 
@@ -393,6 +394,7 @@ def _build_result_excel(
 async def single_sat_enquiry(
     body: EnquiryRequest,
     tenant_id: str = Depends(verify_user_identity),
+    _rate=rate_limit(20),
 ) -> EnquiryResult:
     cred = get_cred(body.rfc_emisor.upper(), tenant_id)
     if not cred:
@@ -423,6 +425,7 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 async def batch_sat_enquiry(
     file: UploadFile = File(...),
     tenant_id: str = Depends(verify_user_identity),
+    _rate=rate_limit(5),
 ) -> StreamingResponse:
     content = await file.read()
 
