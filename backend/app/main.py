@@ -111,7 +111,6 @@ except Exception as e:
 # --- FIN CLOUD TRACE ---
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-
 _allowed_origins = os.getenv(
     "ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 ).split(",")
