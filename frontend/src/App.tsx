@@ -18,6 +18,7 @@ import AppSidebar, { type AppView } from './components/AppNav';
 import AppHeader from './components/AppHeader';
 import CfdiSummaryHeader from './components/CfdiSummaryHeader';
 import BatchAnalysisPage from './components/BatchAnalysisPage';
+import { assertBatchId } from './lib/ids';
 import FloatingBatchWidget, { type BatchProgressStatus } from './components/FloatingBatchWidget';
 import CleanStatePanel from './components/CleanStatePanel';
 import ConceptDetailModal from './components/ConceptDetailModal';
@@ -102,9 +103,10 @@ export default function App() {
   const [widgetDismissed, setWidgetDismissed] = useState(false);
   const [batchPdfStatus, setBatchPdfStatus] = useState<BatchProgressStatus | null>(null);
   const [widgetPdfDismissed, setWidgetPdfDismissed] = useState(false);
-  const [restorePdfBatchId] = useState<string | null>(() =>
-    new URLSearchParams(window.location.search).get('batch')
-  );
+  const [restorePdfBatchId] = useState<string | null>(() => {
+    const raw = new URLSearchParams(window.location.search).get('batch');
+    return raw ? assertBatchId(raw) : null;
+  });
   const [taxAuditExpanded, setTaxAuditExpanded] = useState(false);
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'auditoria' | 'nodo-xml'>('auditoria');

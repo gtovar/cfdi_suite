@@ -27,6 +27,7 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { batchAnalyzePool, batchDiot, type BatchFileResult } from '../lib/batch-api-client';
+import { assertBatchId } from '../lib/ids';
 import {
   type PdfConversionState,
   convertFileToPdf,
@@ -742,7 +743,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
   // EFECTO DE RESILIENCIA EXTRA: Al montar la vista, revisa si había un lote corriendo antes
   useEffect(() => {
-    const savedBatchId = localStorage.getItem('cfdi_active_batch_id');
+    const raw = localStorage.getItem('cfdi_active_batch_id');
+    const savedBatchId = raw ? assertBatchId(raw) : null;
     if (savedBatchId) {
       activeBatchIdRef.current = savedBatchId;
       setPhase('processing');
@@ -942,7 +944,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       if (channelRef.current && pusherRef.current) {
         channelRef.current.unbind_all();
         // Intentamos recuperar el lote del localStorage si existiera para desvincularlo
-        const savedBatchId = localStorage.getItem('cfdi_active_batch_id');
+        const raw = localStorage.getItem('cfdi_active_batch_id');
+    const savedBatchId = raw ? assertBatchId(raw) : null;
         if (savedBatchId) pusherRef.current.unsubscribe(`batch_${savedBatchId}`);
       }
     };
