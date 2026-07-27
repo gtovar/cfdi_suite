@@ -335,6 +335,13 @@ def _parse_excel_input(content: bytes) -> ParsedInput:
 def _build_result_excel(
     rows_input: list[dict[str, str]], results: list[dict[str, Any] | None]
 ) -> bytes:
+    def _sanitize_xlsx(val: str) -> str:
+        if not val or not isinstance(val, str):
+            return str(val) if val else ""
+        if val.startswith(("=", "+", "-", "@")):
+            return "'" + val
+        return val
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Resultados SAT"
@@ -357,15 +364,15 @@ def _build_result_excel(
         r: dict[str, Any] = result or {}
         ws.append(
             [
-                row["uuid"],
-                row["rfc_emisor"],
-                row["rfc_receptor"],
-                row["motive"],
-                r.get("estado", ""),
-                r.get("es_cancelable", ""),
-                r.get("estatus_cancelacion", ""),
+                _sanitize_xlsx(row["uuid"]),
+                _sanitize_xlsx(row["rfc_emisor"]),
+                _sanitize_xlsx(row["rfc_receptor"]),
+                _sanitize_xlsx(row["motive"]),
+                _sanitize_xlsx(r.get("estado", "")),
+                _sanitize_xlsx(r.get("es_cancelable", "")),
+                _sanitize_xlsx(r.get("estatus_cancelacion", "")),
                 now,
-                r.get("error", "") or "",
+                _sanitize_xlsx(r.get("error", "") or ""),
             ]
         )
 

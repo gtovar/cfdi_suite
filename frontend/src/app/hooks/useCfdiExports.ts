@@ -13,7 +13,10 @@ function downloadBlob(content: BlobPart, filename: string, type: string) {
 }
 
 function escapeCsv(value: string | number) {
-  return `"${String(value).replaceAll('"', '""')}"`;
+  const s = String(value);
+  const sanitized = (s.startsWith('=') || s.startsWith('+') || s.startsWith('-') || s.startsWith('@'))
+    ? "'" + s : s;
+  return `"${sanitized.replaceAll('"', '""')}"`;
 }
 
 export function useCfdiExports(params: {

@@ -186,7 +186,10 @@ function exportResultsCsv(results: BatchFileResult[], filename = 'cfdi-batch.csv
     cols.map(c => {
       const v = r[c];
       if (v === null || v === undefined || v === '') return '';
-      return `"${String(v).replace(/"/g, '""')}"`;
+      const s = String(v);
+      const sanitized = (s.startsWith('=') || s.startsWith('+') || s.startsWith('-') || s.startsWith('@'))
+        ? "'" + s : s;
+      return `"${sanitized.replace(/"/g, '""')}"`;
     }).join(',')
   );
   const blob = new Blob(['﻿' + header + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });

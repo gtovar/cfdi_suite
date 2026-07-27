@@ -15,7 +15,9 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
 
   function handleCopy() {
-    navigator.clipboard.writeText(value).then(() => {
+    const sanitized = (value.startsWith('=') || value.startsWith('+') || value.startsWith('-') || value.startsWith('@'))
+      ? "'" + value : value;
+    navigator.clipboard.writeText(sanitized).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     });
