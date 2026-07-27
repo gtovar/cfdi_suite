@@ -10,6 +10,7 @@ import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
+import bleach
 from weasyprint import HTML
 from weasyprint.text.fonts import FontConfiguration
 from weasyprint.urls import default_url_fetcher
@@ -205,7 +206,6 @@ def get_html_template(template_id: str) -> str:
 
 def save_html_template(template_id: str, html: str) -> None:
     """Guarda el HTML de un template en disco, sanitizado."""
-    import bleach
     allowed_tags = [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup",
         "dd", "div", "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6",

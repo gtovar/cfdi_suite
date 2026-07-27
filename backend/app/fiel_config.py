@@ -4,8 +4,6 @@ import base64
 import json
 from pathlib import Path
 
-from cryptography.fernet import Fernet
-
 from .fernet_utils import _ensure_key as _fernet
 
 _SUITE_DIR = Path.home() / ".cfdi-suite"
