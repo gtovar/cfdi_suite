@@ -56,7 +56,7 @@ redis_client = aioredis.Redis(
     port=int(os.getenv("REDIS_PORT", "6379")),
     password=os.getenv("REDIS_PASSWORD", None),
     ssl=True,
-    ssl_cert_reqs=None,
+    ssl_cert_reqs="required",
     max_connections=10,
     decode_responses=False,
 )
