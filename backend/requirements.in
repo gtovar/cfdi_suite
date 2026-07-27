@@ -25,3 +25,4 @@ pusher>=3.3.0,<4
 google-cloud-storage>=2.14.0
 google-cloud-run>=0.10,<1
 remotezip>=0.12,<1
+bleach>=6,<7

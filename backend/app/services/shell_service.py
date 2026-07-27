@@ -204,9 +204,26 @@ def get_html_template(template_id: str) -> str:
 
 
 def save_html_template(template_id: str, html: str) -> None:
-    """Guarda el HTML de un template en disco."""
+    """Guarda el HTML de un template en disco, sanitizado."""
+    import bleach
+    allowed_tags = [
+        "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup",
+        "dd", "div", "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6",
+        "hr", "i", "img", "li", "ol", "p", "pre", "q", "small", "span",
+        "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th",
+        "thead", "tr", "u", "ul",
+    ]
+    allowed_attrs = {
+        "*": ["class", "id", "style"],
+        "a": ["href", "title"],
+        "img": ["src", "alt", "width", "height"],
+        "td": ["colspan", "rowspan"],
+        "th": ["colspan", "rowspan"],
+        "col": ["span"],
+    }
+    safe_html = bleach.clean(html, tags=allowed_tags, attributes=allowed_attrs, strip=True)
     path = HTML_TEMPLATES_DIR / f"{template_id}.html"
-    path.write_text(html, encoding="utf-8")
+    path.write_text(safe_html, encoding="utf-8")
 
 
 def _fill_placeholders(html: str, cfdi_data: dict, design_config: dict | None = None) -> str:
