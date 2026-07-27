@@ -41,7 +41,7 @@ jobs:
           # faltaba aquí y sí estaba vivo, se agregó abajo.
           env_vars_update_strategy: overwrite
           env_vars: |
-            ALLOWED_ORIGINS=${{ secrets.VERCEL_URL }}
+            ALLOWED_ORIGINS=${{ vars.VERCEL_URL }}
             REDIS_HOST=${{ vars.REDIS_HOST }}
             REDIS_PORT=6379
             REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
@@ -49,7 +49,7 @@ jobs:
             API_URL=https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app
             SENTRY_DSN=${{ secrets.SENTRY_DSN }}
             PUSHER_APP_ID=${{ secrets.PUSHER_APP_ID }}
-            PUSHER_KEY=${{ secrets.PUSHER_KEY }}
+            PUSHER_KEY=${{ vars.PUSHER_KEY }}
             PUSHER_SECRET=${{ secrets.PUSHER_SECRET }}
             PUSHER_CLUSTER=${{ vars.PUSHER_CLUSTER }}
             GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
