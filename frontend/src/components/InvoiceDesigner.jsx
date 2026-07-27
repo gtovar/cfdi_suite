@@ -516,7 +516,7 @@ export default function InvoiceDesigner({ templateId = 'default', onTemplateIdCh
   const previewHtml = useMemo(() => {
     if (!htmlTemplate) return ''
     const logoBlock = logoUrl
-      ? `<div class="logo-area"><img src="${logoUrl}" /></div>`
+      ? `<div class="logo-area"><img src="${String(logoUrl).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" /></div>`
       : ''
     const filled = fillPreviewPlaceholders(htmlTemplate, {
       ...SAMPLE,
@@ -660,7 +660,7 @@ export default function InvoiceDesigner({ templateId = 'default', onTemplateIdCh
     setStatus(null)
     try {
       const logoBlock = logoUrl
-        ? `<div class="logo-area"><img src="${logoUrl}" /></div>`
+        ? `<div class="logo-area"><img src="${String(logoUrl).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" /></div>`
         : ''
       const filledForPdf = fillPreviewPlaceholders(htmlTemplate, {
         ...SAMPLE,
@@ -676,7 +676,7 @@ export default function InvoiceDesigner({ templateId = 'default', onTemplateIdCh
       if (!res.ok) throw new Error('Error generando preview PDF')
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
-      window.open(url, '_blank')
+      window.open(url, '_blank', 'noopener,noreferrer')
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
     } catch (e) {
       setStatus({ type: 'error', msg: String(e) })
@@ -688,7 +688,7 @@ export default function InvoiceDesigner({ templateId = 'default', onTemplateIdCh
   // Abre el PDF de preview de tabla ya generado en una pestaña nueva (barato:
   // reusa el blob URL que mantiene runTablePreview).
   const openTablePreviewInNewTab = () => {
-    if (tablePdfUrlRef.current) window.open(tablePdfUrlRef.current, '_blank')
+    if (tablePdfUrlRef.current) window.open(tablePdfUrlRef.current, '_blank', 'noopener,noreferrer')
   }
 
   // ── Fase 4: derivados para la UI del selector ───────────────────────────────
