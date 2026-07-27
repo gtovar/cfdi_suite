@@ -44,13 +44,11 @@ jobs:
             ALLOWED_ORIGINS=${{ vars.VERCEL_URL }}
             REDIS_HOST=${{ vars.REDIS_HOST }}
             REDIS_PORT=6379
-            REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
             MODE=api
             API_URL=https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app
             SENTRY_DSN=${{ secrets.SENTRY_DSN }}
             PUSHER_APP_ID=${{ secrets.PUSHER_APP_ID }}
             PUSHER_KEY=${{ vars.PUSHER_KEY }}
-            PUSHER_SECRET=${{ secrets.PUSHER_SECRET }}
             PUSHER_CLUSTER=${{ vars.PUSHER_CLUSTER }}
             GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
             REMOTE_ZIP_SHARD_READ=true
@@ -58,6 +56,21 @@ jobs:
             BATCH_JOB_THRESHOLD=500
             BATCH_JOB_SHARD_SIZE=20
             BATCH_JOB_NAME=cfdi-batch-shard
+          # Secretos que Cloud Run inyecta desde Secret Manager (no visibles en
+          # consola ni en --set-env-vars). Requiere crear cada secreto en GCP
+          # Secret Manager antes del despliegue:
+          #   gcloud secrets create redis-password --replication-policy=automatic
+          #   echo -n "..." | gcloud secrets versions add redis-password --data-file=-
+          #   gcloud secrets create pusher-secret --replication-policy=automatic
+          #   echo -n "..." | gcloud secrets versions add pusher-secret --data-file=-
+          #   gcloud secrets create api-bearer-token --replication-policy=automatic
+          #   echo -n "..." | gcloud secrets versions add api-bearer-token --data-file=-
+          # La SA cfdi-suite-api-sa necesita secretmanager.versions.access sobre
+          # estos secretos (ya otorgado en fix #26).
+          secrets: |
+            REDIS_PASSWORD=redis-password:latest
+            PUSHER_SECRET=pusher-secret:latest
+            API_BEARER_TOKEN=api-bearer-token:latest
           # OJO: `flags` es un bloque literal (|), no una lista YAML. Todo lo
           # que se escriba adentro se le pasa tal cual a gcloud como bandera --
           # un comentario `#` aquí dentro rompe el deploy. Los comentarios van
