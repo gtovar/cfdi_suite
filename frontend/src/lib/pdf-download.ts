@@ -3,9 +3,7 @@ import Pusher from 'pusher-js';
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
 
 function resolveApiBaseUrl() {
-  // @ts-ignore
   const url = import.meta.env.VITE_API_BASE_URL || '';
-  console.log("📡 URL BASE PARA ZIP DETECTADA EN PDF-DOWNLOAD:", url);
   return url;
 }
 

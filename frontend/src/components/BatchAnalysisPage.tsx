@@ -156,9 +156,8 @@ const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto'
 
 // Añade este helper aquí:
 function resolveApiBaseUrl() {
-    // @ts-ignore
-    const url = import.meta.env.VITE_API_BASE_URL || 'https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app';
-    console.log("📡 URL BASE DE LA API DETECTADA EN EL NAVEGADOR:", url);
+    const url = import.meta.env.VITE_API_BASE_URL;
+    if (!url) throw new Error('VITE_API_BASE_URL no está configurada');
     return url;
 }
 
