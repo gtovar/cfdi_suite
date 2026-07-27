@@ -160,6 +160,26 @@ ir en cualquier orden. Cada fila apunta a su spec — **no la copies, léela ah�
 
 > ⚠️ El paso 26 **depende del 25**: no puedes exigir hashes antes de generarlos.
 >
+> **Corrección al paso 20 (`#29`), verificada el 2026-07-26.** El hallazgo dice
+> "sin pre-commit hooks" y eso es media verdad: no hay `.pre-commit-config.yaml`,
+> pero **sí existe `.git/hooks/pre-commit`**, escrito a mano, con tres etapas
+> (react-doctor → `.claude/hooks/governance.sh` → `detect-secrets-hook --baseline`).
+> Funciona: bloqueó un commit real ese día. El defecto no es "no hay hooks" sino
+> que **viven sólo en `.git/` y no se versionan**: no existen en otro clone, en un
+> worktree nuevo ni en CI. El fix es migrarlos a `.pre-commit-config.yaml` sin
+> perder las tres etapas, no crearlos desde cero.
+>
+> **Corrección al paso 21 (`#32`), verificada el 2026-07-26 — es peor de lo
+> escrito.** El baseline no sólo está viejo (generado 2026-07-06, 3 hits en 2
+> archivos que ya ni existen). Tiene un **falso negativo sobre un secreto de
+> servidor real**: el valor de `PUSHER_SECRET` estaba copiado literal desde
+> `backend/.env` en `docs/seguridad/batch-7/findings.json:453` y `detect-secrets`
+> **no lo detectó** — pasó el hook sin una sola alerta. Se redactó a mano antes
+> de versionar el archivo (nunca llegó a git; no hubo exposición). El fix tiene
+> que incluir **por qué** no lo vio: revisar que `KeywordDetector` y los plugins
+> de alta entropía corran sobre `.json`, no sólo sobre código y `.env`. Un
+> baseline al día con ese hueco abierto sigue dejando pasar secretos.
+>
 > **Sobre el paso 24 — hay un dato que la spec original no tenía.** En Vercel
 > Production, `VITE_PUSHER_KEY` y `VITE_PUSHER_CLUSTER` están definidas con valor
 > **cadena vacía**, así que el `||` del código las trata como falsy y **la key
