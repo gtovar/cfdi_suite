@@ -48,7 +48,7 @@ class PublishBatchSignalUnitTests(unittest.TestCase):
             realtime.publish_batch_signal("batch-1", "job_done")
 
         mock_client.trigger.assert_called_once_with(
-            "pdf-batch-batch-1", "signal", {"kind": "job_done"}
+            "private-pdf-batch-batch-1", "signal", {"kind": "job_done"}
         )
 
     def test_sin_cliente_pusher_no_truena(self) -> None:

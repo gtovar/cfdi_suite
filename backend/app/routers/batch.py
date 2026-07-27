@@ -366,7 +366,7 @@ async def batch_worker_task(request: Request):
     # Emitimos el evento en tiempo real solo si Pusher se inicializó correctamente
     if pusher_client:
         try:
-            pusher_client.trigger(f"batch_{batch_id}", "file_processed", parsed_result)
+            pusher_client.trigger(f"private-batch_{batch_id}", "file_processed", parsed_result)
         except Exception as e:
             print(f"[Pusher Error] No se pudo enviar el evento en tiempo real: {e}")
 

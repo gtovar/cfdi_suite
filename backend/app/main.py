@@ -30,6 +30,7 @@ from .routers.rfc_validation import fiel_router
 from .routers.templates import router as templates_router
 from .routers.rfc_validation import router as rfc_router
 from .routers.sat_enquiry import router as sat_router
+from .routers.pusher_auth import router as pusher_auth_router
 from .services.analyze_cfdi import run_analyze_cfdi
 from .services import redis_safety
 from google.api_core.exceptions import InvalidArgument
@@ -128,6 +129,7 @@ app.include_router(templates_router)
 app.include_router(sat_router)
 app.include_router(rfc_router)
 app.include_router(fiel_router)
+app.include_router(pusher_auth_router)
 
 
 @app.exception_handler(RequestValidationError)

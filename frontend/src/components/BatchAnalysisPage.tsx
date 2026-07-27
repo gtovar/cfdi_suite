@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import Pusher from 'pusher-js';
 import { apiFetch } from '../lib/api-fetch';
+import { getAuthToken } from '../lib/auth-store';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -758,7 +759,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     if (channelRef.current) {
       channelRef.current.unbind_all();
-      pusherRef.current?.unsubscribe(`batch_${batchId}`);
+      pusherRef.current?.unsubscribe(`private-batch_${batchId}`);
     }
 
     try {
@@ -798,12 +799,16 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     if (!pusherRef.current) {
       pusherRef.current = new Pusher(import.meta.env.VITE_PUSHER_KEY || 'TU_PUSHER_KEY_AQUÍ', {
         cluster: import.meta.env.VITE_PUSHER_CLUSTER || 'us2',
-        forceTLS: true
+        forceTLS: true,
+        channelAuthorization: {
+          endpoint: '/api/pusher/auth',
+          transport: 'ajax',
+          headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
+        },
       });
     }
 
-    // Nos suscribimos al canal exclusivo de este lote de facturas
-    const channel = pusherRef.current.subscribe(`batch_${batchId}`);
+    const channel = pusherRef.current.subscribe(`private-batch_${batchId}`);
     channelRef.current = channel;
 
     // Escuchamos el evento exacto que dispara nuestro webhook de Cloud Tasks
@@ -829,7 +834,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         if (completedCount >= nextQueue.length && nextQueue.length > 0) {
           // Desconectamos el WebSocket limpiamente
           channel.unbind_all();
-          pusherRef.current?.unsubscribe(`batch_${batchId}`);
+          pusherRef.current?.unsubscribe(`private-batch_${batchId}`);
           localStorage.removeItem('cfdi_active_batch_id');
 
           // Despachamos el estado final en la interfaz

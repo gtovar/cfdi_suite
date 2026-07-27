@@ -1,5 +1,6 @@
 import Pusher from 'pusher-js';
 import { apiFetch, apiUrl } from './api-fetch';
+import { getAuthToken } from './auth-store';
 
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
 
@@ -315,7 +316,7 @@ export function watchBatchProgress(
       if (safetyNetTid) clearInterval(safetyNetTid);
       document.removeEventListener('visibilitychange', onVisibility);
       try {
-        pusher?.unsubscribe('pdf-batch-' + batchId);
+        pusher?.unsubscribe('private-pdf-batch-' + batchId);
         pusher?.disconnect();
       } catch { /* desconexión best-effort */ }
       fn();
@@ -393,7 +394,15 @@ export function watchBatchProgress(
     };
     document.addEventListener('visibilitychange', onVisibility);
 
-    pusher = new Pusher(key, { cluster, forceTLS: true });
+    pusher = new Pusher(key, {
+      cluster,
+      forceTLS: true,
+      channelAuthorization: {
+        endpoint: '/api/pusher/auth',
+        transport: 'ajax',
+        headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
+      },
+    });
     pusher.connection.bind('connected', () => onStatusChange?.('connected', 0));
     pusher.connection.bind('unavailable', () => onStatusChange?.('reconnecting', 1));
     pusher.connection.bind('state_change', (states: { previous: string; current: string }) => {
@@ -402,7 +411,7 @@ export function watchBatchProgress(
       // a 'connected', el hueco real donde Pusher pierde mensajes).
       if (states.current !== states.previous) void fetchSnapshot();
     });
-    const channel = pusher.subscribe('pdf-batch-' + batchId);
+    const channel = pusher.subscribe('private-pdf-batch-' + batchId);
     // 'signal': único evento en vivo -- aviso mínimo (solo {kind:
     // 'job_done'|'job_error'}, sin contador ni lista de IDs) que el backend
     // dispara SIEMPRE, incluso con Redis degradado (ver publish_batch_signal

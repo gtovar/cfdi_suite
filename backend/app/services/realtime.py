@@ -77,6 +77,6 @@ def publish_batch_signal(batch_id: str, kind: str) -> None:
     if not client:
         return
     try:
-        client.trigger(f"pdf-batch-{batch_id}", "signal", {"kind": kind})
+        client.trigger(f"private-pdf-batch-{batch_id}", "signal", {"kind": kind})
     except Exception as e:
         print(f"[Pusher Error] señal de batch {batch_id} no publicada: {e}")
