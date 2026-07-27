@@ -58,6 +58,18 @@ jobs:
             BATCH_JOB_THRESHOLD=500
             BATCH_JOB_SHARD_SIZE=20
             BATCH_JOB_NAME=cfdi-batch-shard
+          # OJO: `flags` es un bloque literal (|), no una lista YAML. Todo lo
+          # que se escriba adentro se le pasa tal cual a gcloud como bandera --
+          # un comentario `#` aquí dentro rompe el deploy. Los comentarios van
+          # aquí arriba.
+          #
+          # --service-account: sin esta bandera Cloud Run corre con la default
+          # compute SA (706861124428-compute@developer.gserviceaccount.com),
+          # que tiene rol Editor sobre todo el proyecto -- cualquier RCE o SSRF
+          # en el servicio se vuelve control de escritura de todo el GCP. La SA
+          # dedicada sólo trae objectAdmin sobre el bucket, cloudtasks.enqueuer,
+          # run.invoker, cloudtrace.agent y serviceAccountTokenCreator (para las
+          # signed URLs).
           flags: |
             --allow-unauthenticated
             --cpu=2
@@ -65,3 +77,4 @@ jobs:
             --max-instances=10
             --timeout=1800
             --concurrency=5
+            --service-account=cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com
