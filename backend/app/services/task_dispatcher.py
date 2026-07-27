@@ -6,8 +6,34 @@ import sentry_sdk
 
 GCP_PROJECT = os.getenv("GCP_PROJECT", "ultra-acre-431617-p0")
 GCP_REGION = os.getenv("GCP_REGION", "us-central1")
-QUEUE_NAME = os.getenv("CFDI_QUEUE_NAME", "pdf-generator-queue") 
+QUEUE_NAME = os.getenv("CFDI_QUEUE_NAME", "pdf-generator-queue")
 API_URL = os.getenv("API_URL", "https://TU_URL_DE_CLOUD_RUN.a.run.app")
+
+# Identidad con la que Cloud Tasks firma los tokens OIDC de las tareas. Es la
+# misma SA con la que corre el servicio (deploy-backend.yml, --service-account),
+# así que la tarea llega firmada por quien la creó.
+#
+# Requisito de IAM: la SA necesita roles/iam.serviceAccountUser SOBRE SÍ MISMA
+# para poder hacer actAs al crear la tarea. Sin ese binding, create_task falla
+# con PermissionDenied. No estaba en la spec original de #26; se añadió al
+# aplicar la Fase 2.
+_OIDC_SERVICE_ACCOUNT = os.getenv(
+    "OIDC_SERVICE_ACCOUNT",
+    "cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com",
+)
+
+
+def _oidc_token() -> dict:
+    """Bloque oidc_token para el http_request de una tarea de Cloud Tasks.
+
+    El `audience` tiene que ser exactamente la misma cadena que el receptor
+    valida (internal_auth._AUDIENCE, que también lee API_URL). Si no coinciden,
+    la verificación falla y Cloud Tasks reintenta en bucle hasta agotar la cola.
+    """
+    return {
+        "service_account_email": _OIDC_SERVICE_ACCOUNT,
+        "audience": API_URL,
+    }
 
 _client = None
 
@@ -31,6 +57,7 @@ def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_she
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
             "url": f"{API_URL}/api/internal/generate-pdf",
+            "oidc_token": _oidc_token(),
             "headers": {"Content-type": "application/json"},
             "body": json.dumps(payload).encode("utf-8")
         }
@@ -55,6 +82,7 @@ def enqueue_zip_extraction(gcs_path: str, batch_id: str, template_id: str):
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
             "url": f"{API_URL}/api/internal/extract-zip",
+            "oidc_token": _oidc_token(),
             "headers": {"Content-type": "application/json"},
             "body": json.dumps(payload).encode("utf-8")
         }
@@ -81,6 +109,7 @@ def enqueue_cfdi_analysis(batch_id: str, filename: str, gcs_path: str):
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
             "url": f"{API_URL}/api/cfdi/batch/worker-task",
+            "oidc_token": _oidc_token(),
             "headers": {"Content-type": "application/json"},
             "body": json.dumps(payload).encode("utf-8")
         }
