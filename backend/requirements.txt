@@ -11,6 +11,9 @@ pypdf>=5.0,<6
 reportlab>=4.2,<5
 qrcode>=7.4,<8
 lxml>=5.0,<6
+# Reemplaza xml.etree.ElementTree en los 3 sitios que parsean XML del usuario
+# (hallazgo #8). No es opcional: sin ella esos módulos no importan.
+defusedxml>=0.7,<0.8
 redis>=5.0,<6
 google-cloud-tasks>=2.16,<3
 # Explícita, no transitiva: internal_auth.py la importa directo para verificar

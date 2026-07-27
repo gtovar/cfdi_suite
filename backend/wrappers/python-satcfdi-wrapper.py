@@ -3,7 +3,15 @@ import base64
 import json
 import sys
 import traceback
-import xml.etree.ElementTree as ET
+# defusedxml, no la stdlib: el XML lo sube el usuario. xml.etree no resuelve
+# entidades EXTERNAS (un file:// da ParseError), pero sí expande las INTERNAS,
+# así que una bomba de expansión de ~400 bytes con 9 niveles anidados se
+# convierte en ~1 GB en memoria y mata la instancia. defusedxml prohíbe las
+# entidades de raíz (EntitiesForbidden) y deja el resto de la API igual --
+# incluido ET.ParseError, que es literalmente el mismo objeto.
+# El alias ET se conserva a propósito (es el nombre convencional y el que
+# usa el resto del archivo); ruff sólo lo marca porque ya no es stdlib.
+import defusedxml.ElementTree as ET  # noqa: N817
 from decimal import Decimal
 from datetime import date, datetime
 
