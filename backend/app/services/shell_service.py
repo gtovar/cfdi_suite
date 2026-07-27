@@ -8,9 +8,40 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 from weasyprint import HTML
 from weasyprint.text.fonts import FontConfiguration
+from weasyprint.urls import default_url_fetcher
+
+# WeasyPrint resuelve por su cuenta todo <img src>, <link> y @import del HTML
+# que renderiza. Ese HTML llega crudo desde POST /api/templates/{id}/shell-preview,
+# así que sin esto el renderer es un proxy de peticiones salientes con la
+# identidad de la instancia de Cloud Run: servicios internos, redes privadas y
+# port scanning por diferencia de tiempos.
+#
+# base_url=None (que ya estaba) sólo corta las URLs RELATIVAS. Las absolutas
+# --http://, https://, file://-- seguían saliendo: comprobado el 2026-07-26
+# levantando un listener en 127.0.0.1 y viendo llegar la petición.
+#
+# Se permite únicamente `data:` (logos embebidos, que es como los usa el
+# diseñador). _ALLOWED_HOSTS queda vacío a propósito: cero red. Si algún día
+# hace falta un CDN, se añade aquí su hostname y nada más.
+_ALLOWED_SCHEMES = {"data"}
+_ALLOWED_HOSTS: set[str] = set()
+
+
+def _restricted_url_fetcher(url: str, *args, **kwargs):
+    parsed = urlparse(url)
+    if parsed.scheme in _ALLOWED_SCHEMES:
+        return default_url_fetcher(url, *args, **kwargs)
+    if parsed.scheme in ("http", "https") and parsed.hostname in _ALLOWED_HOSTS:
+        return default_url_fetcher(url, *args, **kwargs)
+    raise ValueError(
+        f"Recurso externo bloqueado en render de plantilla: "
+        f"{parsed.scheme}://{parsed.hostname}"
+    )
+
 
 SHELLS_DIR = Path(__file__).resolve().parents[2] / "shells"
 SHELLS_DIR.mkdir(exist_ok=True)
@@ -249,12 +280,16 @@ def _fill_placeholders(html: str, cfdi_data: dict, design_config: dict | None = 
 def render_shell(html_template: str, cfdi_data: dict, design_config: dict | None = None) -> bytes:
     """Renderiza el header HTML con datos reales del CFDI. Sin caché de PDF (cada factura tiene datos únicos)."""
     filled = _fill_placeholders(html_template, cfdi_data, design_config)
-    return HTML(string=filled, base_url=None).write_pdf(font_config=_get_font_config())
+    return HTML(
+        string=filled, base_url=None, url_fetcher=_restricted_url_fetcher
+    ).write_pdf(font_config=_get_font_config())
 
 
 def render_shell_preview(html: str) -> bytes:
     """WeasyPrint en memoria, sin cache de PDF. Usado para live preview en el diseñador."""
-    return HTML(string=html, base_url=None).write_pdf(font_config=_get_font_config())
+    return HTML(
+        string=html, base_url=None, url_fetcher=_restricted_url_fetcher
+    ).write_pdf(font_config=_get_font_config())
 
 
 def get_or_create_shell(template_id: str, html_template: str, cfdi_data: dict) -> bytes:
@@ -270,4 +305,6 @@ def get_or_create_shell(template_id: str, html_template: str, cfdi_data: dict) -
     """
     # El html con datos reales (no se cachea el PDF con datos, sino la generación)
     filled_html = _fill_placeholders(html_template, cfdi_data)
-    return HTML(string=filled_html, base_url=None).write_pdf()
+    return HTML(
+        string=filled_html, base_url=None, url_fetcher=_restricted_url_fetcher
+    ).write_pdf()
