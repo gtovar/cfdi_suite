@@ -2,9 +2,37 @@
 > Actualizar antes de cada commit con cambios de código
 
 ## Checkpoint activo
-`seguridad/fase-2` — 20 commits sobre `main`, **nada desplegado**.
+`seguridad/fase-2` — 54 commits sobre `main`, **nada desplegado**. B-lite aplicado (5 commits).
 
-### Fase 2 de seguridad — bloques 0 a 5 cerrados (2026-07-26/27)
+### B-lite — Fase 3 de seguridad, identidad real en el backend (2026-07-27)
+
+5 commits aplicados. Cierra **14 hallazgos abiertos** incluidos los CRITICAL
+#36/#37 (e.firma sin auth) y el PADRE-AUTH con sus 13 hijos.
+
+| Commit | Que hace | Hallazgos |
+|---|---|---|
+| `82a397e` PADRE-AUTH | Bearer token global, AuthGate frontend, apiFetch | PADRE-AUTH, #36, #37, #45, +11 hijos |
+| `4022be9` FIEL GCS | Material FIEL a GCS con tenant isolation | #36, #37 (cierre definitivo) |
+| `3448a4d` Credenciales GCS | Emisor credentials a GCS con tenant | BATCH6-CANDIDATE-03 |
+| `7d9eeea` Pusher privado | Canales private-* con auth endpoint | #12, BATCH6-CANDIDATE-18 |
+| `4538730` Rate limiting | Rate limiter in-memory por identidad | #6 |
+
+**Diseno de B-lite:**
+- Plan Vercel Hobby -> identidad en la app, no en infra
+- Bearer token fijo en Secret Manager, un solo tenant
+- API_BEARER_TOKEN ausente = modo dev sin auth (tests y desarrollo local)
+- FIEL y credenciales en GCS (fiel/{tenant}/, credenciales/{tenant}/), con Fernet
+- Pusher canales privados con autorizacion via /api/pusher/auth
+- Rate limiting por SHA256(token), sin Redis
+
+**Baselines:**
+`pytest` **329** · `ruff` **43** · `tsc --noEmit` **6 preexistentes** · `vitest` **120**
+
+**Pendientes que requieren clicks en consola (no codigo):**
+- #22: mover PUSHER_KEY y VERCEL_URL de Secrets a Variables en GitHub
+- #30: crear fernet-key en GCP Secret Manager y referenciarlo con --set-secrets
+- #31: SA dedicada para el batch shard job
+- Deuda de despliegue del paso 12 (OIDC en dos fases, drenar la cola)
 
 17 de 55 pasos aplicados, un commit por hallazgo. Cierra **todos los CRITICAL y
 HIGH con panel unánime que la Fase 2 debía cerrar, menos #24 y #7** (bloques 6 y 7).
