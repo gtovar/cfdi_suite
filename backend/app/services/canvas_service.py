@@ -829,10 +829,32 @@ def render_footer(cfdi_data: dict) -> bytes:
 
 # ── Parseo XML — varios SAX, uno por variante ────────────────────────────────
 
+# Opciones obligatorias para TODO iterparse de este módulo: el XML lo sube el
+# usuario y llega sin filtrar. Con sólo recover=True, lxml resuelve entidades
+# externas, y un CFDI con un DOCTYPE malicioso puede leer /proc/self/environ
+# (ahí viven REDIS_PASSWORD, PUSHER_SECRET y SENTRY_DSN) o pegarle al metadata
+# server de GCP desde dentro de la instancia.
+#
+#   resolve_entities=False  no expande entidades -- corta el XXE clásico
+#   no_network=True         prohíbe traer DTDs o entidades por red (SSRF)
+#   load_dtd=False          ni siquiera lee el DTD interno
+#   huge_tree=False         mantiene los límites de profundidad y tamaño de
+#                           libxml2 -- corta la bomba de expansión (billion laughs)
+#   recover=True            se conserva: los CFDI reales traen basura menor y
+#                           el pipeline depende de tolerarla
+_SAFE_ITERPARSE: dict = dict(
+    resolve_entities=False,
+    no_network=True,
+    load_dtd=False,
+    huge_tree=False,
+    recover=True,
+)
+
+
 def _detect_tipo(xml_bytes: bytes) -> str:
     """Lee solo el elemento raíz para obtener TipoDeComprobante. < 0.1ms."""
     from lxml import etree
-    for _, el in etree.iterparse(io.BytesIO(xml_bytes), events=("start",), recover=True):
+    for _, el in etree.iterparse(io.BytesIO(xml_bytes), events=("start",), **_SAFE_ITERPARSE):
         local = etree.QName(el.tag).localname
         return el.get("TipoDeComprobante", "I") if local == "Comprobante" else local
     return "I"
@@ -866,7 +888,7 @@ def _parse_ingreso_sax(xml_bytes: bytes) -> tuple[dict, list[dict]]:
     retenciones: list = []
     _in_concepto    = False
 
-    for event, el in etree.iterparse(io.BytesIO(xml_bytes), events=("start", "end"), recover=True):
+    for event, el in etree.iterparse(io.BytesIO(xml_bytes), events=("start", "end"), **_SAFE_ITERPARSE):
         local = etree.QName(el.tag).localname
 
         if event == "start":
@@ -980,7 +1002,7 @@ def _parse_pago_sax(xml_bytes: bytes) -> tuple[dict, list[dict]]:
     rows: list          = []
     _current_pago: dict = {}
 
-    for event, el in etree.iterparse(io.BytesIO(xml_bytes), events=("start", "end"), recover=True):
+    for event, el in etree.iterparse(io.BytesIO(xml_bytes), events=("start", "end"), **_SAFE_ITERPARSE):
         local = etree.QName(el.tag).localname
 
         if event == "start":
