@@ -154,7 +154,7 @@ export function waitForPdfJob(
   onStatusChange?: (state: SseConnectionState, attempt: number) => void,
 ): Promise<void> {
   return subscribeWithRetry({
-    url: `/api/cfdi/pdf/${jobId}/progress`,
+    url: `/api/cfdi/pdf/${jobId}/progress?token=${encodeURIComponent(getAuthToken() || '')}`,
     overallTimeoutMs: 180_000,
     maxRetries: 3,
     onStatusChange,
