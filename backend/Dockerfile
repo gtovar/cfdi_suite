@@ -13,15 +13,23 @@
 #
 # Digest tomado el 2026-07-26. Es el índice multi-arquitectura, no el manifest
 # de una sola plataforma: incluye linux/amd64, que es lo que corre Cloud Run.
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
-
-WORKDIR /app
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
     libxml2-dev \
     libxslt-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --require-hashes -r requirements.txt
+
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2 \
     libxslt1.1 \
     libgobject-2.0-0 \
@@ -31,8 +39,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --require-hashes -r requirements.txt
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 COPY . .
 
