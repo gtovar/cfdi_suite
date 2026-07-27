@@ -20,6 +20,7 @@ steps:
       - --region=us-central1
       - --platform=managed
       - --allow-unauthenticated
+      - --service-account=cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com
       - --timeout=1800
       # Causa real de signal 6 encontrada y corregida 2026-07-11: generate()
       # (header WeasyPrint + tabla reportlab + merge pypdf) ahora corre
