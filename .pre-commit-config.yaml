@@ -1,0 +1,58 @@
+repos:
+  - repo: local
+    hooks:
+      - id: react-doctor
+        name: react-doctor
+        entry: bash -c '
+          if [ -x "./frontend/node_modules/.bin/react-doctor" ]; then
+            "./frontend/node_modules/.bin/react-doctor" frontend --staged --blocking warning
+          elif command -v react-doctor >/dev/null 2>&1; then
+            react-doctor frontend --staged --blocking warning
+          elif command -v npx >/dev/null 2>&1; then
+            npx --yes react-doctor@latest frontend --staged --blocking warning
+          else
+            printf "%s\n" "react-doctor: command not found; skipping staged scan."
+          fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: governance
+        name: AI Governance Check
+        entry: bash -c 'bash .claude/hooks/governance.sh PRE_COMMIT; rc=$?; [ $rc = 2 ] && exit 1 || exit 0'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+        verbose: true
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: '\.(lock|json|baseline)$'
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: ['--fix']
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ['--maxkb=5000']
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        types_or: [javascript, jsx, typescript, tsx, css, json, yaml]
+        additional_dependencies: ['prettier@3.4.0']
