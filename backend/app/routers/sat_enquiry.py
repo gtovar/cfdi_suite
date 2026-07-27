@@ -208,31 +208,40 @@ async def _enquiry_indexed(
 
 
 def _parse_excel_input(content: bytes) -> list[dict[str, str]]:
-    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
-    header_row = next(rows_iter, None)
-    if not header_row:
-        return []
+    # read_only=True: el modelo eager de openpyxl expande 10 MB de XLSX
+    # comprimido a ~1-2 GB de objetos Python y mata la instancia de Cloud Run
+    # por OOM. El modo streaming sólo materializa la fila en curso. Aquí sólo
+    # se usa iter_rows(values_only=True), que funciona igual en ese modo.
+    # El finally es obligatorio: en read_only openpyxl deja abiertos los
+    # handles del ZIP si no se cierra el workbook.
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    try:
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        header_row = next(rows_iter, None)
+        if not header_row:
+            return []
 
-    headers = [str(cell or "").strip() for cell in header_row]
+        headers = [str(cell or "").strip() for cell in header_row]
 
-    rows: list[dict[str, str]] = []
-    for ws_row in rows_iter:
-        row = dict(zip(headers, ws_row))
-        uuid = str(row.get("UUID") or "").strip()
-        if not uuid:
-            continue
-        rows.append(
-            {
-                "uuid": uuid,
-                "rfc_emisor": str(row.get("RFC emisor") or "").strip().upper(),
-                "rfc_receptor": str(row.get("RFC receptor") or "").strip(),
-                "total_cfdi": str(row.get("TotalCFDI") or ""),
-                "motive": str(row.get("Motive") or "01"),
-            }
-        )
-    return rows
+        rows: list[dict[str, str]] = []
+        for ws_row in rows_iter:
+            row = dict(zip(headers, ws_row))
+            uuid = str(row.get("UUID") or "").strip()
+            if not uuid:
+                continue
+            rows.append(
+                {
+                    "uuid": uuid,
+                    "rfc_emisor": str(row.get("RFC emisor") or "").strip().upper(),
+                    "rfc_receptor": str(row.get("RFC receptor") or "").strip(),
+                    "total_cfdi": str(row.get("TotalCFDI") or ""),
+                    "motive": str(row.get("Motive") or "01"),
+                }
+            )
+        return rows
+    finally:
+        wb.close()
 
 
 def _build_result_excel(
