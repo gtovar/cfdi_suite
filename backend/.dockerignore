@@ -1,0 +1,44 @@
+# El Dockerfile hace `COPY . .` sobre este directorio (contexto de build:
+# `dir: backend` en cloudbuild.yaml y `source: ./backend` en
+# .github/workflows/deploy-backend.yml). Sin este archivo, todo lo de abajo
+# termina horneado dentro de la imagen publicada en gcr.io.
+#
+# Lo que SÍ necesita el runtime y por eso NO se excluye:
+#   app/        el servicio
+#   templates/  templates.py:14-16, shell_service.py:18, pdf_pipeline.py:162
+#   shells/     shell_service.py:15
+#   wrappers/   python_satcfdi.py:22 (se ejecuta como subproceso)
+#   requirements.txt
+
+# Secretos -- backend/.env existe en local y hoy se copia a la imagen
+.env
+.env.*
+*.pem
+*.p12
+*.key
+
+# Entornos y cachés
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Pruebas: ningún módulo de app/ las importa (verificado con grep)
+tests/
+test-fixtures/
+
+# Dumps de contexto para IA -- pueden arrastrar cualquier cosa del repo
+repomix-output-*.md
+
+# Metadatos que no aportan nada a la imagen
+.git/
+.gitignore
+.DS_Store
+Dockerfile
+.dockerignore
+cloudbuild.yaml
+pyproject.toml
