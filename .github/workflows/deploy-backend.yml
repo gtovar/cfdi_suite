@@ -42,17 +42,17 @@ jobs:
           env_vars_update_strategy: overwrite
           env_vars: |
             ALLOWED_ORIGINS=${{ secrets.VERCEL_URL }}
-            REDIS_HOST=dashing-aphid-43185.upstash.io
+            REDIS_HOST=${{ vars.REDIS_HOST }}
             REDIS_PORT=6379
-            REDIS_PASSWORD=AaixAAIgcDFiMWQxODcwMzU4ZTY0NzgxOWM3Y2Y5ODllYWIyYTgwOA
+            REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
             MODE=api
             API_URL=https://cfdi-suite-api-hfg67q6kbq-uc.a.run.app
             SENTRY_DSN=${{ secrets.SENTRY_DSN }}
             PUSHER_APP_ID=${{ secrets.PUSHER_APP_ID }}
             PUSHER_KEY=${{ secrets.PUSHER_KEY }}
             PUSHER_SECRET=${{ secrets.PUSHER_SECRET }}
-            PUSHER_CLUSTER=us2
-            GCS_BUCKET_NAME=cfdi-suite-uploads-706861124428
+            PUSHER_CLUSTER=${{ vars.PUSHER_CLUSTER }}
+            GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
             REMOTE_ZIP_SHARD_READ=true
             BATCH_JOB_ENABLED=true
             BATCH_JOB_THRESHOLD=500
