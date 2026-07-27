@@ -304,6 +304,7 @@ async def create_design(request: Request) -> JSONResponse:
 
 @router.get("/api/templates/{template_id}")
 async def get_template(template_id: str) -> JSONResponse:
+    _validate_id_or_400(template_id)
     path = _TEMPLATES_DIR / f"{template_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Template no encontrado")
@@ -318,6 +319,7 @@ async def get_template(template_id: str) -> JSONResponse:
 @router.post("/api/templates/{template_id}")
 @router.put("/api/templates/{template_id}")
 async def save_template(template_id: str, request: Request):
+    _validate_id_or_400(template_id)
     try:
         template_data = await request.json()
         path = _TEMPLATES_DIR / f"{template_id}.json"
@@ -336,12 +338,14 @@ async def save_template(template_id: str, request: Request):
 
 @router.get("/api/templates/{template_id}/html")
 async def get_html_template(template_id: str):
+    _validate_id_or_400(template_id)
     from ..services.shell_service import get_html_template as _get
     return JSONResponse({"html": _get(template_id)})
 
 
 @router.put("/api/templates/{template_id}/html")
 async def save_html_template(template_id: str, request: Request):
+    _validate_id_or_400(template_id)
     try:
         body = await request.json()
         html = body.get("html", "")
@@ -359,6 +363,7 @@ async def save_html_template(template_id: str, request: Request):
 
 @router.post("/api/templates/{template_id}/shell-preview")
 async def shell_preview(template_id: str, request: Request):
+    _validate_id_or_400(template_id)
     """Renderiza el HTML shell en memoria y devuelve el PDF. Sin cache."""
     try:
         body = await request.json()
@@ -377,6 +382,7 @@ async def shell_preview(template_id: str, request: Request):
 
 @router.post("/api/templates/{template_id}/table-preview")
 async def table_preview(template_id: str, request: Request):
+    _validate_id_or_400(template_id)
     """
     Preview REAL de la tabla de conceptos con el motor de producción.
 
@@ -424,6 +430,7 @@ async def table_preview(template_id: str, request: Request):
 
 @router.get("/api/templates/{template_id}/design")
 async def get_design_config(template_id: str):
+    _validate_id_or_400(template_id)
     path = _DESIGN_DIR / f"{template_id}.json"
     if not path.exists():
         return JSONResponse({})
@@ -432,6 +439,7 @@ async def get_design_config(template_id: str):
 
 @router.put("/api/templates/{template_id}/design")
 async def save_design_config(template_id: str, request: Request):
+    _validate_id_or_400(template_id)
     try:
         body = await request.json()
         _validate_design(body)
@@ -504,6 +512,7 @@ async def delete_design(template_id: str) -> JSONResponse:
 
 @router.post("/api/templates/{template_id}/shell")
 async def regenerate_shell(template_id: str, request: Request):
+    _validate_id_or_400(template_id)
     """Guarda el HTML y lo pre-renderiza con datos de ejemplo."""
     try:
         body = await request.json()
