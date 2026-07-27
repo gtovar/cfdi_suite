@@ -30,6 +30,9 @@ RUN python3 -m venv /opt/venv && \
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Sin pin de versión explícito: son librerías de runtime que Debian backportea
+    # a la estable, y la base ya está fijada por digest (supply chain risk: LOW).
+    # El compilador y los dev headers quedaron en la etapa builder.
     libxml2 \
     libxslt1.1 \
     libgobject-2.0-0 \
