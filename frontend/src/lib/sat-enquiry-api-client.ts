@@ -16,7 +16,11 @@ export interface EnquiryResult {
 
 export type BatchProgressEvent =
   | { type: 'progress'; processed: number; total: number }
-  | { type: 'done'; job_id: string; total: number };
+  // `download_token`, no `job_id`: el job_id viaja en claro por el SSE y ya no
+  // sirve para descargar nada (hallazgo #3). `descartadas` son las filas del
+  // Excel cuyo UUID estaba malformado y no se consultaron (#38).
+  | { type: 'done'; download_token: string; total: number; descartadas?: number }
+  | { type: 'error'; message: string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -35,8 +39,10 @@ export async function enquirySingle(data: EnquiryRequest): Promise<EnquiryResult
   });
 }
 
-export async function downloadBatchResult(jobId: string): Promise<void> {
-  const res = await fetch(`/api/sat/enquiry/batch/${encodeURIComponent(jobId)}/result`);
+export async function downloadBatchResult(downloadToken: string): Promise<void> {
+  const res = await fetch(
+    `/api/sat/enquiry/batch/result?token=${encodeURIComponent(downloadToken)}`,
+  );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body?.detail ?? `HTTP ${res.status}`);

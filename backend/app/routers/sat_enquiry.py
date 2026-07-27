@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import re
+import secrets
 from datetime import datetime
 from typing import Any, NamedTuple
 from uuid import uuid4
 
 import httpx
 import openpyxl
+import redis
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -46,8 +49,46 @@ def _require_uuid(value: str) -> str:
         raise HTTPException(status_code=400, detail="UUID de CFDI inválido")
     return value
 
-# In-memory job results store (single-user local tool — no persistence needed)
-_job_results: dict[str, bytes] = {}
+# Almacén de resultados de consulta por lote.
+#
+# Antes esto era `_job_results: dict[str, bytes]`, un dict a nivel de módulo, y
+# tenía DOS problemas distintos:
+#
+#   1. Seguridad (#3, CRITICAL). El job_id viajaba en el evento SSE `done` y
+#      GET /enquiry/batch/{job_id}/result hacía pop() sin comprobar de quién era.
+#      Cualquiera que viera un job_id se llevaba el Excel de otra sesión, con
+#      los UUID y RFC de las facturas de otro contribuyente.
+#
+#   2. Corrección, que la auditoría no menciona. El servicio corre con
+#      --max-instances=10: el dict vive en UNA instancia, así que la descarga
+#      sólo funcionaba si la petición caía por casualidad en la misma que
+#      generó el Excel. Y evictaba con 5 entradas (#18), tirando resultados
+#      que el usuario todavía no había bajado.
+#
+# Ahora el Excel vive en Redis con TTL, y para bajarlo hace falta un token
+# aleatorio de 32 bytes que NO es el job_id: el job_id sigue viajando por el
+# SSE para el progreso, pero ya no sirve para descargar nada.
+_RESULT_TTL_SECONDS = 900  # 15 min: alcanza para bajarlo, se limpia solo
+
+# Cliente propio en vez de reusar el de batch.py: aquel usa
+# decode_responses=True y corrompería los bytes binarios del .xlsx.
+_redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    password=os.getenv("REDIS_PASSWORD", None),
+    ssl=True,
+    ssl_cert_reqs="required",
+    max_connections=10,
+    decode_responses=False,
+)
+
+
+def _result_key(job_id: str) -> str:
+    return f"sat_enquiry:result:{job_id}"
+
+
+def _token_key(token: str) -> str:
+    return f"sat_enquiry:token:{token}"
 
 
 # ---------------------------------------------------------------------------
@@ -424,11 +465,33 @@ async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
                 yield f"data: {json.dumps({'type': 'progress', 'processed': processed, 'total': total})}\n\n"
 
         excel_bytes = _build_result_excel(rows, results)
-        # Evict oldest entry if store grows (local tool — no concurrent users)
-        if len(_job_results) >= 5:
-            oldest = next(iter(_job_results))
-            del _job_results[oldest]
-        _job_results[job_id] = excel_bytes
+
+        # Token de descarga: 32 bytes aleatorios, NO el job_id. El job_id sigue
+        # viajando por el SSE (lo necesita el progreso) pero ya no abre nada.
+        download_token = secrets.token_urlsafe(32)
+        try:
+            pipe = _redis_client.pipeline()
+            pipe.setex(_result_key(job_id), _RESULT_TTL_SECONDS, excel_bytes)
+            pipe.setex(_token_key(download_token), _RESULT_TTL_SECONDS, job_id.encode())
+            pipe.execute()
+        except Exception as exc:
+            # Redis es la ÚNICA copia del Excel, así que un fallo aquí sí es
+            # terminal para la descarga -- pero el usuario ya vio sus
+            # resultados en pantalla. Se le dice que no puede bajarlo, en vez
+            # de darle un token que va a dar 404.
+            report(exc, contexto="guardar_resultado_lote")
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "error",
+                        "message": "Los resultados se consultaron pero no se pudieron "
+                        "preparar para descarga. Vuelve a intentarlo.",
+                    }
+                )
+                + "\n\n"
+            )
+            return
         # `descartadas`: filas del Excel que traían un UUID malformado y no se
         # consultaron. Sin este dato el usuario sube 500 filas, recibe 480
         # resultados y no tiene forma de saber qué pasó con las otras 20.
@@ -437,7 +500,7 @@ async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
             + json.dumps(
                 {
                     "type": "done",
-                    "job_id": job_id,
+                    "download_token": download_token,
                     "total": total,
                     "descartadas": descartadas,
                 }
@@ -452,11 +515,34 @@ async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
     )
 
 
-@router.get("/enquiry/batch/{job_id}/result")
-def get_batch_result(job_id: str) -> Response:
-    excel_bytes = _job_results.pop(job_id, None)
+@router.get("/enquiry/batch/result")
+def get_batch_result(token: str) -> Response:
+    """Descarga el Excel de un lote. Requiere el token del evento SSE `done`.
+
+    La ruta ya no lleva el job_id: ese identificador viaja en claro por el SSE
+    y no puede seguir siendo la llave de la descarga (#3).
+    """
+    try:
+        job_id_raw = _redis_client.get(_token_key(token))
+        if not job_id_raw:
+            raise HTTPException(
+                status_code=404, detail="Resultado no encontrado o ya descargado"
+            )
+        job_id = job_id_raw.decode()
+        # getdel: leer y borrar en una sola operación. Con dos llamadas, dos
+        # peticiones simultáneas con el mismo token bajarían las dos.
+        excel_bytes = _redis_client.getdel(_result_key(job_id))
+        _redis_client.delete(_token_key(token))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        report(exc, contexto="descargar_resultado_lote")
+        raise HTTPException(
+            status_code=503, detail="No se pudo recuperar el resultado"
+        ) from exc
+
     if not excel_bytes:
-        raise HTTPException(status_code=404, detail="Resultado no encontrado o ya descargado")
+        raise HTTPException(status_code=404, detail="Resultado expirado o ya descargado")
 
     return Response(
         content=excel_bytes,

@@ -28,7 +28,7 @@ export default function ConsultasSATPage() {
   // react-doctor rerender-state-only-in-handlers: solo se lee/escribe dentro de
   // handlers (handleStart/handleDownload/handleReset), nunca se renderiza — useRef
   // evita los re-renders de setJobId que no pintaban nada distinto.
-  const jobIdRef = useRef<string | null>(null);
+  const downloadTokenRef = useRef<string | null>(null);
 
   function handleFileDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -46,7 +46,7 @@ export default function ConsultasSATPage() {
     setPhase('processing');
     setProcessed(0);
     setTotal(0);
-    jobIdRef.current = null;
+    downloadTokenRef.current = null;
     setError(null);
 
     const abort = new AbortController();
@@ -60,7 +60,7 @@ export default function ConsultasSATPage() {
             setProcessed(event.processed);
             setTotal(event.total);
           } else if (event.type === 'done') {
-            jobIdRef.current = event.job_id;
+            downloadTokenRef.current = event.download_token;
             setTotal(event.total);
             setPhase('done');
           }
@@ -81,11 +81,11 @@ export default function ConsultasSATPage() {
   }
 
   async function handleDownload() {
-    const currentJobId = jobIdRef.current;
-    if (!currentJobId) return;
+    const token = downloadTokenRef.current;
+    if (!token) return;
     try {
-      await downloadBatchResult(currentJobId);
-      jobIdRef.current = null;
+      await downloadBatchResult(token);
+      downloadTokenRef.current = null;
       setFile(null);
       setPhase('idle');
     } catch (err) {
@@ -97,7 +97,7 @@ export default function ConsultasSATPage() {
     setFile(null);
     setPhase('idle');
     setError(null);
-    jobIdRef.current = null;
+    downloadTokenRef.current = null;
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
