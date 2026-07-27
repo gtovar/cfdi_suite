@@ -83,7 +83,7 @@ gcloud run jobs deploy "${JOB_NAME}" \
   --max-retries=1 \
   --service-account="cfdi-batch-shard-sa@ultra-acre-431617-p0.iam.gserviceaccount.com" \
   # pragma: allowlist nextline secret
-  --set-env-vars="GCS_BUCKET_NAME=cfdi-suite-uploads-706861124428,REDIS_HOST=dashing-aphid-43185.upstash.io,REDIS_PORT=6379,PUSHER_CLUSTER=us2,PUSHER_APP_ID=1862529,PUSHER_KEY=0f3e4895e9560f9ae627" \
+  --set-env-vars="GCS_BUCKET_NAME=cfdi-suite-uploads-706861124428,REDIS_HOST=dashing-aphid-43185.upstash.io,REDIS_PORT=6379,PUSHER_CLUSTER=us2,PUSHER_APP_ID=2174770,PUSHER_KEY=ec582a031473e2da1654" \
   --set-secrets="REDIS_PASSWORD=redis-password:latest,PUSHER_SECRET=pusher-secret:latest"  # pragma: allowlist secret
 
 echo ""
