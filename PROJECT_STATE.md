@@ -2,7 +2,48 @@
 > Actualizar antes de cada commit con cambios de código
 
 ## Checkpoint activo
-main
+`seguridad/fase-2` — 20 commits sobre `main`, **nada desplegado**.
+
+### Fase 2 de seguridad — bloques 0 a 5 cerrados (2026-07-26/27)
+
+17 de 55 pasos aplicados, un commit por hallazgo. Cierra **todos los CRITICAL y
+HIGH con panel unánime que la Fase 2 debía cerrar, menos #24 y #7** (bloques 6 y 7).
+
+| Bloque | Hallazgos cerrados |
+|---|---|
+| 1 — Quick wins | #9, #39, #19, #25, #42, #47, #50, #54 (+#21 stale). **#23 NO aplicado a propósito** |
+| 2 — XXE | #1 |
+| 3 — Service account | #26 |
+| 4 — **Borde interno** | #2, `BATCH6-CANDIDATE-02`, `BATCH6-CANDIDATE-04` |
+| 5 — HIGH mecánicos | #38, #35, #8, #4 (+los 14 de batch que colapsan en él), #3, #18 |
+
+**Baselines del gate** (sin ellos no se distingue "lo rompí yo" de "ya estaba roto"):
+`pytest` **329** (eran 299; +30 tests nuevos) · `ruff` **42** (eran 44, bajó porque
+el fix de #4 eliminó dos `F821` reales) · `tsc --noEmit` **6 errores preexistentes**
+en `ConversionMasivaPage.test.tsx` · `vitest` **119**.
+
+**Para continuar (bloques 6–9, pasos 18–56): leer
+`docs/seguridad/prompt-fase2-bloques-6-9.md`.** Arranca en frío desde ahí.
+
+> ⚠️ **DEUDA DE DESPLIEGUE — el orden del paso 12 no es opcional.**
+> `task_dispatcher.py` y los routers viven en la MISMA imagen de Cloud Run, así
+> que "primero uno y luego el otro" son dos DEPLOYS:
+> 1. desplegar sólo `1bfb1b6` (12a, Cloud Tasks emite el token);
+> 2. confirmar en logs que las tareas llegan con `Authorization: Bearer`;
+> 3. **drenar la cola** (una tarea encolada antes de 12a no lleva token);
+> 4. sólo entonces desplegar `5d8067a` (12b, los endpoints lo exigen).
+>
+> Al revés se cae la generación de PDF y el análisis por lotes en producción.
+> También pendiente de deploy: el `--service-account` de #26 (`82b7c28`).
+
+**Infra ya cambiada en vivo** (no requiere deploy): la SA `cfdi-suite-api-sa`
+existe con permisos mínimos —y con `serviceAccountTokenCreator` **acotado a sí
+misma**, porque la spec original lo concedía a nivel de proyecto y eso permitía
+pedir un token de la compute SA (que tiene Editor), anulando el propio fix—; y
+el CORS del bucket pasó de `['*']` a los 3 orígenes reales.
+
+**Pendiente de verificación:** las de #42, #47, #50 y #54 necesitan
+`docker build`/`docker run` y el daemon de Docker estaba apagado.
 
 ## Deuda técnica pendiente (explícita, no olvidada)
 - ~~Visibilidad de progreso del batch de ZIP puede quedar "stuck" tras una caída de
