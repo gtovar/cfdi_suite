@@ -456,7 +456,7 @@ export function waitForBatchJob(
 // rewrite de Vercel, que tiene un límite fijo de 120s para destinos
 // externos (insuficiente para lotes grandes).
 export function getBatchDownloadUrl(batchId: string): string {
-  return apiUrl("/api/cfdi/pdf/batch/" + batchId + "/download");
+  return apiUrl("/api/cfdi/pdf/batch/" + batchId + "/download?token=" + encodeURIComponent(getAuthToken() || ""));
 }
 
 // IDs de los archivos ya convertidos hasta ahora, para ir llenando la
