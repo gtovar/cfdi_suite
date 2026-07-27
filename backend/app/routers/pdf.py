@@ -41,6 +41,7 @@ from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
 from ..services.redis_errors import is_redis_quota_error
 from ..services.redis_safety import safe_redis_call
+from ..services.internal_auth import verify_cloud_tasks
 from ..services import batch_state_store
 
 router = APIRouter(prefix="/api", tags=["PDF"])
@@ -104,8 +105,8 @@ class ExtractZipPayload(BaseModel):
 
 @router.post("/internal/generate-pdf")
 async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
-    if "x-cloudtasks-queuename" not in request.headers:
-        raise HTTPException(status_code=403, detail="Acceso denegado. Solo Cloud Tasks.")
+    if not verify_cloud_tasks(request):
+        raise HTTPException(status_code=403, detail="Acceso denegado")
 
     print(f"Iniciando generación de PDF para Job ID: {payload.job_id}")
     # Best-effort, nunca puede tumbar el trabajo real de abajo si Redis está
@@ -722,8 +723,8 @@ async def internal_extract_zip(payload: ExtractZipPayload, request: Request):
     para que Cloud Run mantenga la instancia activa mientras dura, y para
     que Cloud Tasks reintente automáticamente si falla a medio camino.
     """
-    if "x-cloudtasks-queuename" not in request.headers:
-        raise HTTPException(status_code=403, detail="Acceso denegado. Solo Cloud Tasks.")
+    if not verify_cloud_tasks(request):
+        raise HTTPException(status_code=403, detail="Acceso denegado")
 
     ran = await process_zip_in_background(payload.gcs_path, payload.batch_id, payload.template_id)
     return {"status": "success" if ran else "skipped_already_in_progress"}

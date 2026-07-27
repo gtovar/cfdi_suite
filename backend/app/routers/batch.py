@@ -17,6 +17,7 @@ from ..services.analyze_cfdi import run_analyze_cfdi
 from ..services.batch_reports import generate_diot
 from ..services.task_dispatcher import enqueue_cfdi_analysis
 from ..services.redis_safety import safe_redis_call_sync
+from ..services.internal_auth import verify_cloud_tasks
 
 router = APIRouter(prefix="/api/cfdi/batch")
 
@@ -25,6 +26,13 @@ router = APIRouter(prefix="/api/cfdi/batch")
 # para el contenido y los resultados de este pipeline también, en vez de dar
 # de alta un prefijo nuevo que requeriría su propia regla.
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
+
+# Único prefijo que /worker-task tiene permitido leer. El bucket es COMPARTIDO:
+# también guarda uploads/ (los ZIP que sube el usuario), pdfs/ (los generados)
+# y xml_temp/{job_id}.xml (el pipeline de PDF). El worker sólo necesita lo que
+# escribe batch_analyze, f"xml_temp/analysis_{batch_id}/{fname}" (línea ~145),
+# así que el guard se cierra sobre eso y nada más.
+_ALLOWED_GCS_PREFIX = "xml_temp/analysis_"
 
 
 def _analysis_bucket():
@@ -210,6 +218,9 @@ async def get_batch_status(batch_id: str):
 @router.post("/worker-task")
 async def batch_worker_task(request: Request):
     """Webhook asíncrono e independiente invocado por Google Cloud Tasks."""
+    if not verify_cloud_tasks(request):
+        raise HTTPException(status_code=403, detail="Acceso denegado")
+
     payload = await request.json()
     batch_id = payload["batch_id"]
     filename = payload["filename"]
@@ -221,6 +232,20 @@ async def batch_worker_task(request: Request):
     # KeyError -> 500 -> reintento infinito de Cloud Tasks durante la ventana
     # del deploy.
     gcs_path = payload.get("gcs_path") or payload.get("redis_key")
+
+    # Defensa en profundidad sobre el token OIDC de arriba: aunque el
+    # llamador esté autenticado, la ruta viene del cuerpo del request y este
+    # endpoint la usa para leer del bucket COMPARTIDO -- ahí también viven
+    # uploads/ y los PDF generados. Sin este guard, una ruta arbitraria deja
+    # leer cualquier objeto del bucket y devolverlo procesado.
+    #
+    # OJO: la AMPLIACIÓN de la spec #2 propone el prefijo "xml_temp_analysis/",
+    # que NO EXISTE. La ruta real la arma batch_analyze en la línea 145:
+    # f"xml_temp/analysis_{batch_id}/{fname}". Con el prefijo de la spec, este
+    # guard habría rechazado TODAS las tareas legítimas y roto el análisis por
+    # lotes en producción.
+    if not gcs_path or not gcs_path.startswith(_ALLOWED_GCS_PREFIX) or ".." in gcs_path:
+        return {"status": "error", "message": "Ruta de objeto inválida"}
 
     # 1. Traemos el XML real desde GCS (durable) -- antes vivía en Redis con
     #    TTL de 1h y sin ninguna copia de respaldo si Upstash lo perdía antes

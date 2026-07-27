@@ -94,6 +94,16 @@ class BatchAnalyzeGcsDurabilityTests(unittest.TestCase):
 
 @unittest.skipIf(batch_router is None, f"backend no disponible: {_IMPORT_ERROR}")
 class BatchWorkerTaskGcsDurabilityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Desde el hallazgo #2, /worker-task exige un token OIDC de Cloud Tasks
+        # -- antes no tenía verificación de ningún tipo. Estos tests son sobre
+        # la durabilidad en GCS, no sobre autenticación: se dan por
+        # autenticados. Que el guard rechace de verdad (y que el guard de
+        # gcs_path funcione) lo cubre test_internal_auth.py.
+        _auth = patch.object(batch_router, "verify_cloud_tasks", return_value=True)
+        _auth.start()
+        self.addCleanup(_auth.stop)
+
     def test_lee_xml_de_gcs_y_persiste_resultado_ahi_antes_que_redis(self) -> None:
         mock_bucket = MagicMock()
         mock_blob = MagicMock()

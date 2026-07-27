@@ -121,6 +121,12 @@ class InternalGeneratePdfSignalResilienceTests(unittest.TestCase):
 
     def setUp(self) -> None:
         realtime._last_signal_at.clear()
+        # Ver la nota de test_pdf_batch_ttl.py: desde el hallazgo #2 el
+        # endpoint exige token OIDC. Estos tests son sobre la señal de Pusher
+        # con Redis caído, no sobre autenticación.
+        _auth = patch.object(pdf_router, "verify_cloud_tasks", return_value=True)
+        _auth.start()
+        self.addCleanup(_auth.stop)
 
     def test_success_path_avisa_aunque_redis_truene_en_todo(self) -> None:
         from backend.app.routers.pdf import GeneratePdfPayload

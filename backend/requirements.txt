@@ -13,6 +13,10 @@ qrcode>=7.4,<8
 lxml>=5.0,<6
 redis>=5.0,<6
 google-cloud-tasks>=2.16,<3
+# Explícita, no transitiva: internal_auth.py la importa directo para verificar
+# los tokens OIDC de los endpoints internos (hallazgo #2). Hoy llega arrastrada
+# por google-cloud-*, pero de eso depende ahora un control de seguridad.
+google-auth>=2.0,<3
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-instrumentation-fastapi

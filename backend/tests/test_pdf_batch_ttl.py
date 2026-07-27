@@ -32,6 +32,14 @@ class BatchMetadataTtlTests(unittest.TestCase):
             86400,
             "el TTL objetivo debe alinearse al lifecycle de GCS confirmado en Fase 1",
         )
+        # Desde el hallazgo #2, /internal/generate-pdf exige un token OIDC de
+        # Cloud Tasks y ya no le basta el header (que era spoofeable). Estos
+        # tests son sobre TTL de Redis, no sobre autenticación: se dan por
+        # autenticados. Que el guard rechace de verdad lo cubre
+        # test_internal_auth.py, que sí ejercita internal_auth.verify_cloud_tasks.
+        _auth = patch.object(pdf_router, "verify_cloud_tasks", return_value=True)
+        _auth.start()
+        self.addCleanup(_auth.stop)
 
     def test_process_zip_in_background_sets_extracting_total_and_batch_ids_ttl(self) -> None:
         import io

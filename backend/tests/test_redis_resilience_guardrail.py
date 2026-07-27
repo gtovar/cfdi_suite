@@ -42,7 +42,7 @@ ALLOWLIST: set[tuple[str, int]] = {
         # publish_batch_tick/ready_recent de los 2 loops movió esta línea de
         # 188 a 183 -- verificado corriendo el test, no a ojo.)
     (
-        "app/routers/pdf.py", 1012,
+        "app/routers/pdf.py", 1013,
     ),  # scard cosmético dentro de flush_chunk -- ya vive en su propio
         # try/except (líneas de alrededor) que nunca deja que un fallo aquí
         # tumbe la subida real del chunk; no usa safe_redis_call por nombre
@@ -50,6 +50,11 @@ ALLOWLIST: set[tuple[str, int]] = {
         # (línea actualizada 2026-07-25, rediseño hint-only: reemplazar el
         # payload de publish_batch_progress por publish_batch_signal movió
         # esta línea de 1043 a 1012 -- verificado corriendo el test, no a ojo.)
+        # (línea actualizada 2026-07-26, hallazgo #2: el import de
+        # verify_cloud_tasks añadió una línea al bloque de imports y movió
+        # ésta de 1012 a 1013. La decisión de fondo no cambia -- sigue siendo
+        # el mismo scard cosmético en el mismo try/except; sólo se corrió de
+        # sitio. Verificado corriendo el test, no a ojo.)
 }
 # NOTA 2026-07-24: el lock de idempotencia de process_zip_in_background
 # (antes en esta lista como deliberadamente fail-closed) pasó a best-effort
