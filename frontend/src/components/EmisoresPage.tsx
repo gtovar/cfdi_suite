@@ -27,7 +27,7 @@ interface ModalProps {
 
 function EmisorModal({ initial, onSave, onClose }: ModalProps) {
   const [rfc, setRfc] = useState(initial?.rfc ?? '');
-  const [credentialId, setCredentialId] = useState(initial?.credential_id ?? '');
+  const [credentialId, setCredentialId] = useState('');
   const [token, setToken] = useState('');
   const [certificate, setCertificate] = useState(initial?.certificate_number ?? '');
   const [showToken, setShowToken] = useState(false);
@@ -487,7 +487,7 @@ export default function EmisoresPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50 text-left">
-                    {['RFC Emisor', 'Credential ID', 'Certificado', ''].map((h) => (
+                    {['RFC Emisor', 'Certificado', ''].map((h) => (
                       <th key={h} className="px-5 py-3 text-tiny font-medium uppercase tracking-wider text-gray-500">
                         {h}
                       </th>
@@ -498,7 +498,6 @@ export default function EmisoresPage() {
                   {emisores.map((em) => (
                     <tr key={em.rfc} className="transition-colors duration-150 hover:bg-gray-50">
                       <td className="px-5 py-3 text-xs-plus font-semibold text-gray-900">{em.rfc}</td>
-                      <td className="px-5 py-3 text-xs text-gray-600">{em.credential_id}</td>
                       <td className="px-5 py-3 text-xs text-gray-500">{em.certificate_number || '—'}</td>
                       <td className="px-5 py-3">
                         <div className="flex items-center justify-end gap-1.5">

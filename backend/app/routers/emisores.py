@@ -33,7 +33,6 @@ class EmisorCreate(BaseModel):
 class EmisorPublic(BaseModel):
     rfc: str
     pac: str
-    credential_id: str
     certificate_number: str
 
 
@@ -41,7 +40,6 @@ def _to_public(rfc: str, entry: dict) -> EmisorPublic:
     return EmisorPublic(
         rfc=rfc,
         pac=entry.get("pac", "diverza"),
-        credential_id=entry.get("credential_id", ""),
         certificate_number=entry.get("certificate_number", ""),
     )
 

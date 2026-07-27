@@ -1,7 +1,6 @@
 export interface Emisor {
   rfc: string;
   pac: string;
-  credential_id: string;
   certificate_number: string;
 }
 
