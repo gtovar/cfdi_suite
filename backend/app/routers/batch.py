@@ -151,13 +151,16 @@ async def batch_analyze(files: list[UploadFile] = File(...)):
     # coordinación (contador de progreso), el contenido real de cada XML ya
     # no vive aquí (ver abajo), así que un fallo aquí no impide crear el
     # lote ni encolar el trabajo real.
-    safe_redis_call_sync(lambda: redis_client.hmset(_batch_hash_key(batch_id), {
-        "total_files": len(contents),
-        "completed_count": 0,
-        "status": "processing"
-    }))
-    # Aseguramos la auto-limpieza de la memoria de Redis
-    safe_redis_call_sync(lambda: redis_client.expire(_batch_hash_key(batch_id), REDIS_TTL))
+    safe_redis_call_sync(lambda: (
+        redis_client.pipeline()
+        .hmset(_batch_hash_key(batch_id), {
+            "total_files": len(contents),
+            "completed_count": 0,
+            "status": "processing"
+        })
+        .expire(_batch_hash_key(batch_id), REDIS_TTL)
+        .execute()
+    ))
     safe_redis_call_sync(lambda: redis_client.expire(_batch_results_key(batch_id), REDIS_TTL))
 
     bucket = _analysis_bucket()
