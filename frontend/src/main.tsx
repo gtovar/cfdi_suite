@@ -15,7 +15,9 @@ Sentry.init({
   environment: `frontend-${(import.meta as any).env.MODE}`,
 });
 
-console.log("📡 TODAS LAS VARIABLES VISIBLES POR VITE:", (import.meta as any).env);
+if (import.meta.env.DEV) {
+  console.log("📡 TODAS LAS VARIABLES VISIBLES POR VITE:", (import.meta as any).env);
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
