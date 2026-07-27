@@ -778,16 +778,21 @@ gsutil cors get gs://cfdi-suite-uploads-706861124428
 
 **Rollback:** Revertir a `"*"` en `cors-gcs.json` y re-ejecutar `gsutil cors set`.
 
-> ⚠️ **ESTADO 2026-07-26 — ABIERTO EN PRODUCCIÓN, pendiente del dueño.**
+> ✅ **ESTADO 2026-07-26 — CERRADO Y APLICADO AL BUCKET.**
 >
-> Verificado en vivo ese día:
+> Al empezar la Fase 2 el bucket seguía con `origin: ['*']` (verificado en vivo,
+> no supuesto). El dueño corrió `gsutil cors set` y quedó:
 > ```
 > gcloud storage buckets describe gs://cfdi-suite-uploads-706861124428 \
 >   --format="value(cors_config)"
-> → {'maxAgeSeconds': 3600, 'method': ['PUT','GET'], 'origin': ['*'], ...}
+> → origin: ['https://cfdiinspector.vercel.app',
+>            'http://localhost:3000', 'http://127.0.0.1:3000']
 > ```
-> El bucket **sigue con `origin: ['*']`**. Editar `cors-gcs.json` no cambia
-> nada: GCS no lee ese archivo, sólo `gsutil cors set` lo aplica.
+>
+> **Lección para futuros fixes de infra:** editar `cors-gcs.json` no cambia
+> nada por sí solo -- GCS no lee ese archivo. El hallazgo se cierra con
+> `gsutil cors set`, no con un commit. Al verificar, preguntarle al bucket, no
+> al archivo.
 >
 > `cors-gcs.json` está corregido en el working tree local (de `["*"]` a los 3
 > orígenes reales) pero **no se versionó**: está en `.gitignore:46` con el
@@ -914,8 +919,21 @@ gcloud iam service-accounts add-iam-policy-binding \
 >   --project=ultra-acre-431617-p0
 > ```
 >
-> **Estado 2026-07-26: PENDIENTE.** Los 7 comandos originales ya corrieron y la
-> SA existe; el binding de proyecto sigue puesto.
+> **Estado 2026-07-26: RESUELTO.** Los dos comandos de arriba corrieron.
+> Verificado de forma independiente:
+> ```
+> gcloud projects get-iam-policy ultra-acre-431617-p0 \
+>   --flatten="bindings[].members" \
+>   --filter="bindings.members:cfdi-suite-api-sa@..." \
+>   --format="value(bindings.role)"
+> → cloudtasks.enqueuer, cloudtrace.agent, run.invoker   (SIN tokenCreator)
+>
+> gcloud iam service-accounts get-iam-policy cfdi-suite-api-sa@... \
+>   --format="value(bindings.role)"
+> → roles/iam.serviceAccountTokenCreator;roles/iam.serviceAccountUser
+> ```
+> La SA ya no puede pedir tokens de la compute SA, así que #26 por fin hace lo
+> que promete: quitarle el Editor al servicio sin devolverlo por otra vía.
 
 **Verificación post-fix:**
 ```bash
