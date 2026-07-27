@@ -13,11 +13,12 @@ from uuid import uuid4
 import httpx
 import openpyxl
 import redis
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from ..credentials import get as get_cred
+from ..security import verify_user_identity
 from ..services.error_reporting import report
 
 router = APIRouter(prefix="/api/sat", tags=["sat"])
@@ -241,8 +242,9 @@ async def _enquiry_indexed(
     rfc_receptor: str,
     total_cfdi: str,
     motive: str,
+    tenant_id: str,
 ) -> tuple[int, dict[str, Any]]:
-    cred = get_cred(rfc_emisor.upper())
+    cred = get_cred(rfc_emisor.upper(), tenant_id)
     if not cred:
         return idx, {
             "uuid": uuid,
@@ -388,8 +390,11 @@ def _build_result_excel(
 
 
 @router.post("/enquiry", response_model=EnquiryResult)
-async def single_sat_enquiry(body: EnquiryRequest) -> EnquiryResult:
-    cred = get_cred(body.rfc_emisor.upper())
+async def single_sat_enquiry(
+    body: EnquiryRequest,
+    tenant_id: str = Depends(verify_user_identity),
+) -> EnquiryResult:
+    cred = get_cred(body.rfc_emisor.upper(), tenant_id)
     if not cred:
         raise HTTPException(
             status_code=404,
@@ -415,7 +420,10 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
 @router.post("/enquiry/batch")
-async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
+async def batch_sat_enquiry(
+    file: UploadFile = File(...),
+    tenant_id: str = Depends(verify_user_identity),
+) -> StreamingResponse:
     content = await file.read()
 
     if len(content) > _MAX_UPLOAD_BYTES:
@@ -459,6 +467,7 @@ async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
                         row["rfc_receptor"],
                         row["total_cfdi"],
                         row["motive"],
+                        tenant_id,
                     )
                 )
                 for idx, row in enumerate(rows)
