@@ -6,17 +6,10 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet
 
+from .fernet_utils import _ensure_key as _fernet
+
 _SUITE_DIR = Path.home() / ".cfdi-suite"
-_KEY_FILE = _SUITE_DIR / "secret.key"
 _FIEL_FILE = _SUITE_DIR / "fiel.enc"
-
-
-def _fernet() -> Fernet:
-    _SUITE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not _KEY_FILE.exists():
-        _KEY_FILE.write_bytes(Fernet.generate_key())
-        _KEY_FILE.chmod(0o600)
-    return Fernet(_KEY_FILE.read_bytes())
 
 
 def save_fiel(cer_bytes: bytes, key_bytes: bytes, password: str) -> None:

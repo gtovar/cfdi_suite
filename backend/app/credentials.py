@@ -6,17 +6,10 @@ from typing import Any
 
 from cryptography.fernet import Fernet
 
+from .fernet_utils import _ensure_key
+
 _SUITE_DIR = Path.home() / ".cfdi-suite"
-_KEY_FILE = _SUITE_DIR / "secret.key"
 _DATA_FILE = _SUITE_DIR / "emisores.enc"
-
-
-def _ensure_key() -> Fernet:
-    _SUITE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not _KEY_FILE.exists():
-        _KEY_FILE.write_bytes(Fernet.generate_key())
-        _KEY_FILE.chmod(0o600)
-    return Fernet(_KEY_FILE.read_bytes())
 
 
 def _load_raw() -> dict[str, Any]:
