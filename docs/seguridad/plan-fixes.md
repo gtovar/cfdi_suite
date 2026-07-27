@@ -226,12 +226,34 @@ se cae. **El orden de despliegue no es opcional:** primero `task_dispatcher.py`
 Bearer`, y sólo después `pdf.py` + `batch.py` (exigirlo). Borrar el comentario
 engañoso al aplicar.
 
-**Verificación ampliada:**
+**Verificación ampliada** (corregida el 2026-07-26 al aplicar el fix — los
+comandos de abajo son los que de verdad funcionan contra el código aplicado):
 ```bash
-grep -c "oidc_token" backend/app/services/task_dispatcher.py   # → 3
-grep -rn "_verify_cloud_tasks" backend/app/routers/            # → pdf.py ×2 + batch.py ×1
+grep -c '"oidc_token": _oidc_token()' backend/app/services/task_dispatcher.py  # → 3
+grep -rn "verify_cloud_tasks" backend/app/routers/             # → pdf.py ×3 + batch.py ×2
 grep -n "_ALLOWED_GCS_PREFIX" backend/app/routers/batch.py     # → definición + uso
 ```
+
+> **Dos correcciones a esta spec, hechas al aplicarla.**
+>
+> **La función se llama `verify_cloud_tasks`, sin guion bajo.** Vive en
+> `backend/app/services/internal_auth.py` y la importan `pdf.py` y `batch.py`;
+> un guion bajo inicial significa "privado del módulo" y no se importa entre
+> módulos. El `grep` viejo, con guion bajo, devuelve **cero** y se lee como
+> regresión cuando en realidad el fix está aplicado.
+>
+> **El prefijo `xml_temp_analysis/` de la AMPLIACIÓN no existe.** La ruta real
+> la construye `batch_analyze` (`batch.py:145`) como
+> `f"xml_temp/analysis_{batch_id}/{fname}"`. Aplicar el prefijo de la spec al
+> pie de la letra habría rechazado **todas** las tareas legítimas y roto el
+> análisis masivo en producción. El valor aplicado es `"xml_temp/analysis_"`,
+> que además es más estrecho que `"xml_temp/"` y deja fuera los XML del
+> pipeline de PDF (`xml_temp/{job_id}.xml`).
+>
+> También se eliminó la rama que aceptaba el header a secas cuando no había
+> `Authorization`: aceptar el header spoofeable es exactamente el agujero del
+> hallazgo. El riesgo de despliegue que esa rama intentaba cubrir se resuelve
+> con el split en dos commits/deploys (12a emite el token, 12b lo exige).
 
 ---
 
@@ -756,6 +778,36 @@ gsutil cors get gs://cfdi-suite-uploads-706861124428
 
 **Rollback:** Revertir a `"*"` en `cors-gcs.json` y re-ejecutar `gsutil cors set`.
 
+> ⚠️ **ESTADO 2026-07-26 — ABIERTO EN PRODUCCIÓN, pendiente del dueño.**
+>
+> Verificado en vivo ese día:
+> ```
+> gcloud storage buckets describe gs://cfdi-suite-uploads-706861124428 \
+>   --format="value(cors_config)"
+> → {'maxAgeSeconds': 3600, 'method': ['PUT','GET'], 'origin': ['*'], ...}
+> ```
+> El bucket **sigue con `origin: ['*']`**. Editar `cors-gcs.json` no cambia
+> nada: GCS no lee ese archivo, sólo `gsutil cors set` lo aplica.
+>
+> `cors-gcs.json` está corregido en el working tree local (de `["*"]` a los 3
+> orígenes reales) pero **no se versionó**: está en `.gitignore:46` con el
+> comentario deliberado "Config local de CORS para el bucket de GCS, no
+> versionar", y nunca estuvo en git. Se respetó esa decisión en vez de forzarla.
+>
+> **Discrepancia con la spec, gana el código:** la spec propone
+> `"http://localhost:5173"` (el puerto por defecto de Vite). Este proyecto corre
+> el dev server en **3000** (`"dev": "vite --port=3000"` en
+> `frontend/package.json`) y el backend usa
+> `"http://localhost:3000,http://127.0.0.1:3000"` como `ALLOWED_ORIGINS` por
+> defecto (`main.py:92`). `5173` no aparece en ninguna parte del repo. El
+> archivo local usa los mismos orígenes que el backend, para que las dos listas
+> digan lo mismo.
+>
+> Para cerrarlo hace falta un solo comando, y lo corre el dueño:
+> ```bash
+> gsutil cors set cors-gcs.json gs://cfdi-suite-uploads-706861124428
+> ```
+
 ---
 
 ### Fix #26: Cloud Run service account
@@ -820,10 +872,50 @@ gcloud projects add-iam-policy-binding ultra-acre-431617-p0 \
   --role="roles/cloudtrace.agent"
 
 # 6. IAM signBlob — para signed URLs
+#    ⚠️ VER ABAJO: este comando, tal como está, es una escalada de privilegios.
 gcloud projects add-iam-policy-binding ultra-acre-431617-p0 \
   --member="serviceAccount:cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountTokenCreator"
+
+# 7. FALTABA EN LA SPEC — actAs sobre sí misma.
+#    Sin esto, Cloud Tasks no puede crear tareas con oidc_token firmado por
+#    esta SA y create_task falla con PermissionDenied. Rompe el Fix #2 en su
+#    PRIMER deploy (12a), antes de lo que advierte la AMPLIACIÓN.
+gcloud iam service-accounts add-iam-policy-binding \
+  cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com \
+  --member="serviceAccount:cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser" \
+  --project=ultra-acre-431617-p0
 ```
+
+> ⚠️ **El comando 6 anula el propósito de este mismo fix. Corregirlo.**
+> Detectado el 2026-07-26 al aplicar la Fase 2, después de correr los 7 comandos.
+>
+> `roles/iam.serviceAccountTokenCreator` **a nivel de proyecto** deja que
+> `cfdi-suite-api-sa` genere tokens de acceso para **cualquier** service account
+> del proyecto — incluida `706861124428-compute@developer.gserviceaccount.com`,
+> que conserva `roles/editor`. O sea: quien comprometa Cloud Run pide un token
+> de la compute SA y **recupera Editor sobre todo el proyecto**. Este fix le
+> quita el Editor al servicio por la puerta y se lo devuelve por la ventana.
+>
+> Y ese alcance no hace falta: `pdf.py:624-644` (`_get_signing_credentials`)
+> firma con `google.auth.default()` y saca el email del metadata server, así
+> que la SA **siempre se firma a sí misma**. Basta el binding sobre sí misma:
+>
+> ```bash
+> gcloud projects remove-iam-policy-binding ultra-acre-431617-p0 \
+>   --member="serviceAccount:cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com" \
+>   --role="roles/iam.serviceAccountTokenCreator"
+>
+> gcloud iam service-accounts add-iam-policy-binding \
+>   cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com \
+>   --member="serviceAccount:cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com" \
+>   --role="roles/iam.serviceAccountTokenCreator" \
+>   --project=ultra-acre-431617-p0
+> ```
+>
+> **Estado 2026-07-26: PENDIENTE.** Los 7 comandos originales ya corrieron y la
+> SA existe; el binding de proyecto sigue puesto.
 
 **Verificación post-fix:**
 ```bash
@@ -1305,6 +1397,31 @@ Luego mover `VERCEL_URL` y `PUSHER_KEY` de Secrets a Variables en GitHub Setting
 # === DESPUÉS ===
             --timeout=600
 ```
+
+> ⛔ **NO APLICADO — decisión del dueño, 2026-07-26. El timeout no es la
+> palanca.**
+>
+> El trabajo que corre dentro de un request de este servicio **no tiene cota
+> superior conocida**: puede ser un ZIP de un millón de XMLs, o muchas
+> solicitudes grandes a la vez. Ningún número fijo resuelve eso — 600 corta
+> trabajo legítimo y 1800 tampoco detiene a un atacante, sólo le pone un techo
+> arbitrario más alto.
+>
+> Y hay evidencia medida de que 600 rompe producción: `PROJECT_STATE.md:972`
+> documenta una extracción **real** de 2000 XMLs que tardó **10 minutos** (600s
+> exactos) saturando la red de la instancia todo ese tiempo, en un solo
+> request. El corte quedaría justo encima de un caso observado.
+>
+> Lo que sí acota de verdad, y son fixes de esta misma fase:
+> - **`### Fix #44`** (paso 31) — límite de tamaño por archivo en `batch_analyze`.
+> - **`### Fix #43`** (paso 30) — validación de MIME/magic bytes en uploads.
+> - Sacar el trabajo largo del request hacia el Cloud Run Job `cfdi-batch-shard`,
+>   que ya existe (`BATCH_JOB_THRESHOLD`).
+>
+> `--timeout=1800` se deja como está, en `deploy-backend.yml:66` y en
+> `cloudbuild.yaml:23`. Si algún día se toca, hay que tocarlo en los **dos**:
+> `cloudbuild.yaml:34-36` documenta que divergir entre los dos pipelines ya
+> causó incidentes.
 
 ---
 

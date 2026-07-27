@@ -302,8 +302,13 @@ Y al terminar toda la Fase 2:
 python3 scripts/reconcile_registry.py --output docs/seguridad/registro-unificado.md
 
 # 2. Los tres hechos que definen si el borde interno quedó cerrado
-grep -c "oidc_token" backend/app/services/task_dispatcher.py     # → 3
-grep -rn "_verify_cloud_tasks" backend/app/routers/              # → pdf.py ×2 + batch.py ×1
+# OJO: sin el guion bajo. La función quedó como `verify_cloud_tasks` (pública),
+# porque vive en services/internal_auth.py y la importan dos routers -- un
+# nombre con guion bajo inicial señala "privado del módulo" y no se importa
+# entre módulos. Con el nombre viejo estos greps dan CERO y parecen regresión.
+grep -c '"oidc_token": _oidc_token()' backend/app/services/task_dispatcher.py  # → 3
+grep -rn "verify_cloud_tasks" backend/app/routers/               # → pdf.py ×3 + batch.py ×2 (import + usos)
+grep -n "_ALLOWED_GCS_PREFIX" backend/app/routers/batch.py       # → definición + uso
 grep -rn "ssl_cert_reqs" --include="*.py" .                      # → 3 líneas, todas "required"
 
 # 3. Y el que define lo que NO se cerró (debe seguir dando 0 — es esperado)
