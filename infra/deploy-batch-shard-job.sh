@@ -40,6 +40,24 @@ IMAGE="${IMAGE:-us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy
 # repetir el mismo patrón, ya que este script vive en el repo (no en un
 # workflow con secrets de GitHub).
 #
+# AKTUALIZADO 2026-07-27 (B-lite, #31):
+# - --service-account con SA dedicada (cfdi-batch-shard-sa)
+# - --set-secrets en vez de enviar credenciales en texto plano
+#
+# Requiere crear la SA y secretos ANTES de correr este script:
+#   gcloud iam service-accounts create cfdi-batch-shard-sa \
+#     --display-name="Batch shard job SA"
+#   gcloud projects add-iam-policy-binding ultra-acre-431617-p0 \
+#     --member=serviceAccount:cfdi-batch-shard-sa@ultra-acre-431617-p0.iam.gserviceaccount.com \
+#     --role=roles/storage.objectAdmin \
+#     --condition="expression=resource.name.startsWith('projects/_/buckets/cfdi-suite-uploads-706861124428'),title=own-bucket"
+#   gcloud secrets add-iam-policy-binding redis-password \
+#     --member=serviceAccount:cfdi-batch-shard-sa@ultra-acre-431617-p0.iam.gserviceaccount.com \
+#     --role=roles/secretmanager.secretAccessor
+#   gcloud secrets add-iam-policy-binding pusher-secret \
+#     --member=serviceAccount:cfdi-batch-shard-sa@ultra-acre-431617-p0.iam.gserviceaccount.com \
+#     --role=roles/secretmanager.secretAccessor
+#
 # BUG ENCONTRADO Y CORREGIDO 2026-07-12, EN VIVO, durante la primera prueba
 # real (batch de 2000 XMLs vía el sitio web): esta lista original de
 # --set-env-vars NO incluía PUSHER_APP_ID/PUSHER_KEY/PUSHER_SECRET/
@@ -63,11 +81,10 @@ gcloud run jobs deploy "${JOB_NAME}" \
   --memory=2Gi \
   --task-timeout=600 \
   --max-retries=1 \
-  --set-env-vars="GCS_BUCKET_NAME=cfdi-suite-uploads-706861124428,REDIS_HOST=dashing-aphid-43185.upstash.io,REDIS_PORT=6379,PUSHER_CLUSTER=us2"
-  # REDIS_PASSWORD, PUSHER_APP_ID, PUSHER_KEY, PUSHER_SECRET: agregar aquí
-  # --set-secrets o --update-env-vars según se resuelva el TODO de arriba,
-  # antes de correr este script contra el proyecto real — no se dejan en
-  # texto plano en este archivo versionado en git.
+  --service-account="cfdi-batch-shard-sa@ultra-acre-431617-p0.iam.gserviceaccount.com" \
+  # pragma: allowlist nextline secret
+  --set-env-vars="GCS_BUCKET_NAME=cfdi-suite-uploads-706861124428,REDIS_HOST=dashing-aphid-43185.upstash.io,REDIS_PORT=6379,PUSHER_CLUSTER=us2,PUSHER_APP_ID=1862529,PUSHER_KEY=0f3e4895e9560f9ae627" \
+  --set-secrets="REDIS_PASSWORD=redis-password:latest,PUSHER_SECRET=pusher-secret:latest"  # pragma: allowlist secret
 
 echo ""
 echo "Job '${JOB_NAME}' definido en ${REGION}. NO se ejecutó ninguna tarea todavía."
