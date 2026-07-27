@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Download, RefreshCw, Upload, X } from 'lucide-react';
+import { apiFetch } from '../lib/api-fetch';
 
 const ZONE_LABELS: Record<string, string> = {
   header:    'Encabezado (logo + color)',
@@ -106,7 +107,7 @@ export default function PdfTemplateBuilder({ sourceFile, onDownload, onClose, pd
       const form = new FormData();
       form.append('file', sourceFile);
       form.append('template', JSON.stringify(tpl));
-      const res = await fetch('/api/cfdi/pdf/preview', { method: 'POST', body: form, signal: ctrl.signal });
+      const res = await apiFetch('/api/cfdi/pdf/preview', { method: 'POST', body: form, signal: ctrl.signal });
       if (!res.ok) throw new Error('preview error');
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);

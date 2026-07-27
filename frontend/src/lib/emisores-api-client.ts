@@ -12,10 +12,10 @@ export interface EmisorCreate {
   certificate_number: string;
 }
 
-const BASE = '';
+import { apiFetch } from './api-fetch';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });

@@ -22,8 +22,10 @@ export type BatchProgressEvent =
   | { type: 'done'; download_token: string; total: number; descartadas?: number }
   | { type: 'error'; message: string };
 
+import { apiFetch } from './api-fetch';
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });
@@ -40,7 +42,7 @@ export async function enquirySingle(data: EnquiryRequest): Promise<EnquiryResult
 }
 
 export async function downloadBatchResult(downloadToken: string): Promise<void> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/sat/enquiry/batch/result?token=${encodeURIComponent(downloadToken)}`,
   );
   if (!res.ok) {
@@ -64,7 +66,7 @@ export async function enquiryBatch(
   const formData = new FormData();
   formData.append('file', file);
 
-  const res = await fetch('/api/sat/enquiry/batch', {
+  const res = await apiFetch('/api/sat/enquiry/batch', {
     method: 'POST',
     body: formData,
     signal,

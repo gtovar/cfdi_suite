@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import sentry_sdk 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -21,6 +21,7 @@ from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
+from .security import verify_user_identity
 from .observability import record_analyze_cfdi_error
 from .routers.batch import router as batch_router
 from .routers.emisores import router as emisores_router
@@ -66,7 +67,12 @@ sentry_sdk.init(
     before_send=_sentry_strip_sensitive,
 )
 
-app = FastAPI(title="cfdi-suite-api", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(
+    title="cfdi-suite-api",
+    version="0.1.0",
+    lifespan=_lifespan,
+    dependencies=[Depends(verify_user_identity)],
+)
 
 # ¡AQUÍ ESTÁ TU ALERTA AUTOMÁTICA!
 @app.exception_handler(InvalidArgument)

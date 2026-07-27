@@ -19,8 +19,10 @@ export interface FielStatus {
   rfc: string | null;
 }
 
+import { apiFetch } from './api-fetch';
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });
@@ -52,7 +54,7 @@ export async function configureFiel(cer: File, key: File, password: string): Pro
   form.append('cer', cer);
   form.append('key', key);
   form.append('password', password);
-  const res = await fetch('/api/fiel/configure', { method: 'POST', body: form });
+  const res = await apiFetch('/api/fiel/configure', { method: 'POST', body: form });
   const body = await res.json();
   if (!res.ok) throw new Error(body?.detail ?? `HTTP ${res.status}`);
   return body as FielStatus;

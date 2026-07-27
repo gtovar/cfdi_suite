@@ -19,6 +19,8 @@ import AppHeader from './components/AppHeader';
 import CfdiSummaryHeader from './components/CfdiSummaryHeader';
 import BatchAnalysisPage from './components/BatchAnalysisPage';
 import { assertBatchId } from './lib/ids';
+import AuthGate from './components/AuthGate';
+import { apiFetch } from './lib/api-fetch';
 import FloatingBatchWidget, { type BatchProgressStatus } from './components/FloatingBatchWidget';
 import CleanStatePanel from './components/CleanStatePanel';
 import ConceptDetailModal from './components/ConceptDetailModal';
@@ -249,7 +251,7 @@ export default function App() {
       const form = new FormData();
       form.append('file', sourceFile);
       if (template) form.append('template', JSON.stringify(template));
-      const startRes = await fetch('/api/cfdi/pdf/start', { method: 'POST', body: form });
+      const startRes = await apiFetch('/api/cfdi/pdf/start', { method: 'POST', body: form });
       if (!startRes.ok) {
         let msg = `Error ${startRes.status}`;
         try { const b = await startRes.json(); msg = b.detail ?? b.message ?? msg; } catch {}
@@ -275,7 +277,7 @@ export default function App() {
         es.onerror = () => { es.close(); reject(new Error('Conexión perdida')); };
       });
 
-      const dlRes = await fetch(`/api/cfdi/pdf/${jobId}/download`);
+      const dlRes = await apiFetch(`/api/cfdi/pdf/${jobId}/download`);
       if (!dlRes.ok) {
         let msg = `Error ${dlRes.status}`;
         try { const b = await dlRes.json(); msg = b.detail ?? b.message ?? msg; } catch {}
@@ -312,6 +314,7 @@ export default function App() {
   }
 
   return (
+    <AuthGate>
     <div className="flex flex-col md:h-screen">
       <AppHeader
         activeView={activeView}
@@ -536,5 +539,6 @@ export default function App() {
         />
       )}
     </div>
+    </AuthGate>
   );
 }

@@ -1,4 +1,5 @@
 import { reportSilently, userMessage } from './user-error';
+import { apiFetch } from './api-fetch';
 
 export interface BatchFileResult {
   filename: string;
@@ -45,7 +46,7 @@ export async function analyzeOneForBatch(
 ): Promise<BatchFileResult> {
   try {
     const xml = await file.text();
-    const res = await fetch('/api/cfdi/analyze', {
+    const res = await apiFetch('/api/cfdi/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ xml }),
@@ -165,7 +166,7 @@ export async function batchDiot(files: File[], params: DiotParams): Promise<Blob
   form.append('rfc_presentante', params.rfc_presentante);
   form.append('razon_social', params.razon_social ?? '');
 
-  const res = await fetch('/api/cfdi/batch/diot', {
+  const res = await apiFetch('/api/cfdi/batch/diot', {
     method: 'POST',
     body: form,
   });

@@ -30,10 +30,7 @@ interface ApiAnalyzeResponse extends Omit<CfdiAnalysisContractResult, 'engine'> 
   ingresoRowHeader?: Record<string, string>;
 }
 
-function resolveApiBaseUrl() {
-  // @ts-ignore
-  return import.meta.env.VITE_API_BASE_URL || '';
-}
+import { apiFetch } from './api-fetch';
 
 export async function analyzeCFDI(
   file: File,
@@ -46,7 +43,7 @@ export async function analyzeCFDI(
   });
 
   const xml = await file.text();
-  const response = await fetch(`${resolveApiBaseUrl()}/api/cfdi/analyze`, {
+  const response = await apiFetch('/api/cfdi/analyze', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

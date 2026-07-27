@@ -1,11 +1,7 @@
 import Pusher from 'pusher-js';
+import { apiFetch, apiUrl } from './api-fetch';
 
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
-
-function resolveApiBaseUrl() {
-  const url = import.meta.env.VITE_API_BASE_URL || '';
-  return url;
-}
 
 // Estructura de control para el progreso global de un lote ZIP
 export interface BatchProgressPayload {
@@ -175,11 +171,11 @@ export async function convertFileToPdf(file: File, templateId?: string): Promise
   fd.append('file', file);
   fd.append('engine', 'canvas_pipeline');
   if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
-  const res = await fetch('/api/cfdi/pdf/start', { method: 'POST', body: fd });
+  const res = await apiFetch('/api/cfdi/pdf/start', { method: 'POST', body: fd });
   if (!res.ok) throw new Error(`Error ${res.status} al iniciar conversión`);
   const { jobId } = await res.json() as { jobId: string };
   await waitForPdfJob(jobId);
-  const dl = await fetch(`/api/cfdi/pdf/${jobId}/download`);
+  const dl = await apiFetch(`/api/cfdi/pdf/${jobId}/download`);
   if (!dl.ok) throw new Error(`Error ${dl.status} al descargar PDF`);
   return dl.arrayBuffer();
 }
@@ -190,10 +186,8 @@ export async function startZipConversion(
   templateId?: string,
   onUploadProgress?: (percent: number) => void // <-- NUEVO: Callback para el Frontend
 ): Promise<{ batchId: string; totalFiles: number }> {
-  const baseUrl = resolveApiBaseUrl();
-
   // Paso A: Pedirle al backend la URL firmada
-  const resUrl = await fetch(baseUrl + "/api/cfdi/pdf/request-upload", { 
+  const resUrl = await apiFetch("/api/cfdi/pdf/request-upload", { 
     method: 'POST' 
   });
   
@@ -233,7 +227,7 @@ export async function startZipConversion(
   });
 
   // Paso C: Avisarle al backend que procese el archivo (AQUÍ ES DONDE SUELE SALTAR EL 429 SI SE LLENA)
-  const resProcess = await fetch(baseUrl + "/api/cfdi/pdf/start-zip-gcs", {
+  const resProcess = await apiFetch("/api/cfdi/pdf/start-zip-gcs", {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -306,7 +300,7 @@ export function watchBatchProgress(
   const key = (import.meta as any).env.VITE_PUSHER_KEY;
   if (!key) throw new Error("VITE_PUSHER_KEY no configurada");
   const cluster = (import.meta as any).env.VITE_PUSHER_CLUSTER || 'us2';
-  const statusUrl = resolveApiBaseUrl() + '/api/cfdi/pdf/batch/' + batchId + '/status';
+  const statusUrl = '/api/cfdi/pdf/batch/' + batchId + '/status';
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -351,7 +345,7 @@ export function watchBatchProgress(
       const controller = new AbortController();
       const timeoutTid = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);
       try {
-        const res = await fetch(statusUrl, { signal: controller.signal });
+        const res = await apiFetch(statusUrl, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json() as BatchProgressPayload;
           if (mySeq === fetchSeq) handle(data);
@@ -433,7 +427,7 @@ export function waitForBatchJob(
   onStatusChange?: (state: SseConnectionState, attempt: number) => void,
 ): Promise<void> {
   return subscribeWithRetry({
-    url: resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/progress",
+    url: apiUrl("/api/cfdi/pdf/batch/" + batchId + "/progress"),
     // 45 minutos: con reconexión activa, un lote de miles de archivos puede
     // legítimamente tardar más de los 10 min que teníamos antes.
     overallTimeoutMs: 2_700_000,
@@ -453,13 +447,13 @@ export function waitForBatchJob(
 // rewrite de Vercel, que tiene un límite fijo de 120s para destinos
 // externos (insuficiente para lotes grandes).
 export function getBatchDownloadUrl(batchId: string): string {
-  return resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/download";
+  return apiUrl("/api/cfdi/pdf/batch/" + batchId + "/download");
 }
 
 // IDs de los archivos ya convertidos hasta ahora, para ir llenando la
 // tabla de descargas individuales sin esperar a que todo el lote termine.
 export async function fetchReadyFileIds(batchId: string): Promise<string[]> {
-  const res = await fetch(resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/ready-files");
+  const res = await apiFetch("/api/cfdi/pdf/batch/" + batchId + "/ready-files");
   if (!res.ok) return [];
   const data = await res.json() as { jobIds: string[] };
   return data.jobIds;
@@ -468,7 +462,7 @@ export async function fetchReadyFileIds(batchId: string): Promise<string[]> {
 // Signed URL de descarga directa de GCS para un PDF individual — igual que
 // el ZIP consolidado, evita pasar por Vercel/Cloud Run para el archivo en sí.
 export async function fetchPdfDownloadUrl(jobId: string): Promise<string> {
-  const res = await fetch(resolveApiBaseUrl() + "/api/cfdi/pdf/" + jobId + "/download-url");
+  const res = await apiFetch("/api/cfdi/pdf/" + jobId + "/download-url");
   if (!res.ok) throw new Error(`Error ${res.status} al generar el enlace de descarga`);
   const data = await res.json() as { downloadUrl: string };
   return data.downloadUrl;
@@ -480,7 +474,7 @@ export async function fetchPdfDownloadUrl(jobId: string): Promise<string> {
 // antemano para poder mostrar una barra de progreso real.
 export async function fetchZipEstimatedSize(batchId: string): Promise<{ estimatedBytes: number; knownCount: number; totalCount: number } | null> {
   try {
-    const res = await fetch(resolveApiBaseUrl() + "/api/cfdi/pdf/batch/" + batchId + "/estimated-size");
+    const res = await apiFetch("/api/cfdi/pdf/batch/" + batchId + "/estimated-size");
     if (!res.ok) return null;
     return await res.json() as { estimatedBytes: number; knownCount: number; totalCount: number };
   } catch {

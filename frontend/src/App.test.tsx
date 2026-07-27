@@ -52,6 +52,7 @@ const cfdi: CFDIData = {
 };
 
 function renderApp() {
+  localStorage.setItem('cfdi-suite-auth-token', 'test-token');
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -66,6 +67,10 @@ function renderApp() {
       act(() => {
         root.render(<App />);
       });
+    },
+    cleanup: () => {
+      localStorage.removeItem('cfdi-suite-auth-token');
+      document.body.removeChild(container);
     },
   };
 }
