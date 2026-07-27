@@ -305,7 +305,8 @@ export function watchBatchProgress(
 ): Promise<void> {
   // La key de Pusher es pública por diseño (viaja en el bundle de cualquier
   // SPA que use pusher-js); VITE_PUSHER_KEY en Vercel la sobreescribe.
-  const key = (import.meta as any).env.VITE_PUSHER_KEY || 'ec582a031473e2da1654'; // pragma: allowlist secret
+  const key = (import.meta as any).env.VITE_PUSHER_KEY;
+  if (!key) throw new Error("VITE_PUSHER_KEY no configurada");
   const cluster = (import.meta as any).env.VITE_PUSHER_CLUSTER || 'us2';
   const statusUrl = resolveApiBaseUrl() + '/api/cfdi/pdf/batch/' + batchId + '/status';
 
