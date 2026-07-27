@@ -247,6 +247,11 @@ async def start_pdf_zip_generation(
     if not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="El archivo cargado debe ser un formato .ZIP válido.")
 
+    header = file.file.read(4)
+    file.file.seek(0)
+    if header != b"PK\x03\x04":
+        raise HTTPException(status_code=400, detail="El archivo no tiene firma ZIP válida")
+
     batch_id = str(uuid.uuid4())
     
     template_id = "default"

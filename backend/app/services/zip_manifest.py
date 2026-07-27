@@ -19,6 +19,8 @@ import zipfile
 
 
 def is_valid_xml_entry(file_info: zipfile.ZipInfo) -> bool:
+    if file_info.is_dir():
+        return False
     if "__MACOSX" in file_info.filename or ".DS_Store" in file_info.filename:
         return False
     return file_info.filename.lower().endswith(".xml")
