@@ -436,7 +436,7 @@ export function waitForBatchJob(
   onStatusChange?: (state: SseConnectionState, attempt: number) => void,
 ): Promise<void> {
   return subscribeWithRetry({
-    url: apiUrl("/api/cfdi/pdf/batch/" + batchId + "/progress"),
+    url: apiUrl("/api/cfdi/pdf/batch/" + batchId + "/progress") + "?token=" + encodeURIComponent(getAuthToken() || ""),
     // 45 minutos: con reconexión activa, un lote de miles de archivos puede
     // legítimamente tardar más de los 10 min que teníamos antes.
     overallTimeoutMs: 2_700_000,

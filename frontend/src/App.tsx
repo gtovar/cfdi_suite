@@ -21,6 +21,7 @@ import BatchAnalysisPage from './components/BatchAnalysisPage';
 import { assertBatchId } from './lib/ids';
 import AuthGate from './components/AuthGate';
 import { apiFetch } from './lib/api-fetch';
+import { getAuthToken } from './lib/auth-store';
 import FloatingBatchWidget, { type BatchProgressStatus } from './components/FloatingBatchWidget';
 import CleanStatePanel from './components/CleanStatePanel';
 import ConceptDetailModal from './components/ConceptDetailModal';
@@ -260,7 +261,8 @@ export default function App() {
       const { jobId } = await startRes.json();
 
       await new Promise<void>((resolve, reject) => {
-        const es = new EventSource(`/api/cfdi/pdf/${jobId}/progress`);
+        const token = getAuthToken();
+        const es = new EventSource(`/api/cfdi/pdf/${jobId}/progress?token=${encodeURIComponent(token || '')}`);
         es.onmessage = (e) => {
           const { status, progress_detail, error } = JSON.parse(e.data) as { status: string; progress_detail: string; error: string };
           if (progress_detail !== undefined) setPdfProgressDetail(progress_detail || undefined);

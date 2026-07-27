@@ -39,7 +39,11 @@ async def verify_user_identity(request: Request) -> str:
         return "dev-tenant"
 
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or auth[len("Bearer "):] != expected:
-        raise HTTPException(status_code=401, detail="Token invalido o ausente")
+    if auth.startswith("Bearer ") and auth[len("Bearer "):] == expected:
+        return "default-tenant"
 
-    return "default-tenant"
+    query_token = request.query_params.get("token", "")
+    if query_token == expected:
+        return "default-tenant"
+
+    raise HTTPException(status_code=401, detail="Token invalido o ausente")
