@@ -26,6 +26,7 @@ from ..services.batch_reports import generate_diot
 from ..services.task_dispatcher import enqueue_cfdi_analysis
 from ..services.redis_safety import safe_redis_call_sync
 from ..services.internal_auth import verify_cloud_tasks
+from ..services.error_reporting import report
 
 router = APIRouter(prefix="/api/cfdi/batch")
 
@@ -302,7 +303,10 @@ async def batch_worker_task(request: Request):
         total = header.get("total", "")
         fecha = header.get("fecha", "")
         findings = []
-        error_msg = str(e)
+        report(e, contexto="analizar_cfdi_lote")
+        # El detalle va a Sentry; al usuario le llega el nombre del archivo
+        # (que ya viaja en `filename`) y que ese archivo falló, no la traza.
+        error_msg = "No se pudo analizar el archivo"
 
     parsed_result = {
         "filename": filename,
@@ -364,9 +368,11 @@ async def batch_diot(
             lambda: generate_diot(xml_list, year=year, month=month, rfc_presentante=rfc_presentante or None, razon_social=razon_social or None)
         )
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        report(e, contexto="diot_entrada")
+        raise HTTPException(400, "Error al procesar el archivo del lote") from e
     except Exception as e:
-        raise HTTPException(500, f"Error generando DIOT: {e}")
+        report(e, contexto="generar_diot")
+        raise HTTPException(500, "Error al generar el DIOT") from e
 
     rfc_label = (rfc_presentante or "DIOT").upper().replace(" ", "_")
     filename = f"DIOT_{rfc_label}_{year}{str(month).zfill(2)}.txt"

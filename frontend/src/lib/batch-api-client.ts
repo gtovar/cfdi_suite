@@ -1,3 +1,5 @@
+import { reportSilently, userMessage } from './user-error';
+
 export interface BatchFileResult {
   filename: string;
   status: 'ok' | 'con_errores' | 'error';
@@ -53,7 +55,17 @@ export async function analyzeOneForBatch(
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       const profile = 'unknown' as BatchFileResult['profile'];
-      return makeErrorResult(file.name, `Error ${res.status}: ${text}`, profile);
+      // No se interpola `text`: en un 500 sin manejar ese cuerpo puede ser la
+      // traza del servidor. El código de estado sí es seguro y ayuda a
+      // distinguir "tu archivo" (4xx) de "nosotros" (5xx).
+      reportSilently(new Error(`batch analyze HTTP ${res.status}: ${text}`), 'batch_analyze_http');
+      return makeErrorResult(
+        file.name,
+        res.status >= 500
+          ? 'Error del servidor al analizar el archivo'
+          : 'No se pudo analizar el archivo',
+        profile,
+      );
     }
 
     const payload = await res.json() as Record<string, unknown>;
@@ -95,7 +107,7 @@ export async function analyzeOneForBatch(
     };
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err;
-    return makeErrorResult(file.name, err instanceof Error ? err.message : String(err));
+    return makeErrorResult(file.name, userMessage(err, 'No se pudo analizar el archivo', 'batch_analyze'));
   }
 }
 
@@ -120,7 +132,7 @@ export function batchAnalyzePool(
           analyzeOneForBatch(file, controller.signal)
             .catch((err): BatchFileResult | null => {
               if (err instanceof DOMException && err.name === 'AbortError') return null;
-              return makeErrorResult(file.name, err instanceof Error ? err.message : String(err));
+              return makeErrorResult(file.name, userMessage(err, 'No se pudo analizar el archivo', 'batch_analyze'));
             })
             .then((result) => {
               if (result !== null && !cancelled) onResult(result, idx);

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { enquirySingle, type EnquiryResult } from '../../lib/sat-enquiry-api-client';
+import { userMessage } from '../../lib/user-error';
 
 interface SatEnquiryParams {
   uuid: string;
@@ -27,7 +28,7 @@ export function useSatEnquiry() {
       });
       setResult(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error consultando SAT');
+      setError(userMessage(err, 'Error al consultar el SAT', 'consulta_sat'));
     } finally {
       setLoading(false);
     }

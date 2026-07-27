@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CFDIData, CFDIIngresoRow, CFDIPagoRow, CFDIProfile } from '../../cfdi/public';
 import { analyzeCFDI } from '../../lib/cfdi-api-client';
 import type { CFDIAnalysisMeta } from '../../lib/cfdi-api-client';
+import { userMessage } from '../../lib/user-error';
 
 type ProgressState = {
   label: string;
@@ -71,14 +72,13 @@ export function useCfdiAnalysis() {
 
       options?.onAfterApply?.();
     } catch (error) {
-      let message: string;
-      if (error instanceof TypeError) {
-        message = 'No se pudo conectar con la API. Verifica que el backend esté corriendo.';
-      } else if (error instanceof Error && error.message) {
-        message = error.message;
-      } else {
-        message = 'Error al procesar el XML. Asegúrate de que sea un CFDI válido.';
-      }
+      // Antes: si el error traía mensaje, se mostraba tal cual -- podía ser el
+      // cuerpo crudo de un 500 o una URL interna dentro de un error de fetch.
+      const message = userMessage(
+        error,
+        'Error al procesar el XML. Asegúrate de que sea un CFDI válido.',
+        'analizar_cfdi',
+      );
      // 1. Detenemos el spinner/progreso devolviéndolo a su estado inicial
       setProgress(INITIAL_PROGRESS);
 

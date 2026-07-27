@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from ..services.canvas_service import DEFAULT_COLUMNS, FIELD_ENUM
+from ..services.error_reporting import report
 
 router = APIRouter()
 
@@ -327,7 +328,8 @@ async def save_template(template_id: str, request: Request):
         )
         return JSONResponse(status_code=200, content={"status": "success", "message": "Guardado exitoso"})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al guardar plantilla en disco: {str(e)}")
+        report(e, contexto="guardar_plantilla")
+        raise HTTPException(status_code=500, detail="Error interno al procesar plantilla") from e
 
 
 # ── HTML shell endpoints ──────────────────────────────────────────────────────
@@ -351,7 +353,8 @@ async def save_html_template(template_id: str, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        report(e, contexto="plantilla")
+        raise HTTPException(status_code=500, detail="Error interno al procesar plantilla") from e
 
 
 @router.post("/api/templates/{template_id}/shell-preview")
@@ -368,7 +371,8 @@ async def shell_preview(template_id: str, request: Request):
         pdf_bytes = await asyncio.to_thread(render_shell_preview, html)
         return Response(content=pdf_bytes, media_type="application/pdf")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        report(e, contexto="plantilla")
+        raise HTTPException(status_code=500, detail="Error interno al procesar plantilla") from e
 
 
 @router.post("/api/templates/{template_id}/table-preview")
@@ -414,7 +418,8 @@ async def table_preview(template_id: str, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        report(e, contexto="plantilla")
+        raise HTTPException(status_code=500, detail="Error interno al procesar plantilla") from e
 
 
 @router.get("/api/templates/{template_id}/design")
@@ -436,7 +441,8 @@ async def save_design_config(template_id: str, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        report(e, contexto="plantilla")
+        raise HTTPException(status_code=500, detail="Error interno al procesar plantilla") from e
 
 
 @router.post("/api/templates/{template_id}/duplicate")
@@ -507,4 +513,5 @@ async def regenerate_shell(template_id: str, request: Request):
             save_html_template(template_id, html)
         return JSONResponse({"status": "ok", "message": "HTML guardado. El shell se genera en cada factura."})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        report(e, contexto="plantilla")
+        raise HTTPException(status_code=500, detail="Error interno al procesar plantilla") from e

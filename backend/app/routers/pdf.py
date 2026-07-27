@@ -42,6 +42,7 @@ from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_sha
 from ..services.redis_errors import is_redis_quota_error
 from ..services.redis_safety import safe_redis_call
 from ..services.internal_auth import verify_cloud_tasks
+from ..services.error_reporting import report
 from ..services import batch_state_store
 
 router = APIRouter(prefix="/api", tags=["PDF"])
@@ -172,7 +173,8 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 
         if is_redis_quota_error(e):
             raise HTTPException(status_code=429, detail="El motor de procesamiento está a máxima capacidad.")
-        raise HTTPException(status_code=500, detail=str(e))
+        report(e, contexto="generar_pdf")
+        raise HTTPException(status_code=500, detail="Error al generar el PDF") from e
 
     # Reporte best-effort, fuera del try de arriba -- nunca produce un 5xx.
     # Tamaño en bytes, guardado aquí (ya lo tenemos en memoria) para que la
@@ -232,7 +234,8 @@ async def start_pdf_generation(
     try:
         await asyncio.to_thread(enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=template_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en Cloud Tasks: {e}")
+        report(e, contexto="encolar_pdf")
+        raise HTTPException(status_code=500, detail="Error al encolar la generación del PDF") from e
     
     return {"jobId": job_id}
 
@@ -268,7 +271,8 @@ async def start_pdf_zip_generation(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al leer el archivo ZIP: {str(e)}")
+        report(e, contexto="leer_zip")
+        raise HTTPException(status_code=500, detail="Error al leer el archivo ZIP") from e
 
     if not job_ids:
         raise HTTPException(status_code=400, detail="No se encontraron archivos XML válidos dentro del ZIP.")
@@ -675,7 +679,8 @@ async def request_upload_url():
         }
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error creando la Signed URL: {str(e)}")
+        report(e, contexto="signed_url_subida")
+        raise HTTPException(status_code=500, detail="Error al generar el enlace de subida") from e
 
 
 @router.get("/cfdi/pdf/{job_id}/download-url", response_model=DownloadUrlResponse)
@@ -712,7 +717,8 @@ async def get_pdf_download_url(job_id: str):
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error creando la Signed URL de descarga: {str(e)}")
+        report(e, contexto="signed_url_descarga")
+        raise HTTPException(status_code=500, detail="Error al generar el enlace de descarga") from e
 
 
 @router.post("/internal/extract-zip")
@@ -777,7 +783,11 @@ async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, templa
             rz.close()
     except Exception as e:
         print(f"[_try_remote_manifest_path] Error leyendo el directorio central remoto de {gcs_path}: {e}")
-        await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600))
+        report(e, contexto="extraccion_zip")
+        # batch_state_store.get_batch_snapshot devuelve este valor tal cual
+        # como {"status":"error","message":...} al frontend, así que no
+        # puede llevar str(e).
+        await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_error:{batch_id}", "Error al extraer el ZIP", ex=3600))
         return True
 
     manifest = build_manifest(infolist, batch_id)  # job_id -> filename
@@ -831,9 +841,10 @@ async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, templa
             print(f"[_try_remote_manifest_path] Job de shards disparado para batch {batch_id}: {op_name}")
         except Exception as job_err:
             print(f"Error disparando Cloud Run Job para batch {batch_id}: {job_err}")
+            report(job_err, contexto="disparar_job_shards")
             await safe_redis_call(lambda: redis_client.set(
                 f"pdf:extracting_error:{batch_id}",
-                f"No se pudo disparar el Job de shards: {job_err}",
+                "No se pudo iniciar el procesamiento del lote",
                 ex=3600,
             ))
 
@@ -1113,15 +1124,20 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
                     print(f"[process_zip_in_background] Job de shards disparado para batch {batch_id}: {op_name}")
                 except Exception as job_err:
                     print(f"Error disparando Cloud Run Job para batch {batch_id}: {job_err}")
+                    report(job_err, contexto="disparar_job_shards")
                     await safe_redis_call(lambda: redis_client.set(
                         f"pdf:extracting_error:{batch_id}",
-                        f"No se pudo disparar el Job de shards: {job_err}",
+                        "No se pudo iniciar el procesamiento del lote",
                         ex=3600,
                     ))
 
     except Exception as e:
         print(f"Error crítico procesando ZIP en background: {e}")
-        await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_error:{batch_id}", str(e), ex=3600))
+        report(e, contexto="extraccion_zip")
+        # batch_state_store.get_batch_snapshot devuelve este valor tal cual
+        # como {"status":"error","message":...} al frontend, así que no
+        # puede llevar str(e).
+        await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_error:{batch_id}", "Error al extraer el ZIP", ex=3600))
     finally:
         print(f"[process_zip_in_background] {batch_id}: extracción+subida (sin contar descarga) "
               f"tomó {time.perf_counter() - extraction_start:.1f}s, de los cuales "
@@ -1174,7 +1190,8 @@ async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
         )
     except Exception as e:
         await safe_redis_call(lambda: redis_client.delete(f"pdf:extracting:{batch_id}"))
-        raise HTTPException(status_code=500, detail=f"Error encolando la extracción en Cloud Tasks: {e}")
+        report(e, contexto="encolar_extraccion")
+        raise HTTPException(status_code=500, detail="Error al encolar la extracción del ZIP") from e
 
     # Respondemos al Front-End INMEDIATAMENTE para que no se quede trabado
     return {

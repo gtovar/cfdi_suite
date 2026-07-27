@@ -72,7 +72,9 @@ async def google_invalid_argument_handler(request: Request, exc: InvalidArgument
 
     # Reportar cualquier otro error de argumentos de Google
     sentry_sdk.capture_exception(exc)
-    return JSONResponse(status_code=400, content={"message": str(exc)})
+    return JSONResponse(
+        status_code=400, content={"message": "Solicitud inválida"}
+    )
 
 # --- INICIO CLOUD TRACE ---
 # Inyectamos el líquido fluorescente (Google Cloud Trace) en toda la tubería.

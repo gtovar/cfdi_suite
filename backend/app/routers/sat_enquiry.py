@@ -15,6 +15,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from ..credentials import get as get_cred
+from ..services.error_reporting import report
 
 router = APIRouter(prefix="/api/sat", tags=["sat"])
 
@@ -215,12 +216,13 @@ async def _enquiry_indexed(
     try:
         text = await _call_diverza(client, uuid, payload)
     except Exception as exc:
+        report(exc, contexto="consulta_sat_lote")
         return idx, {
             "uuid": uuid,
             "estado": "",
             "es_cancelable": "",
             "estatus_cancelacion": "",
-            "error": str(exc),
+            "error": "Error al consultar el SAT",
         }
 
     result = _parse_diverza_response(text)
@@ -354,7 +356,8 @@ async def single_sat_enquiry(body: EnquiryRequest) -> EnquiryResult:
         try:
             text = await _call_diverza(client, body.uuid, payload)
         except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"Error Diverza: {exc}") from exc
+            report(exc, contexto="consulta_sat")
+            raise HTTPException(status_code=502, detail="Error al consultar el SAT") from exc
 
     result = _parse_diverza_response(text)
     return EnquiryResult(uuid=body.uuid, **result)
@@ -373,7 +376,8 @@ async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
     try:
         rows, descartadas = _parse_excel_input(content)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Error leyendo Excel: {exc}") from exc
+        report(exc, contexto="leer_excel")
+        raise HTTPException(status_code=400, detail="No se pudo leer el archivo de Excel") from exc
 
     if not rows:
         # Si TODAS las filas traían UUID pero ninguna era válida, decirlo: el

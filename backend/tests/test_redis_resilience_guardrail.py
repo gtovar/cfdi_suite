@@ -42,7 +42,7 @@ ALLOWLIST: set[tuple[str, int]] = {
         # publish_batch_tick/ready_recent de los 2 loops movió esta línea de
         # 188 a 183 -- verificado corriendo el test, no a ojo.)
     (
-        "app/routers/pdf.py", 1013,
+        "app/routers/pdf.py", 1024,
     ),  # scard cosmético dentro de flush_chunk -- ya vive en su propio
         # try/except (líneas de alrededor) que nunca deja que un fallo aquí
         # tumbe la subida real del chunk; no usa safe_redis_call por nombre
@@ -55,6 +55,13 @@ ALLOWLIST: set[tuple[str, int]] = {
         # ésta de 1012 a 1013. La decisión de fondo no cambia -- sigue siendo
         # el mismo scard cosmético en el mismo try/except; sólo se corrió de
         # sitio. Verificado corriendo el test, no a ojo.)
+        # (línea actualizada 2026-07-26, hallazgo #4: el import de `report` y
+        # los comentarios de los dos extracting_error la movieron de 1013 a
+        # 1024. Misma llamada, mismo try/except. Verificado corriendo el test.)
+        #
+        # NOTA para quien mantenga esto: esta entrada se ha renumerado 3 veces
+        # en dos días. Si vuelve a pasar seguido, vale más anclar el ALLOWLIST
+        # al texto de la llamada que al número de línea.
 }
 # NOTA 2026-07-24: el lock de idempotencia de process_zip_in_background
 # (antes en esta lista como deliberadamente fail-closed) pasó a best-effort

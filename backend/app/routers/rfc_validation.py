@@ -4,6 +4,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ..fiel_config import delete_fiel, fiel_rfc, load_fiel, save_fiel
+from ..services.error_reporting import report
 
 router = APIRouter(prefix="/api/rfc", tags=["rfc"])
 fiel_router = APIRouter(prefix="/api/fiel", tags=["fiel"])
@@ -74,13 +75,15 @@ def _validate_sat(rfc: str, razon_social: str | None, signer) -> RfcSatResult:
     try:
         existe = bool(portal.rfc_valid(rfc.upper()))
     except Exception as exc:
-        return RfcSatResult(rfc=rfc.upper(), error=f"Error consultando LRFC: {exc}")
+        report(exc, contexto="consultar_lrfc")
+        return RfcSatResult(rfc=rfc.upper(), error="Error al validar el RFC")
 
     if razon_social and existe:
         try:
             razon_valida = bool(portal.legal_name_valid(rfc.upper(), razon_social.upper()))
         except Exception as exc:
-            return RfcSatResult(rfc=rfc.upper(), existeEnLrfc=existe, error=f"Error validando razón social: {exc}")
+            report(exc, contexto="validar_razon_social")
+            return RfcSatResult(rfc=rfc.upper(), existeEnLrfc=existe, error="Error al validar el RFC")
 
     return RfcSatResult(rfc=rfc.upper(), existeEnLrfc=existe, razonSocialValida=razon_valida)
 
@@ -106,12 +109,14 @@ def validate_rfc_sat(body: RfcValidateRequest) -> RfcSatResult:
         from satcfdi.models import Signer
         signer = Signer.load(certificate=cer_bytes, key=key_bytes, password=password)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Error cargando FIEL: {exc}") from exc
+        report(exc, contexto="cargar_fiel")
+        raise HTTPException(status_code=400, detail="No se pudo cargar la e.firma configurada") from exc
 
     try:
         return _validate_sat(body.rfc, body.razonSocial, signer)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Error en portal SAT: {exc}") from exc
+        report(exc, contexto="portal_sat")
+        raise HTTPException(status_code=502, detail="Error al consultar el portal del SAT") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +143,8 @@ async def configure_fiel(
         from satcfdi.models import Signer
         Signer.load(certificate=cer_bytes, key=key_bytes, password=password)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Credenciales FIEL inválidas: {exc}") from exc
+        report(exc, contexto="fiel_invalida")
+        raise HTTPException(status_code=400, detail="La e.firma no es válida o la contraseña es incorrecta") from exc
 
     save_fiel(cer_bytes, key_bytes, password)
     rfc = fiel_rfc()

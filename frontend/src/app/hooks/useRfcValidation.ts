@@ -6,6 +6,7 @@ import {
   validateRfcFormat,
   validateRfcSat,
 } from '../../lib/rfc-validation-api-client';
+import { userMessage } from '../../lib/user-error';
 
 export interface RfcValidationParams {
   rfc: string;
@@ -50,7 +51,7 @@ export function useRfcValidation() {
       const res = await validateRfcSat(params.rfc, params.razonSocial);
       setSatResult(res);
     } catch (err) {
-      setSatError(err instanceof Error ? err.message : 'Error en portal SAT');
+      setSatError(userMessage(err, 'Error al consultar el portal del SAT', 'validar_rfc_sat'));
     } finally {
       setSatLoading(false);
     }
