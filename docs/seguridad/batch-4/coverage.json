@@ -1,0 +1,85 @@
+{
+  "batch": 4,
+  "date": "2026-07-26",
+  "scope_files_scanned": [
+    "backend/app/routers/batch.py",
+    "backend/app/routers/pdf.py",
+    "backend/app/routers/templates.py",
+    "backend/app/services/canvas_service.py",
+    "backend/app/services/pdf_pipeline.py",
+    "backend/app/services/shell_service.py",
+    "backend/app/services/gcs_range_auth.py",
+    "backend/app/services/zip_manifest.py",
+    "backend/app/services/task_dispatcher.py",
+    "backend/app/providers/current_ts.py",
+    "backend/app/providers/python_satcfdi.py",
+    "backend/wrappers/python-satcfdi-wrapper.py",
+    "frontend/src/components/InvoiceDesigner.jsx",
+    "cors-gcs.json"
+  ],
+  "components_scanned": 5,
+  "components": [
+    {
+      "name": "flow-xml-to-pdf",
+      "files": ["batch.py", "pdf.py", "canvas_service.py", "pdf_pipeline.py", "task_dispatcher.py"],
+      "threat_categories": ["injection", "auth", "memory"],
+      "candidates_raised": 0,
+      "new_findings": 0,
+      "confirmed_existing": ["#1", "#2", "#4", "#8"]
+    },
+    {
+      "name": "dangerously-set-html",
+      "files": ["InvoiceDesigner.jsx", "all frontend/src/**/*.tsx"],
+      "threat_categories": ["injection"],
+      "candidates_raised": 0,
+      "new_findings": 0,
+      "confirmed_existing": ["#40", "#41", "#51", "#52"],
+      "positive_signal": "0 dangerouslySetInnerHTML in production code"
+    },
+    {
+      "name": "python-wrapper-input",
+      "files": ["current_ts.py", "python_satcfdi.py", "python-satcfdi-wrapper.py"],
+      "threat_categories": ["injection", "memory"],
+      "candidates_raised": 0,
+      "new_findings": 0,
+      "confirmed_existing": ["#8"],
+      "positive_signal": "All subprocess calls use safe pattern (list, stdin, no shell=True)"
+    },
+    {
+      "name": "template-design-upload",
+      "files": ["templates.py", "shell_service.py"],
+      "threat_categories": ["injection", "auth"],
+      "candidates_raised": 1,
+      "candidate_ids": ["TEMPLATE-PATH-TRAVERSAL-01"],
+      "new_findings": 0,
+      "refuted_findings": 1,
+      "confirmed_existing": ["#4", "#35", "#41"]
+    },
+    {
+      "name": "flow-upload-to-gcs",
+      "files": ["pdf.py", "gcs_range_auth.py", "zip_manifest.py", "cors-gcs.json"],
+      "threat_categories": ["auth", "crypto", "memory"],
+      "candidates_raised": 0,
+      "new_findings": 0,
+      "confirmed_existing": ["#2", "#13", "#25", "#43"]
+    }
+  ],
+  "skipped_from_scope": [],
+  "not_examined_by_design": [
+    "backend/.venv (vendored)",
+    "backend/.pytest_cache",
+    "backend/tests",
+    "frontend/node_modules",
+    "frontend/src/test",
+    ".claude (agent config)",
+    "docs (documentation)",
+    "CLAUDE-SECURITY-* (scan outputs)"
+  ],
+  "completeness": {
+    "threat_model_cells_active": 14,
+    "threat_model_cells_total": 20,
+    "sweep_exceptions_completed": true,
+    "sweep_secrets_completed": false,
+    "sweep_secrets_note": "No secrets sweep in this batch — scope focused on application logic components, not secrets/config"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "batch": 6,
+  "date": "2026-07-26",
+  "candidates_total": 32,
+  "candidates_deduped": 32,
+  "panel_rounds_completed": 5,
+  "rounds": {
+    "BATCH6-CANDIDATE-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "Confirmed zero auth across all 8 routers + 2 direct endpoints: grep for 'Depends(' returned 0 results. Only CORS middleware (browser-only). Cloud Run is --allow-unauthenticated (cloudbuild.yaml:22). All ~30+ endpoints directly reachable by any HTTP client."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "sat_enquiry.py:286 makes paid Diverza API calls consuming real financial credits per query. Attacker can overwrite/delete PAC credentials (emisores.py:54-77) and e.Firma (rfc_validation.py:128-145), or trigger costly batch Cloud Tasks operations. Real financial loss through Diverza credit drain and cloud resource abuse."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "Zero defenses at every layer: no auth middleware on FastAPI app (main.py:55), no Depends() on any router, no OIDC, no API keys. Vercel rewrite (vercel.json:5) doesn't inject auth. Cloud Run --allow-unauthenticated. Code self-describes as 'single-user local tool' but deployed to public URL."}
+      ],
+      "severity": "CRITICAL"
+    },
+    "BATCH6-CANDIDATE-02": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "batch.py:210-213 — endpoint has zero auth (no Depends, no x-cloudtasks-queuename check unlike pdf.py:107). Cloud Run --allow-unauthenticated. Vercel rewrite (vercel.json:5) proxies /api/* directly. Attacker POSTs arbitrary JSON → gcs_path flows to bucket.blob(gcs_path).download_as_bytes at batch.py:231 and run_analyze_cfdi at batch.py:238."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "batch.py:231 — unvalidated GCS download extracts CFDI data (RFCs, totals, dates at batch.py:274-285). batch.py:307 — parsed_result exfiltrated via public Pusher channel. GCS bucket stores Mexican tax documents with legally protected taxpayer IDs."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No x-cloudtasks-queuename check (pdf.py:107-108 has it, batch.py:210-311 doesn't). No OIDC (task_dispatcher.py:80-87 sends no oidc_token). No middleware. Cloud Run --allow-unauthenticated (cloudbuild.yaml:22)."}
+      ],
+      "severity": "CRITICAL"
+    },
+    "BATCH6-CANDIDATE-03": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "emisores.py:54 POST handler has no Depends/auth check. main.py:103 includes router with no middleware guard. No auth mechanism exists anywhere in backend/app/."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Full credential-injection-to-impersonation chain: POST emisores.py:54 stores credential_token (credentials.py:49-52), sat_enquiry.py:288 retrieves it, sat_enquiry.py:130-131 injects into Diverza API call. No auth on any endpoint in the chain."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "emisores.py:54-77 — no Depends, no auth middleware, no API key check. CORS is browser-only. Fernet encryption is transparent at-rest protection, not access control — attacker calls API, server decrypts/encrypts for them."}
+      ],
+      "severity": "CRITICAL"
+    },
+    "BATCH6-CANDIDATE-04": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "vercel.json:5 proxies /api/* to Cloud Run making all endpoints same-origin. pdf.py:107-108 guards with only 'x-cloudtasks-queuename' in request.headers — bare presence check. x-cloudtasks-queuename is NOT browser-forbidden (custom x- prefix). Same-origin fetch() preserves custom headers through Vercel rewrite."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "generate-pdf runs CPU-intensive WeasyPrint+reportlab via ProcessPoolExecutor (up to 8 workers), uploads to GCS, updates Redis — all billable. No rate limiting. Attacker-controlled xml_b64 feeds into pipeline. Worker-task (batch.py:210, zero auth) adds another CPU-burn surface."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "pdf.py:107 only checks header PRESENCE. vercel.json:5 makes endpoints same-origin. Cloud Run --allow-unauthenticated. No CSP in frontend (vercel.json has no headers config, index.html has no CSP). No OIDC, no IP whitelist, no request signing."}
+      ],
+      "severity": "HIGH"
+    },
+    "BATCH6-CANDIDATE-05": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "Endpoint at sat_enquiry.py:312 has no auth dependency. Batch handler calls get_cred() at line 178 to fetch credential_token, sends to Diverza at line 155. No rate limiting. Attack path confirmed: unauthenticated POST → Excel parse → credential retrieval → Diverza API calls with victim's token."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Each Excel row triggers paid Diverza SAT enquiry (sat_enquiry.py:150) using victim's stored credentials (sat_enquiry.py:178). Diverza is a commercial PAC charging per API call. Financial loss is real."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No auth at endpoint (sat_enquiry.py:312 — no Depends), no app-level auth middleware (main.py:90-100), no infra-level auth (cloudbuild.yaml:22 — --allow-unauthenticated), no rate limiting."}
+      ],
+      "severity": "HIGH"
+    }
+  },
+  "unpaneled_count": 27,
+  "unpaneled_ids": [
+    "BATCH6-CANDIDATE-06", "BATCH6-CANDIDATE-07", "BATCH6-CANDIDATE-08",
+    "BATCH6-CANDIDATE-09", "BATCH6-CANDIDATE-10", "BATCH6-CANDIDATE-11",
+    "BATCH6-CANDIDATE-12", "BATCH6-CANDIDATE-13", "BATCH6-CANDIDATE-14",
+    "BATCH6-CANDIDATE-15", "BATCH6-CANDIDATE-16", "BATCH6-CANDIDATE-17",
+    "BATCH6-CANDIDATE-18", "BATCH6-CANDIDATE-19", "BATCH6-CANDIDATE-20",
+    "BATCH6-CANDIDATE-21", "BATCH6-CANDIDATE-22", "BATCH6-CANDIDATE-23",
+    "BATCH6-CANDIDATE-24", "BATCH6-CANDIDATE-25", "BATCH6-CANDIDATE-26",
+    "BATCH6-CANDIDATE-27", "BATCH6-CANDIDATE-28", "BATCH6-CANDIDATE-29",
+    "BATCH6-CANDIDATE-30", "BATCH6-CANDIDATE-31", "BATCH6-CANDIDATE-32"
+  ],
+  "note": "5 candidates paneled with unanimous 3/3 TRUE_POSITIVE (3 CRITICAL, 2 HIGH). 27 candidates (MEDIUM/LOW) deferred from panel due to batch volume — listed in unpaneled_ids."
+}

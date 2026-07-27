@@ -1,0 +1,138 @@
+{
+  "batch": 7,
+  "date": "2026-07-26",
+  "scope_files_scanned": [
+    "frontend/src/cfdi/application/cfdiAnalysisAdapter.ts",
+    "frontend/src/cfdi/application/cfdiAnalysisService.ts",
+    "frontend/src/cfdi/application/cfdiTypes.ts",
+    "frontend/src/cfdi/application/cfdiExtractionService.ts",
+    "frontend/src/cfdi/domain/canonicalCfdi.ts",
+    "frontend/src/cfdi/domain/cfdiCatalogs.ts",
+    "frontend/src/cfdi/domain/diagnoseCfdiMath.ts",
+    "frontend/src/cfdi/domain/explainCfdiField.ts",
+    "frontend/src/cfdi/domain/normalizeCfdi.ts",
+    "frontend/src/cfdi/engine/analysisContract.ts",
+    "frontend/src/cfdi/engine/currentTsEngine.ts",
+    "frontend/src/cfdi/engine/pythonSatcfdiEngine.ts",
+    "backend/app/services/analyze_cfdi.py",
+    "backend/app/services/batch_reports.py",
+    "frontend/src/components/FindingsSidebar.tsx",
+    "frontend/src/components/ConceptDetailModal.tsx",
+    "frontend/src/components/XmlNodeViewer.tsx",
+    "frontend/src/components/InspectorHeader.tsx",
+    "frontend/src/components/ResolutionPanel.tsx",
+    "frontend/src/components/TaxAuditPanel.tsx",
+    "frontend/src/app/hooks/useCfdiAnalysis.ts",
+    "frontend/src/app/hooks/useCfdiExports.ts",
+    "frontend/src/app/hooks/useDiagnoseState.ts",
+    "frontend/src/app/hooks/useExtractGridState.ts",
+    "frontend/src/app/hooks/useFindingContexts.ts",
+    "frontend/src/app/hooks/useRfcValidation.ts",
+    "frontend/src/app/hooks/useSatEnquiry.ts",
+    ".github/workflows/deploy-backend.yml",
+    ".github/workflows/deploy-frontend.yml",
+    "backend/requirements.txt",
+    "backend/pyproject.toml",
+    "infra/deploy-batch-shard-job.sh",
+    ".secrets.baseline"
+  ],
+  "components_scanned": 5,
+  "components": [
+    {
+      "name": "flow-cfdi-domain",
+      "files": [
+        "frontend/src/cfdi/application/cfdiAnalysisAdapter.ts",
+        "frontend/src/cfdi/application/cfdiAnalysisService.ts",
+        "frontend/src/cfdi/application/cfdiTypes.ts",
+        "frontend/src/cfdi/application/cfdiExtractionService.ts",
+        "frontend/src/cfdi/domain/canonicalCfdi.ts",
+        "frontend/src/cfdi/domain/cfdiCatalogs.ts",
+        "frontend/src/cfdi/domain/diagnoseCfdiMath.ts",
+        "frontend/src/cfdi/domain/explainCfdiField.ts",
+        "frontend/src/cfdi/domain/normalizeCfdi.ts",
+        "frontend/src/cfdi/engine/analysisContract.ts",
+        "frontend/src/cfdi/engine/currentTsEngine.ts",
+        "frontend/src/cfdi/engine/pythonSatcfdiEngine.ts"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 7,
+      "confirmed_existing": ["#8", "#4"]
+    },
+    {
+      "name": "flow-backend-analysis",
+      "files": [
+        "backend/app/services/analyze_cfdi.py",
+        "backend/app/services/batch_reports.py"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 6,
+      "confirmed_existing": ["#8", "#4", "#6", "#14"]
+    },
+    {
+      "name": "flow-ui-sensitivity",
+      "files": [
+        "frontend/src/components/FindingsSidebar.tsx",
+        "frontend/src/components/ConceptDetailModal.tsx",
+        "frontend/src/components/XmlNodeViewer.tsx",
+        "frontend/src/components/InspectorHeader.tsx",
+        "frontend/src/components/ResolutionPanel.tsx",
+        "frontend/src/components/TaxAuditPanel.tsx"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 1,
+      "confirmed_existing": ["#4", "#27"]
+    },
+    {
+      "name": "flow-react-hooks",
+      "files": [
+        "frontend/src/app/hooks/useCfdiAnalysis.ts",
+        "frontend/src/app/hooks/useCfdiExports.ts",
+        "frontend/src/app/hooks/useDiagnoseState.ts",
+        "frontend/src/app/hooks/useExtractGridState.ts",
+        "frontend/src/app/hooks/useFindingContexts.ts",
+        "frontend/src/app/hooks/useRfcValidation.ts",
+        "frontend/src/app/hooks/useSatEnquiry.ts"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 6,
+      "confirmed_existing": ["#10", "#43", "#4", "#12", "#27"]
+    },
+    {
+      "name": "flow-ci-supply-chain",
+      "files": [
+        ".github/workflows/deploy-backend.yml",
+        ".github/workflows/deploy-frontend.yml",
+        "backend/requirements.txt",
+        "backend/pyproject.toml",
+        "infra/deploy-batch-shard-job.sh",
+        ".secrets.baseline"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 19,
+      "confirmed_existing": ["#16", "#29", "#26", "#28", "#30", "#31", "#27"]
+    }
+  ],
+  "skipped_from_scope": [],
+  "not_examined_by_design": [
+    "backend/.venv",
+    "backend/tests",
+    "frontend/node_modules",
+    "frontend/dist",
+    ".claude",
+    ".opencode",
+    "docs",
+    "scripts",
+    "frontend/src/cfdi/**/*.test.ts",
+    "frontend/src/cfdi/benchmark/"
+  ],
+  "completeness": {
+    "threat_model_cells_active": 15,
+    "threat_model_cells_total": 15,
+    "paneled_candidates": 8,
+    "unpaneled_candidates": 29,
+    "verified_findings": 4,
+    "refuted_findings": 4,
+    "confirmed_existing": 13,
+    "note": "8 candidates (2 HIGH, 6 MEDIUM) fully paneled; 4 survived quorum (1 HIGH, 3 MEDIUM). 4 refuted. 29 MEDIUM/LOW candidates deferred. 13 existing findings confirmed across all 5 components. Batch is productive with 4 verified findings + 13 confirmed existing findings."
+  }
+}

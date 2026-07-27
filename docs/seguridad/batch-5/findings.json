@@ -1,0 +1,58 @@
+{
+  "batch": 5,
+  "date": "2026-07-26",
+  "scope": [
+    "flow-redis-state",
+    "flow-pusher-events",
+    "flow-batch-shard",
+    "catalogs-pickle",
+    "batch-state-race"
+  ],
+  "candidates": [],
+  "confirmed_existing": [
+    {
+      "finding_id": "#9",
+      "title": "Redis ssl_cert_reqs=None en 3 ubicaciones",
+      "confirmed_by": "flow-redis-state, flow-batch-shard",
+      "evidence": "batch.py:52, pdf.py:74, batch_shard_worker.py:59 — los 3 tienen ssl_cert_reqs=None. La conexión a Upstash no verifica el certificado SSL.",
+      "note": "Inconsistente con batch.py que es el único módulo sin el parámetro explícito (usa defaults). #21 documenta la inconsistencia como LOW."
+    },
+    {
+      "finding_id": "#15",
+      "title": "Race condition en batch TTL — hmset y expire en llamadas separadas",
+      "confirmed_by": "flow-redis-state, batch-state-race",
+      "evidence": "batch.py:116-123: hmset, expire(hash), expire(results) son 3 safe_redis_call_sync independientes. Si Redis se degrada entre la primera y las siguientes, el hash key queda sin TTL. Si el proceso muere entre ellas, ídem.",
+      "note": "La degradación de Redis entre llamadas es una variante no documentada del escenario 'proceso muere'. Misma causa raíz: operaciones no atómicas."
+    },
+    {
+      "finding_id": "#12",
+      "title": "Pusher public channels — sin auth",
+      "confirmed_by": "flow-pusher-events",
+      "evidence": "realtime.py:80 emite a canal pdf-batch-{batch_id} con UUID4 como única defensa. batch.py:307 emite datos fiscales completos (RFCs, nombres, totales, hallazgos) a canal batch_{batch_id}. UUID4 = 122 bits de entropía pero sin auth.",
+      "note": "batch.py:307 expone significativamente más datos (fiscal) que realtime.py:80 (solo señales). Expansión de #12, no nuevo finding."
+    },
+    {
+      "finding_id": "#14",
+      "title": "pickle.loads en catálogos SAT — bajo riesgo",
+      "confirmed_by": "catalogs-pickle",
+      "evidence": "catalogs.py:31-32,54: pickle.loads sobre datos de satcfdi SQLite (dependencia de paquete, no input de usuario). Riesgo: supply chain compromise del paquete satcfdi.",
+      "note": "Severidad sigue siendo LOW. Los datos vienen de un paquete confiable instalado vía pip, no de uploads de usuario."
+    },
+    {
+      "finding_id": "#31",
+      "title": "Batch shard job sin SA dedicada ni secretos",
+      "confirmed_by": "flow-batch-shard",
+      "evidence": "batch_shard_worker.py:54-62 crea su propia conexión Redis + GCS usando credenciales ambientales (default compute SA). Sin service account dedicada. Mismas credenciales que el servicio principal.",
+      "note": "El Job hereda los permisos de la default compute SA (Editor). Si se explota RCE en el worker, el atacante tiene los mismos privilegios que el API."
+    }
+  ],
+  "clean_components": [],
+  "no_new_candidates": [
+    "flow-redis-state",
+    "flow-pusher-events",
+    "flow-batch-shard",
+    "catalogs-pickle",
+    "batch-state-race"
+  ],
+  "resilience_note": "Los componentes flow-redis-state y flow-batch-shard muestran un patrón de resiliencia maduro post-incidente Julio 2026: safe_redis_call con degradación pasiva, GCS como respaldo durable, reconcile_none_statuses_with_gcs. La deuda técnica restante es conocida (#9, #15, #31)."
+}

@@ -1,0 +1,43 @@
+{
+  "batch": 4,
+  "date": "2026-07-26",
+  "candidates_total": 1,
+  "candidates_deduped": 1,
+  "panel_votes_total": 3,
+  "panel_rounds_completed": 1,
+  "rounds": {
+    "TEMPLATE-PATH-TRAVERSAL-01": {
+      "candidate_id": "TEMPLATE-PATH-TRAVERSAL-01",
+      "severity_proposed": "MEDIUM",
+      "panel": {
+        "true": 0,
+        "false": 3
+      },
+      "voters": [
+        {
+          "voter": "V1 (técnico)",
+          "verdict": false,
+          "confidence": "high",
+          "rationale_key": "FastAPI {template_id} captura exactamente UN segmento de URL — no puede contener '/' ni encodeado (%2F se decodifica antes del routing, convirtiéndolo en separador de segmentos). Sin '/', pathlib.Path / f'{id}.json' nunca navega fuera del directorio base. template_id='..' produce '...json' (nombre de archivo válido). El gap de código es real pero no es CWE-22 explotable."
+        },
+        {
+          "voter": "V2 (explotabilidad)",
+          "verdict": false,
+          "confidence": "high",
+          "rationale_key": "La extensión fija (.json o .html) impide acceso a archivos arbitrarios. Aunque %2F bypassa el regex [^/]+ de Starlette y llega a pathlib, el sufijo forzado (.json/.html) significa que solo se pueden leer/escribir archivos con esa extensión. No hay secretos en .json/.html en el contenedor Cloud Run (todo está en env vars). El máximo daño real es corromper archivos de plantilla (self-DoS dentro del subsistema de templates), que el atacante ya puede hacer con llamadas legítimas a la API."
+        },
+        {
+          "voter": "V3 (mitigaciones)",
+          "verdict": false,
+          "confidence": "medium",
+          "rationale_key": "GFE (Google Front End) implementa 'Remove Dot Segments' de RFC 3986 §5.2.4, normalizando segmentos '..' y '.' ANTES de enviar la request al contenedor. Path malicioso colapsa a una ruta que no matchea /api/templates/{template_id} → 404. El código vulnerable nunca se ejecuta en producción Cloud Run. Sin embargo, el fix en código sigue siendo necesario como defensa en profundidad: si el servicio se redespliega sin GFE, la vulnerabilidad de código regresa."
+        }
+      ],
+      "quorum_reached": false,
+      "verdict_final": "REFUTED",
+      "confidence_final": "n/a — refuted",
+      "reclassified_severity": "LOW",
+      "reclassification_reason": "Defense-in-depth gap, no explotable en producción actual. Fix de hardening (30 min)."
+    }
+  }
+}

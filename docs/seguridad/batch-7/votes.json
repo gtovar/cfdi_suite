@@ -1,0 +1,82 @@
+{
+  "rounds": {
+    "B7-BE-AUTH-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "batch.py:183 has no Depends() guard, no auth middleware in main.py, Cloud Run --allow-unauthenticated. GET /api/cfdi/batch/status/{batch_id} fully reachable by any unauthenticated caller."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "batch.py:274-285 returns RFCs, business names, invoice totals, dates, analysis findings per file — all sensitive fiscal data with zero ownership verification."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "Zero authentication — no Depends, no token check. Router included without dependencies at main.py:102. Only CORS+GZip middlewares. Cloud Run --allow-unauthenticated."}
+      ]
+    },
+    "B7-CI-CRYPTO-01": {
+      "panel": {"true": 0, "false": 3, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "FALSE_POSITIVE", "reasoning": "No HTTP endpoint serves .env; FastAPI uses os.getenv() without returning secrets. File gitignored (.gitignore:7). GCR is private. No attacker path to read this file."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": ".env is gitignored, no HTTP exposure exists, credentials loaded via os.getenv() standard practice. File on dev machine requires prior local compromise — not independent vector."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": ".gitignore:7 (.env*) prevents version control entry. Deployment uses GitHub Secrets (deploy-backend.yml:47-53). File is local dev config only."}
+      ],
+      "reclassified_severity": "FALSE_POSITIVE"
+    },
+    "B7-CFDI-INJ-01": {
+      "panel": {"true": 0, "false": 3, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "FALSE_POSITIVE", "reasoning": "Frontend Python engine only imported by tests/benchmarks. Backend wrapper has satcfdi>=4.9 dependency, so ModuleNotFoundError guard catches, fallback never reached in production."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "ET.fromstring() does not load external entities by default. Fallback returns only hardcoded strings, no user data reflected. Subprocess has 15s timeout."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "Python 3 ET.fromstring() default parser does not resolve entities (XML_PARAM_ENTITY_PARSING_NEVER). No XXE or Billion Laughs possible through this sink."}
+      ],
+      "reclassified_severity": "FALSE_POSITIVE"
+    },
+    "B7-BE-INJ-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "POST /api/cfdi/batch/diot (batch.py:313-320, no auth, no size cap) → generate_diot → _extract_iva_from_xml (batch_reports.py:31) → ET.fromstring() without defusedxml or entity limits."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "ET.fromstring resolves internal XML entities; defusedxml project documents stdlib as unsafe. Attacker XML via public endpoint reaches sink without guard; entity expansion causes OOM kill."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No defense: stdlib ET import (not defusedxml), no entity-expansion limits, no per-file size cap on DIOT endpoint, try/except does not catch OOM/hang."}
+      ]
+    },
+    "B7-HOOKS-INJ-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "Attacker-controlled CFDI XML fields flow verbatim through zero sanitization into escapeCsv (useCfdiExports.ts:15) — only double-quote escaping, no formula guard. All four export paths affected."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "escapeCsv wraps in quotes but omits formula guards. Excel/Sheets execute quoted =FORMULA() — four export paths. Attacker-controlled CFDI fields enable data exfiltration or DDE execution."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No defense: escapeCsv only escapes double quotes. Upstream sources pass raw XML values. BOM is UTF-8 marker, not per-cell guard. No sanitization utility exists in frontend."}
+      ]
+    },
+    "B7-CI-INJ-01": {
+      "panel": {"true": 1, "false": 2, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "FALSE_POSITIVE", "reasoning": "No attacker-controlled source: packages are public CNCF/OpenTelemetry PyPI packages, no private-registry or extra-index-url config. Malicious injection requires prior maintainer account compromise."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "main.py:17-21 imports all four OTel packages at startup; FastAPIInstrumentor.instrument_app wraps every endpoint giving library full access to tax data, secrets, and network egress."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "Dependency confusion requires private PyPI index (none exists). Supply-chain compromise requires external maintainer account compromise not within this codebase's control."}
+      ],
+      "reclassified_severity": "FALSE_POSITIVE"
+    },
+    "B7-CI-CRYPTO-02": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "Dockerfile:20 runs pip install without --require-hashes; requirements.txt uses version ranges without --hash=sha256; no lock file anywhere. Deploy pipeline triggers Docker build with zero hash verification."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "Requires prior compromise of external PyPI/maintainer AND build during narrow window. No concrete repeatable exploit chain — absence of hardening measure, not confirmed attack path."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No defense: zero --hash=sha256 in requirements.txt, no --require-hashes in Dockerfile, no lock files, no private mirror, no CI verification step. Nothing stops compromised PyPI package."}
+      ]
+    },
+    "B7-CI-CRYPTO-03": {
+      "panel": {"true": 1, "false": 2, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "FALSE_POSITIVE", "reasoning": "${{ secrets.GCP_SA_KEY }} is a GitHub Secrets reference, not hardcoded literal. Key material not reachable by reading repo. No attacker path from repo read to key exfiltration."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "SA behind key holds roles/run.admin + iam.serviceAccountUser. If leaked, attacker gains persistent Cloud Run/GCS/Tasks control and can exfiltrate all other secrets set as env vars."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "Credential not hardcoded — encrypted by GitHub Secrets, masked in logs, scoped to workflow. SA key vs WIF is posture preference, not missing defense."}
+      ],
+      "reclassified_severity": "FALSE_POSITIVE"
+    }
+  },
+  "unpaneled_ids": [
+    "B7-CFDI-INJ-02", "B7-CFDI-INJ-03",
+    "B7-CFDI-AUTH-01", "B7-CFDI-AUTH-02", "B7-CFDI-AUTH-03", "B7-CFDI-AUTH-06",
+    "B7-BE-AUTH-02", "B7-BE-AUTH-03", "B7-BE-AUTH-04", "B7-BE-AUTH-05",
+    "B7-UI-AUTH-01",
+    "B7-HOOKS-AUTH-01", "B7-HOOKS-AUTH-02", "B7-HOOKS-AUTH-03", "B7-HOOKS-AUTH-04", "B7-HOOKS-AUTH-05",
+    "B7-CI-INJ-02", "B7-CI-INJ-03",
+    "B7-CI-AUTH-01", "B7-CI-AUTH-02", "B7-CI-AUTH-03", "B7-CI-AUTH-04", "B7-CI-AUTH-05", "B7-CI-AUTH-06",
+    "B7-CI-CRYPTO-04", "B7-CI-CRYPTO-05", "B7-CI-CRYPTO-06", "B7-CI-CRYPTO-07", "B7-CI-CRYPTO-08", "B7-CI-CRYPTO-09", "B7-CI-CRYPTO-10"
+  ]
+}

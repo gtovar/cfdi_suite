@@ -1,0 +1,19 @@
+{
+  "batch": 0,
+  "date": "2026-07-26",
+  "scan_root": "/Users/gil/Documents/cfdi_suite",
+  "revision": {
+    "commit": "a5534dcbf0ae",
+    "branch": "main",
+    "dirty": true
+  },
+  "scope": [
+    "flow-findings-ui",
+    "flow-xml-render",
+    "flow-extract-workspace",
+    "flow-app-shell",
+    "flow-batch-ui"
+  ],
+  "effort": "high",
+  "model": "deepseek-v4-pro"
+}

@@ -1,0 +1,57 @@
+{
+  "batch": 4,
+  "date": "2026-07-26",
+  "scope": [
+    "flow-xml-to-pdf",
+    "dangerously-set-html",
+    "python-wrapper-input",
+    "template-design-upload",
+    "flow-upload-to-gcs"
+  ],
+  "candidates": [
+    {
+      "id": "TEMPLATE-PATH-TRAVERSAL-01",
+      "title": "Path traversal via template_id sin validar en 7 endpoints",
+      "file": "backend/app/routers/templates.py",
+      "line": [160, 304, 317, 335, 341, 357, 421, 428],
+      "severity": "MEDIUM",
+      "category": "path_traversal",
+      "cwe_id": "CWE-22",
+      "confidence": "medium",
+      "description": "_validate_id_or_400 (línea 160-163) define un regex seguro ^[a-z0-9][a-z0-9_-]*$ pero NO se llama en 7 endpoints que usan template_id del URL path para construir rutas de archivo con Path(...) / f\"{template_id}.json\". Los endpoints sin validación son: get_design_config:421, save_design_config:428, get_template:304, save_template:317, get_html_template:335, save_html_template:341, shell_preview:357. En contraste, create_design, duplicate_design, y delete_design SÍ llaman a _validate_id_or_400.",
+      "exploit_scenario": "Atacante envía template_id con %2e%2e%2f para path traversal. Si el reverse proxy no normaliza, pathlib resuelve el path fuera del directorio base de templates.",
+      "recommendation": "Agregar _validate_id_or_400(template_id) al inicio de cada uno de los 7 endpoints listados, y también en shell_service.py:167-178.",
+      "snippet": "def _validate_id_or_400(template_id: str) -> None:\n    if not isinstance(template_id, str) or not _ID_RE.match(template_id):\n        raise HTTPException(status_code=400, detail=f\"Identificador de plantilla inválido: {template_id!r}\")",
+      "investigator": "template-design-upload",
+      "effort_minutes": 30
+    }
+  ],
+  "confirmed_existing": [
+    {"finding_id": "#1", "title": "XXE via lxml en canvas_service.py", "confirmed_by": "flow-xml-to-pdf"},
+    {"finding_id": "#2", "title": "Cloud Tasks sin OIDC + worker-task sin auth", "confirmed_by": "flow-xml-to-pdf, flow-upload-to-gcs"},
+    {"finding_id": "#4", "title": "str(exc) leaks en HTTP responses", "confirmed_by": "flow-xml-to-pdf, template-design-upload"},
+    {"finding_id": "#8", "title": "ET.fromstring sin defusedxml", "confirmed_by": "flow-xml-to-pdf, python-wrapper-input"},
+    {"finding_id": "#13", "title": "access_token en signed URL query string", "confirmed_by": "flow-upload-to-gcs"},
+    {"finding_id": "#25", "title": "GCS CORS wildcard (*)", "confirmed_by": "flow-upload-to-gcs"},
+    {"finding_id": "#35", "title": "SSRF via WeasyPrint shell_preview", "confirmed_by": "template-design-upload"},
+    {"finding_id": "#40", "title": "iframe srcDoc con HTML sin sanitizar", "confirmed_by": "dangerously-set-html"},
+    {"finding_id": "#41", "title": "Zero sanitización HTML en pipeline templates", "confirmed_by": "dangerously-set-html, template-design-upload"},
+    {"finding_id": "#43", "title": "Sin validación MIME/content-type en uploads", "confirmed_by": "flow-upload-to-gcs"},
+    {"finding_id": "#51", "title": "logoUrl interpolada en HTML sin escape", "confirmed_by": "dangerously-set-html"},
+    {"finding_id": "#52", "title": "Blob URLs abiertas via window.open() sin sandbox", "confirmed_by": "dangerously-set-html"}
+  ],
+  "clean_components": [
+    {
+      "component": "python-wrapper-input",
+      "reason": "subprocess.run usa patrón seguro: lista (no shell=True), XML por stdin, rutas fijas. Sin vector de inyección."
+    },
+    {
+      "component": "dangerously-set-html",
+      "reason": "Búsqueda de dangerouslySetInnerHTML en todo frontend/src: 0 resultados en código de producción. Solo en tests. Buena higiene."
+    }
+  ],
+  "no_new_candidates": [
+    "flow-xml-to-pdf",
+    "flow-upload-to-gcs"
+  ]
+}

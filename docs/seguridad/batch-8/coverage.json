@@ -1,0 +1,116 @@
+{
+  "batch": 8,
+  "date": "2026-07-26",
+  "scope_files_scanned": [
+    "frontend/src/components/FindingsSidebar.tsx",
+    "frontend/src/components/ConceptDetailModal.tsx",
+    "frontend/src/components/ResolutionPanel.tsx",
+    "frontend/src/components/TaxAuditPanel.tsx",
+    "frontend/src/components/InspectorHeader.tsx",
+    "frontend/src/components/CfdiSummaryHeader.tsx",
+    "frontend/src/app/hooks/useFindingContexts.ts",
+    "frontend/src/app/utils/findingUtils.ts",
+    "frontend/src/components/XmlNodeViewer.tsx",
+    "frontend/src/lib/xml-snippet.ts",
+    "frontend/src/lib/cfdi.ts",
+    "frontend/src/lib/emisores-api-client.ts",
+    "frontend/src/lib/useBatchStats.ts",
+    "frontend/src/lib/cfdi-api-client.ts",
+    "frontend/src/cfdi/application/cfdiAnalysisService.ts",
+    "frontend/src/components/ExtractWorkspace.tsx",
+    "frontend/src/components/extract-workspace/ExtractWorkspacePagination.tsx",
+    "frontend/src/components/extract-workspace/ExtractWorkspaceToolbar.tsx",
+    "frontend/src/components/extract-workspace/types.ts",
+    "frontend/src/components/extract-workspace/ExtractWorkspaceTable.tsx",
+    "frontend/src/app/hooks/useCfdiExports.ts",
+    "frontend/src/components/CfdiAnalysisLoader.tsx",
+    "frontend/src/components/CleanStatePanel.tsx",
+    "frontend/src/app/hooks/useExtractGridState.ts",
+    "frontend/src/App.tsx",
+    "frontend/src/main.tsx",
+    "frontend/src/components/AppHeader.tsx",
+    "frontend/src/components/AppNav.tsx",
+    "frontend/src/components/shortcut/ContextMenu.css",
+    "frontend/src/app/utils/cfdiFormatters.ts",
+    "frontend/src/app/view-models/cfdiViewModels.ts",
+    "frontend/src/components/BatchCompletionModal.tsx",
+    "frontend/src/components/BatchPipelineIndicator.tsx",
+    "frontend/src/components/FloatingBatchWidget.tsx",
+    "frontend/src/app/hooks/useDiagnoseState.ts",
+    "frontend/src/lib/batch-api-client.ts",
+    "frontend/src/lib/pdf-download.ts"
+  ],
+  "components_scanned": 5,
+  "components": [
+    {
+      "name": "flow-findings-ui",
+      "files": [
+        "FindingsSidebar.tsx", "ConceptDetailModal.tsx", "ResolutionPanel.tsx",
+        "TaxAuditPanel.tsx", "InspectorHeader.tsx", "CfdiSummaryHeader.tsx",
+        "useFindingContexts.ts", "findingUtils.ts"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 5,
+      "confirmed_existing": ["#4", "#10", "#27", "B7-UI-AUTH-01", "B7-HOOKS-AUTH-04"]
+    },
+    {
+      "name": "flow-xml-render",
+      "files": [
+        "XmlNodeViewer.tsx", "xml-snippet.ts", "cfdi.ts",
+        "emisores-api-client.ts", "useBatchStats.ts", "cfdi-api-client.ts",
+        "cfdiAnalysisService.ts"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 8,
+      "confirmed_existing": ["#4", "#8", "#27", "#45", "B7-CFDI-INJ-02", "B7-CFDI-INJ-03", "B7-CFDI-AUTH-06", "B7-CFDI-AUTH-03", "B7-HOOKS-AUTH-01"]
+    },
+    {
+      "name": "flow-extract-workspace",
+      "files": [
+        "ExtractWorkspace.tsx", "ExtractWorkspacePagination.tsx",
+        "ExtractWorkspaceToolbar.tsx", "types.ts", "ExtractWorkspaceTable.tsx",
+        "useCfdiExports.ts", "CfdiAnalysisLoader.tsx", "CleanStatePanel.tsx",
+        "useExtractGridState.ts"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 3,
+      "confirmed_existing": ["#4", "#10", "B7-HOOKS-INJ-01", "B7-HOOKS-AUTH-04", "B7-HOOKS-AUTH-05", "B6-CANDIDATE-15"]
+    },
+    {
+      "name": "flow-app-shell",
+      "files": [
+        "App.tsx", "main.tsx", "AppHeader.tsx", "AppNav.tsx",
+        "ContextMenu.css", "cfdiFormatters.ts", "findingUtils.ts", "cfdiViewModels.ts"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 8,
+      "confirmed_existing": ["#4", "#27", "#45", "B6-CANDIDATE-19", "B6-CANDIDATE-29", "B7-CI-CRYPTO-01"]
+    },
+    {
+      "name": "flow-batch-ui",
+      "files": [
+        "BatchCompletionModal.tsx", "BatchPipelineIndicator.tsx",
+        "FloatingBatchWidget.tsx", "useDiagnoseState.ts",
+        "batch-api-client.ts", "pdf-download.ts"
+      ],
+      "threat_categories": ["injection-and-input", "auth-and-access", "crypto-and-secrets"],
+      "candidates_raised": 3,
+      "confirmed_existing": ["#4", "#10", "#12", "#27", "#45", "B6-CANDIDATE-18", "B6-CANDIDATE-19", "B6-CANDIDATE-26", "B6-CANDIDATE-27", "B6-CANDIDATE-29", "B6-CANDIDATE-31", "B7-HOOKS-INJ-01", "B7-CI-CRYPTO-04"]
+    }
+  ],
+  "skipped_from_scope": [],
+  "not_examined_by_design": [
+    "frontend/node_modules/",
+    "backend/.venv/",
+    ".git/",
+    "frontend/dist/",
+    "frontend/.vercel/",
+    "*.test.tsx",
+    "*.test.ts"
+  ],
+  "completeness": {
+    "threat_model_cells_active": 15,
+    "threat_model_cells_total": 15,
+    "note": "All 5 components × 3 applicable categories (injection-and-input, auth-and-access, crypto-and-secrets) scanned. memory-and-unsafe omitted (TypeScript/React). 15 researchers dispatched in single fan-out, all completed."
+  }
+}

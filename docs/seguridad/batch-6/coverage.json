@@ -1,0 +1,96 @@
+{
+  "batch": 6,
+  "date": "2026-07-26",
+  "scope_files_scanned": [
+    "backend/app/main.py",
+    "backend/app/policy.py",
+    "backend/app/credentials.py",
+    "backend/app/contracts.py",
+    "backend/app/fiel_config.py",
+    "backend/app/observability.py",
+    "backend/app/routers/emisores.py",
+    "backend/app/routers/sat_enquiry.py",
+    "backend/app/routers/rfc_validation.py",
+    "backend/app/routers/batch.py",
+    "backend/app/routers/pdf.py",
+    "backend/app/services/task_dispatcher.py",
+    "backend/app/services/redis_safety.py",
+    "backend/app/providers/python_satcfdi.py",
+    "backend/app/providers/current_ts.py",
+    "backend/app/providers/base.py",
+    "backend/wrappers/python-satcfdi-wrapper.py",
+    "cors-gcs.json",
+    "backend/cloudbuild.yaml",
+    "frontend/vercel.json",
+    "frontend/vite.config.ts",
+    "frontend/src/components/ConsultasSATPage.tsx",
+    "frontend/src/components/ConversionMasivaPage.tsx",
+    "frontend/src/components/BatchAnalysisPage.tsx",
+    "frontend/src/components/EmisoresPage.tsx",
+    "frontend/src/components/PdfTemplateBuilder.tsx",
+    "frontend/src/components/InvoiceDesigner.jsx",
+    "frontend/src/lib/cfdi-api-client.ts",
+    "frontend/src/lib/batch-api-client.ts",
+    "frontend/src/lib/sat-enquiry-api-client.ts",
+    "frontend/src/lib/rfc-validation-api-client.ts",
+    "frontend/src/lib/preflight.ts",
+    "frontend/src/lib/pdf-download.ts"
+  ],
+  "components_scanned": 5,
+  "components": [
+    {
+      "name": "flow-api-auth",
+      "files": ["main.py (entrypoints, error handlers)", "policy.py", "credentials.py", "contracts.py", "emisores.py", "sat_enquiry.py"],
+      "threat_categories": ["injection-and-input", "auth-and-access"],
+      "candidates_raised": 7,
+      "confirmed_existing": ["#4", "#38", "#39", "#46", "#43", "#2", "#3", "#5", "#6", "#12", "#36", "#37", "#45", "#59"]
+    },
+    {
+      "name": "flow-observability",
+      "files": ["observability.py", "main.py (error handlers)", "redis_safety.py"],
+      "threat_categories": ["injection-and-input", "auth-and-access"],
+      "candidates_raised": 0,
+      "confirmed_existing": ["#4"]
+    },
+    {
+      "name": "flow-frontend-input",
+      "files": ["ConsultasSATPage.tsx", "ConversionMasivaPage.tsx", "BatchAnalysisPage.tsx", "EmisoresPage.tsx", "PdfTemplateBuilder.tsx", "InvoiceDesigner.jsx", "cfdi-api-client.ts", "batch-api-client.ts", "sat-enquiry-api-client.ts", "rfc-validation-api-client.ts", "preflight.ts", "pdf-download.ts"],
+      "threat_categories": ["injection-and-input", "auth-and-access"],
+      "candidates_raised": 10,
+      "confirmed_existing": ["#40", "#41", "#10", "#51", "#52", "#27", "#60", "#61"]
+    },
+    {
+      "name": "flow-fiel-config",
+      "files": ["fiel_config.py", "rfc_validation.py", "credentials.py", "providers/base.py", "python_satcfdi.py", "current_ts.py", "python-satcfdi-wrapper.py"],
+      "threat_categories": ["crypto-and-secrets", "auth-and-access", "injection-and-input"],
+      "candidates_raised": 9,
+      "confirmed_existing": ["#36", "#37", "#2", "#5", "#8", "#34"]
+    },
+    {
+      "name": "flow-cors",
+      "files": ["main.py (CORS middleware)", "cors-gcs.json", "vite.config.ts", "cloudbuild.yaml", "vercel.json", "deploy-backend.yml"],
+      "threat_categories": ["auth-and-access"],
+      "candidates_raised": 4,
+      "confirmed_existing": ["#19", "#24", "#25", "#26", "#2", "#61"]
+    }
+  ],
+  "skipped_from_scope": [],
+  "not_examined_by_design": [
+    "backend/.venv",
+    "backend/tests",
+    "frontend/node_modules",
+    "frontend/dist",
+    ".claude",
+    ".opencode",
+    "docs",
+    "infra",
+    "scripts"
+  ],
+  "completeness": {
+    "threat_model_cells_active": 10,
+    "threat_model_cells_total": 10,
+    "paneled_candidates": 5,
+    "unpaneled_candidates": 27,
+    "note": "5 candidates (3 CRITICAL, 2 HIGH) fully paneled with unanimous 3/3 TRUE_POSITIVE. 27 MEDIUM/LOW candidates deferred — listed in votes.json unpaneled_ids. Batch is productive with 5 verified findings + 28 confirmed existing findings across all 5 components."
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "batch": 5,
+  "date": "2026-07-26",
+  "scan_root": "/Users/gil/Documents/cfdi_suite",
+  "revision": {
+    "commit": "a5534dcbf0ae55f7c9406ed460ff937162b9ab01",
+    "branch": "main",
+    "dirty": true,
+    "dirty_files": [
+      ".claude/settings.json",
+      ".github/workflows/deploy-backend.yml"
+    ]
+  },
+  "scope": [
+    "flow-redis-state",
+    "flow-pusher-events",
+    "flow-batch-shard",
+    "catalogs-pickle",
+    "batch-state-race"
+  ],
+  "effort": "medium",
+  "model": "deepseek-v4-pro"
+}
