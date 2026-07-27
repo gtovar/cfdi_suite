@@ -7,7 +7,11 @@ Spawn-safe: la conexión SQLite se re-crea por proceso.
 """
 from __future__ import annotations
 
-import pickle
+import pickle  # La DB de satcfdi serializa con pickle, no con json.
+#   Los datos vienen del paquete satcfdi instalado (no de input del usuario),
+#   por lo que no hay superficie de ataque de deserialización en runtime:
+#   la DB es de solo lectura en producción (RO en Cloud Run, sin write path)
+#   y el código que la usa no acepta bytes del exterior.
 import sqlite3
 from functools import lru_cache
 
