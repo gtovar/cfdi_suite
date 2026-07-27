@@ -21,7 +21,7 @@ jobs:
 
       # --- 1. DESPLIEGUE DE LA API WEB ---
       - name: Deploy API to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
+        uses: google-github-actions/deploy-cloudrun@v3
         with:
           service: cfdi-suite-api
           region: us-central1
