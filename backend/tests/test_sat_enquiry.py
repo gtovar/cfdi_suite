@@ -12,8 +12,11 @@ try:
 
     from backend.app.main import app
     from backend.app.routers.sat_enquiry import (
+        _DIVERZA_BASE,
+        _call_diverza,
         _choose_best_json,
         _extract_json_objects,
+        _is_uuid,
         _parse_diverza_response,
         _parse_excel_input,
     )
@@ -40,7 +43,7 @@ def _make_xlsx(rows: list[dict]) -> bytes:
 
 SAMPLE_DIVERZA_RESPONSE = json.dumps(
     {
-        "uuid": "abc-123",
+        "uuid": "a1b2c3d4-e5f6-4a7b-8c9d-ef1234567890",
         "estado": "Vigente",
         "es_cancelable": "Cancelable sin aceptación",
         "estatus_cancelacion": "",
@@ -109,7 +112,7 @@ class ParseExcelInputTests(unittest.TestCase):
     def test_parses_standard_columns(self):
         rows = [
             {
-                "UUID": "aaa-111",
+                "UUID": "aaa11111-1111-4111-8111-111111111111",
                 "RFC emisor": "AAA010101001",
                 "RFC receptor": "BBB010101002",
                 "TotalCFDI": "1160.00",
@@ -117,25 +120,46 @@ class ParseExcelInputTests(unittest.TestCase):
             }
         ]
         xlsx_bytes = _make_xlsx(rows)
-        parsed = _parse_excel_input(xlsx_bytes)
+        parsed, descartadas = _parse_excel_input(xlsx_bytes)
         self.assertEqual(len(parsed), 1)
-        self.assertEqual(parsed[0]["uuid"], "aaa-111")
+        self.assertEqual(parsed[0]["uuid"], "aaa11111-1111-4111-8111-111111111111")
         self.assertEqual(parsed[0]["rfc_emisor"], "AAA010101001")
+        self.assertEqual(descartadas, 0)
 
     def test_skips_empty_uuid_rows(self):
         rows = [
             {"UUID": "", "RFC emisor": "AAA", "RFC receptor": "BBB", "TotalCFDI": "100", "Motive": "01"},
-            {"UUID": "bbb-222", "RFC emisor": "CCC", "RFC receptor": "DDD", "TotalCFDI": "200", "Motive": "02"},
+            {"UUID": "bbb22222-2222-4222-8222-222222222222", "RFC emisor": "CCC", "RFC receptor": "DDD", "TotalCFDI": "200", "Motive": "02"},
         ]
         xlsx_bytes = _make_xlsx(rows)
-        parsed = _parse_excel_input(xlsx_bytes)
+        parsed, descartadas = _parse_excel_input(xlsx_bytes)
         self.assertEqual(len(parsed), 1)
-        self.assertEqual(parsed[0]["uuid"], "bbb-222")
+        self.assertEqual(parsed[0]["uuid"], "bbb22222-2222-4222-8222-222222222222")
+        # Una fila en blanco NO cuenta como descartada: en un Excel real las
+        # últimas filas suelen venir vacías y reportarlas sería ruido.
+        self.assertEqual(descartadas, 0)
 
     def test_upcases_rfc_emisor(self):
-        rows = [{"UUID": "x", "RFC emisor": "aaa010101", "RFC receptor": "bbb", "TotalCFDI": "1", "Motive": "01"}]
-        parsed = _parse_excel_input(_make_xlsx(rows))
+        rows = [{"UUID": "ccc33333-3333-4333-8333-333333333333", "RFC emisor": "aaa010101", "RFC receptor": "bbb", "TotalCFDI": "1", "Motive": "01"}]
+        parsed, descartadas = _parse_excel_input(_make_xlsx(rows))
         self.assertEqual(parsed[0]["rfc_emisor"], "AAA010101")
+        self.assertEqual(descartadas, 0)
+
+    def test_descarta_uuid_malformado_y_lo_cuenta(self):
+        """Hallazgo #38: un UUID que no es un UUID nunca debe llegar a la URL
+        de Diverza. La fila se omite -- no revienta el lote -- pero se cuenta,
+        para poder decírselo al usuario en vez de tragárselo."""
+        rows = [
+            {"UUID": "../../../admin", "RFC emisor": "AAA", "RFC receptor": "B", "TotalCFDI": "1", "Motive": "01"},
+            {"UUID": "no-soy-un-uuid", "RFC emisor": "AAA", "RFC receptor": "B", "TotalCFDI": "1", "Motive": "01"},
+            {"UUID": "", "RFC emisor": "AAA", "RFC receptor": "B", "TotalCFDI": "1", "Motive": "01"},
+            {"UUID": "ddd44444-4444-4444-8444-444444444444", "RFC emisor": "CCC", "RFC receptor": "D", "TotalCFDI": "2", "Motive": "02"},
+        ]
+        parsed, descartadas = _parse_excel_input(_make_xlsx(rows))
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["uuid"], "ddd44444-4444-4444-8444-444444444444")
+        # 2, no 3: la fila con UUID vacío no cuenta.
+        self.assertEqual(descartadas, 2)
 
 
 @unittest.skipIf(TestClient is None, f"fastapi no disponible: {_IMPORT_ERROR}")
@@ -148,7 +172,7 @@ class SingleEnquiryEndpointTests(unittest.TestCase):
             resp = self.client.post(
                 "/api/sat/enquiry",
                 json={
-                    "uuid": "aaa-111",
+                    "uuid": "aaa11111-1111-4111-8111-111111111111",
                     "rfc_emisor": "RFC_SIN_CONFIG",
                     "rfc_receptor": "BBB010101002",
                     "total_cfdi": "100.00",
@@ -175,7 +199,7 @@ class SingleEnquiryEndpointTests(unittest.TestCase):
             resp = self.client.post(
                 "/api/sat/enquiry",
                 json={
-                    "uuid": "abc-123",
+                    "uuid": "a1b2c3d4-e5f6-4a7b-8c9d-ef1234567890",
                     "rfc_emisor": "GMP080119QF0",
                     "rfc_receptor": "XAXX010101000",
                     "total_cfdi": "1160.00",
@@ -187,3 +211,62 @@ class SingleEnquiryEndpointTests(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["estado"], "Vigente")
         self.assertIsNone(data["error"])
+
+
+@unittest.skipIf(TestClient is None, f"fastapi no disponible: {_IMPORT_ERROR}")
+class DiverzaSsrfTests(unittest.TestCase):
+    """Hallazgo #38: el UUID se interpola en una URL de Diverza que se llama
+    AUTENTICADA con el credential_id/credential_token del emisor. httpx
+    normaliza '../' según RFC 3986, así que sin validar la forma un uuid de
+    '../../../admin' saca la petición del prefijo /api/v2/documents.
+
+    Este archivo fija las dos mitades: que la validación reconoce un UUID real
+    y rechaza los ataques, y que _call_diverza nunca llega a hacer la petición
+    con un uuid inválido.
+    """
+
+    def test_acepta_uuid_canonico_en_ambas_cajas(self):
+        for valido in (
+            "a1b2c3d4-e5f6-4a7b-8c9d-ef1234567890",
+            "A1B2C3D4-E5F6-4A7B-8C9D-EF1234567890",  # el SAT los emite en mayúsculas
+        ):
+            with self.subTest(uuid=valido):
+                self.assertTrue(_is_uuid(valido))
+
+    def test_rechaza_traversal_y_basura(self):
+        for malo in (
+            "../../../admin",
+            "..%2f..%2fadmin",
+            "a1b2c3d4-e5f6-4a7b-8c9d-ef1234567890/../../admin",
+            # 32 hex seguidos: detect-secrets lo marca como "Hex High Entropy
+            # String". Es un UUID inventado para esta prueba, no un secreto.
+            "a1b2c3d4e5f64a7b8c9def1234567890",  # sin guiones  # pragma: allowlist secret
+            "a1b2c3d4-e5f6-4a7b-8c9d-ef123456789",  # un dígito de menos
+            "zzzzzzzz-e5f6-4a7b-8c9d-ef1234567890",  # no es hex
+            "",
+        ):
+            with self.subTest(uuid=malo):
+                self.assertFalse(_is_uuid(malo))
+
+    def test_httpx_normalizaria_el_traversal_si_no_se_validara(self):
+        """El ataque que justifica el fix, medido -- no supuesto."""
+        atacada = str(httpx.URL(f"{_DIVERZA_BASE}/../../../admin/sat_cfdi_enquiry"))
+        self.assertNotIn("/api/v2/documents/", atacada)
+        self.assertEqual(atacada, "https://servicios.diverza.com/admin/sat_cfdi_enquiry")
+
+    def test_call_diverza_no_hace_la_peticion_con_uuid_invalido(self):
+        import asyncio
+
+        from fastapi import HTTPException
+
+        put = AsyncMock()
+        with patch("httpx.AsyncClient.put", put):
+            async def run():
+                async with httpx.AsyncClient() as client:
+                    await _call_diverza(client, "../../../admin", {"a": 1})
+
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(run())
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        put.assert_not_called()  # lo que importa: nunca salió de la máquina

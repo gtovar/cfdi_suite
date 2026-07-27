@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import re
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 import httpx
@@ -19,6 +20,30 @@ router = APIRouter(prefix="/api/sat", tags=["sat"])
 
 _DIVERZA_BASE = "https://servicios.diverza.com/api/v2/documents"
 _PRIORITY_FIELDS = {"estatus_cancelacion", "estado", "es_cancelable"}
+
+# El UUID entra crudo a una URL de un tercero que se llama AUTENTICADA con el
+# credential_id/credential_token del emisor. No basta con confiar en que httpx
+# lo escape: httpx normaliza "../" según RFC 3986, así que un uuid de
+# "../../../admin" convierte
+#   https://servicios.diverza.com/api/v2/documents/{uuid}/sat_cfdi_enquiry
+# en
+#   https://servicios.diverza.com/admin/sat_cfdi_enquiry
+# (comprobado con httpx.URL el 2026-07-26). Se valida la forma, que es la
+# única defensa que no depende del comportamiento de la librería.
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _is_uuid(value: str) -> bool:
+    return bool(value) and bool(_UUID_RE.match(value))
+
+
+def _require_uuid(value: str) -> str:
+    if not _is_uuid(value):
+        raise HTTPException(status_code=400, detail="UUID de CFDI inválido")
+    return value
 
 # In-memory job results store (single-user local tool — no persistence needed)
 _job_results: dict[str, bytes] = {}
@@ -147,7 +172,7 @@ async def _call_diverza(
     payload: dict[str, Any],
     max_retries: int = 3,
 ) -> str:
-    url = f"{_DIVERZA_BASE}/{uuid}/sat_cfdi_enquiry"
+    url = f"{_DIVERZA_BASE}/{_require_uuid(uuid)}/sat_cfdi_enquiry"
     last_exc: Exception | None = None
 
     for attempt in range(1, max_retries + 1):
@@ -207,7 +232,20 @@ async def _enquiry_indexed(
 # ---------------------------------------------------------------------------
 
 
-def _parse_excel_input(content: bytes) -> list[dict[str, str]]:
+class ParsedInput(NamedTuple):
+    """Filas utilizables + cuántas se descartaron por traer un UUID malformado.
+
+    `descartadas` NO cuenta las filas con UUID vacío: en un Excel real las
+    últimas filas suelen venir en blanco y reportarlas sería ruido. Cuenta sólo
+    las que traen algo que no es un UUID -- ésas sí son un dato del usuario que
+    no se va a consultar, y merece decírselo en vez de tragarlo.
+    """
+
+    rows: list[dict[str, str]]
+    descartadas: int
+
+
+def _parse_excel_input(content: bytes) -> ParsedInput:
     # read_only=True: el modelo eager de openpyxl expande 10 MB de XLSX
     # comprimido a ~1-2 GB de objetos Python y mata la instancia de Cloud Run
     # por OOM. El modo streaming sólo materializa la fila en curso. Aquí sólo
@@ -220,15 +258,22 @@ def _parse_excel_input(content: bytes) -> list[dict[str, str]]:
         rows_iter = ws.iter_rows(values_only=True)
         header_row = next(rows_iter, None)
         if not header_row:
-            return []
+            return ParsedInput([], 0)
 
         headers = [str(cell or "").strip() for cell in header_row]
 
         rows: list[dict[str, str]] = []
+        descartadas = 0
         for ws_row in rows_iter:
             row = dict(zip(headers, ws_row))
             uuid = str(row.get("UUID") or "").strip()
-            if not uuid:
+            # Se descarta la fila en vez de reventar el lote: un UUID malformado
+            # en la fila 300 de un Excel no debe abortar las otras 499. El
+            # rechazo duro vive en _require_uuid, en el único punto que arma la
+            # URL de Diverza.
+            if not _is_uuid(uuid):
+                if uuid:
+                    descartadas += 1
                 continue
             rows.append(
                 {
@@ -239,7 +284,7 @@ def _parse_excel_input(content: bytes) -> list[dict[str, str]]:
                     "motive": str(row.get("Motive") or "01"),
                 }
             )
-        return rows
+        return ParsedInput(rows, descartadas)
     finally:
         wb.close()
 
@@ -326,11 +371,22 @@ async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
         raise HTTPException(status_code=413, detail="El archivo excede el límite de 10 MB")
 
     try:
-        rows = _parse_excel_input(content)
+        rows, descartadas = _parse_excel_input(content)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Error leyendo Excel: {exc}") from exc
 
     if not rows:
+        # Si TODAS las filas traían UUID pero ninguna era válida, decirlo: el
+        # mensaje genérico haría pensar que el archivo venía vacío.
+        if descartadas:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Ninguna de las {descartadas} filas tiene un UUID válido. "
+                    "El UUID de un CFDI tiene la forma "
+                    "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx."
+                ),
+            )
         raise HTTPException(status_code=400, detail="El archivo no contiene filas con UUID")
 
     total = len(rows)
@@ -369,7 +425,21 @@ async def batch_sat_enquiry(file: UploadFile = File(...)) -> StreamingResponse:
             oldest = next(iter(_job_results))
             del _job_results[oldest]
         _job_results[job_id] = excel_bytes
-        yield f"data: {json.dumps({'type': 'done', 'job_id': job_id, 'total': total})}\n\n"
+        # `descartadas`: filas del Excel que traían un UUID malformado y no se
+        # consultaron. Sin este dato el usuario sube 500 filas, recibe 480
+        # resultados y no tiene forma de saber qué pasó con las otras 20.
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "type": "done",
+                    "job_id": job_id,
+                    "total": total,
+                    "descartadas": descartadas,
+                }
+            )
+            + "\n\n"
+        )
 
     return StreamingResponse(
         event_stream(),
