@@ -4,6 +4,8 @@ import asyncio
 import uuid
 import json
 import os
+import re
+from pathlib import Path
 # defusedxml, no la stdlib: el XML lo sube el usuario. xml.etree no resuelve
 # entidades EXTERNAS (un file:// da ParseError), pero sí expande las INTERNAS,
 # así que una bomba de expansión de ~400 bytes con 9 niveles anidados se
@@ -24,6 +26,7 @@ import sentry_sdk
 from ..services.analyze_cfdi import run_analyze_cfdi
 from ..services.batch_reports import generate_diot
 from ..services.task_dispatcher import enqueue_cfdi_analysis
+from ..policy import ANALYZE_CFDI_XML_MAX_CHARS
 from ..services.redis_safety import safe_redis_call_sync
 from ..services.internal_auth import verify_cloud_tasks
 from ..services.error_reporting import report
@@ -113,6 +116,18 @@ def _extract_header(xml_bytes: bytes) -> dict[str, str]:
     result["fecha"] = fecha[:10] if fecha else ""
     return result
 
+def _safe_filename(fname: str) -> str:
+    allowed = re.compile(r"[A-Za-z0-9._-]")
+    base = Path(fname).name
+    return "".join(c if allowed.match(c) else "_" for c in base) or "archivo.xml"
+
+
+def _is_valid_xml_content(raw: bytes) -> bool:
+    if len(raw) >= 4 and raw[:3] == b"\xef\xbb\xbf":
+        raw = raw[3:]
+    return raw.lstrip().startswith((b"<?xml", b"<"))
+
+
 async def _read_upload(f: UploadFile) -> tuple[str, bytes]:
     return (f.filename or "archivo.xml", await f.read())
 
@@ -125,6 +140,12 @@ async def batch_analyze(files: list[UploadFile] = File(...)):
 
     batch_id = str(uuid.uuid4())
     contents = list(await asyncio.gather(*[_read_upload(f) for f in files]))
+
+    for fname, raw in contents:
+        if len(raw) > ANALYZE_CFDI_XML_MAX_CHARS:
+            raise HTTPException(400, f"El archivo {fname} excede el límite de {ANALYZE_CFDI_XML_MAX_CHARS} caracteres")
+        if not _is_valid_xml_content(raw):
+            raise HTTPException(400, f"El archivo {fname} no parece ser un XML válido")
 
     # Inicializamos el estado del lote en Redis -- best-effort: es solo
     # coordinación (contador de progreso), el contenido real de cada XML ya
@@ -143,6 +164,7 @@ async def batch_analyze(files: list[UploadFile] = File(...)):
 
     # Encolar cada archivo de manera inmediata en Cloud Tasks
     for fname, raw in contents:
+        fname = _safe_filename(fname)
         xml_str = raw.decode("utf-8", errors="replace")
 
         # El XML se sube a GCS (durable) en vez de guardarse en Redis con TTL
