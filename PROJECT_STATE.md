@@ -1801,6 +1801,17 @@ si vale la pena arreglarla.
   decisión de mantenimiento Redis separada y no se debe mezclar con el
   cierre de Bandit.
 
+- **Security Scan / Safety (workflow `30350547693`, 2026-07-28)** — tras
+  cerrar Bandit, el job llega por primera vez al paso siguiente y `safety
+  check -r backend/requirements.txt` reporta 35 vulnerabilidades de
+  dependencias fijadas (el log incluye, entre otras, `cryptography==47.0.0`
+  y `lxml==5.4.0`) y termina con código 64. Es independiente de los cuatro
+  hallazgos Bandit: el commit `4003870` no modifica `requirements.txt` y el
+  mismo workflow anterior ya fallaba. No corregido ni ignorado aquí; exige
+  triage/actualización de dependencias y pruebas de compatibilidad como plan
+  de seguridad separado. Evidencia: workflow GitHub `30350547693`, paso
+  “Run safety (dependency vulns)”.
+
 - **Security Scan / Bandit (workflow `30348765265`)** — falló al encontrar
   seis hallazgos MEDIUM ya presentes antes de Plan 02: B310 en `pdf.py`
   (`urllib.request.urlopen` para el metadata server) y B608/B301 en
