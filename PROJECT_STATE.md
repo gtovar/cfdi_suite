@@ -1830,6 +1830,24 @@ si vale la pena arreglarla.
   validación de Safety usó el wrapper existente sólo para evaluar la
   exposición XXE de `satcfdi`.
 
+- **El deploy automático de Cloud Run sigue con el tráfico fijado a una
+  revisión anterior (2026-07-28)** — el workflow verde “Deploy Backend ->
+  Cloud Run” `30352149310` creó la revisión
+  `cfdi-suite-api-00155-4d9` desde el commit `583c26d`, y la importación de
+  imagen terminó correctamente, pero Cloud Run la retiró inicialmente sin
+  servir tráfico.
+  Evidencia: `gcloud run services describe` muestra
+  `spec.traffic` y `status.traffic` con 100% en
+  `cfdi-suite-api-zipbudget`; `gcloud run revisions describe
+  cfdi-suite-api-00155-4d9` muestra `Ready=True, reason=Retired` y
+  `Active=False`. No lo introducen los cambios de dependencias: es una
+  configuración de tráfico ya fijada por nombre de revisión. **Cerrado con
+  autorización explícita**: se promovió
+  `cfdi-suite-api-00155-4d9` al 100%; la consulta posterior confirmó esa
+  revisión activa y `/api/health` respondió `{"status":"ok"}`. La
+  revisión anterior se conserva de momento como rollback, no como artefacto
+  temporal de esta validación.
+
 - **Security Scan / Bandit (workflow `30348765265`)** — falló al encontrar
   seis hallazgos MEDIUM ya presentes antes de Plan 02: B310 en `pdf.py`
   (`urllib.request.urlopen` para el metadata server) y B608/B301 en
