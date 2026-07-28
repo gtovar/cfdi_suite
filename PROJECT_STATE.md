@@ -1782,6 +1782,17 @@ documento. A partir de ahora, cualquier cosa que se encuentre rota "de paso"
 con evidencia (no solo "creo que ya estaba así"), para poder decidir después
 si vale la pena arreglarla.
 
+- **Security Scan / Bandit (workflow `30348765265`)** — falló al encontrar
+  seis hallazgos MEDIUM ya presentes antes de Plan 02: B310 en `pdf.py`
+  (`urllib.request.urlopen` para el metadata server) y B608/B301 en
+  `catalogs.py` (SQL dinámico acotado y `pickle.loads` sobre la DB distribuida
+  por `satcfdi`). Evidencia: `git show 9374c44:backend/app/routers/pdf.py`
+  conserva el `urlopen` en la línea 695 y el mismo commit conserva los tres
+  `pickle.loads` y dos consultas en `catalogs.py:32,35-36,53,58`. Los de
+  catálogos ya están evaluados en `docs/seguridad/06-testing-seguridad.md` y
+  `red-team-reconciliation.md` V7. No corregidos aquí: no los introdujo Plan
+  02 y requieren una decisión de seguridad separada.
+
 - **`frontend/src/components/ConversionMasivaPage.test.tsx`** — `npm run lint`
   (`tsc --noEmit`) falla con 6 errores `TS2345` en los mocks de los tests
   (líneas 135, 157, 188, 216, 236 y 264): sus callbacks reciben dos
