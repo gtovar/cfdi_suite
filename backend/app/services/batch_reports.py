@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from collections import defaultdict
 from decimal import Decimal
 from io import BytesIO
@@ -73,7 +74,7 @@ def _extract_iva_from_xml(xml_bytes: bytes) -> dict:
 
 
 def generate_diot(
-    xml_list: list[bytes],
+    xml_list: Iterable[bytes],
     year: int,
     month: int,
     rfc_presentante: str | None = None,
@@ -85,23 +86,6 @@ def generate_diot(
     Returns the bytes of the file encoded in windows-1252.
     rfc_presentante is auto-detected from the RFC receptor of the first XML if not provided.
     """
-    extractions = [_extract_iva_from_xml(xml) for xml in xml_list]
-
-    # Auto-detect RFC presentante from first XML that has a receptor
-    if not rfc_presentante:
-        for e in extractions:
-            if e["rfc_receptor"]:
-                rfc_presentante = e["rfc_receptor"]
-                break
-
-    if not rfc_presentante:
-        raise ValueError(
-            "No se pudo detectar el RFC del presentante. "
-            "Asegúrate de que los XMLs tengan el campo Receptor.Rfc o proporciona el RFC manualmente."
-        )
-
-    rfc_presentante = rfc_presentante.strip().upper()
-
     # Aggregate IVA amounts by RFC emisor
     by_rfc: dict[str, dict] = defaultdict(lambda: {
         "iva16": Decimal(0),
@@ -110,13 +94,24 @@ def generate_diot(
         "retenido": Decimal(0),
     })
 
-    for e in extractions:
+    for xml in xml_list:
+        e = _extract_iva_from_xml(xml)
+        if not rfc_presentante and e["rfc_receptor"]:
+            rfc_presentante = e["rfc_receptor"]
         rfc = e["rfc_emisor"].strip().upper()
         if rfc:
             by_rfc[rfc]["iva16"] += e["iva16"]
             by_rfc[rfc]["iva0"] += e["iva0"]
             by_rfc[rfc]["iva_rfn"] += e["iva_rfn"]
             by_rfc[rfc]["retenido"] += e["retenido"]
+
+    if not rfc_presentante:
+        raise ValueError(
+            "No se pudo detectar el RFC del presentante. "
+            "Asegúrate de que los XMLs tengan el campo Receptor.Rfc o proporciona el RFC manualmente."
+        )
+
+    rfc_presentante = rfc_presentante.strip().upper()
 
     # Build ProveedorTercero list
     proveedores = []

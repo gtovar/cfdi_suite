@@ -6,9 +6,26 @@ from pydantic import BaseModel
 from ..fiel_config import delete_fiel, fiel_rfc, load_fiel, save_fiel
 from ..security import verify_user_identity
 from ..services.error_reporting import report
+from ..middleware import FIEL_TOTAL_MAX_BYTES
 
 router = APIRouter(prefix="/api/rfc", tags=["rfc"])
 fiel_router = APIRouter(prefix="/api/fiel", tags=["fiel"])
+
+_UPLOAD_READ_CHUNK_BYTES = 64 * 1024
+
+
+async def _read_fiel_upload(
+    file: UploadFile, *, total_bytes: int
+) -> tuple[bytes, int]:
+    """Aplica el presupuesto combinado de certificado y llave privada."""
+    chunks: list[bytes] = []
+    received = 0
+    while chunk := await file.read(_UPLOAD_READ_CHUNK_BYTES):
+        received += len(chunk)
+        if total_bytes + received > FIEL_TOTAL_MAX_BYTES:
+            raise HTTPException(413, "La e.firma excede el límite combinado de 5 MB")
+        chunks.append(chunk)
+    return b"".join(chunks), total_bytes + received
 
 
 # ---------------------------------------------------------------------------
@@ -143,8 +160,8 @@ async def configure_fiel(
     password: str = Form(...),
     tenant_id: str = Depends(verify_user_identity),
 ) -> FielStatus:
-    cer_bytes = await cer.read()
-    key_bytes = await key.read()
+    cer_bytes, total_bytes = await _read_fiel_upload(cer, total_bytes=0)
+    key_bytes, _ = await _read_fiel_upload(key, total_bytes=total_bytes)
 
     try:
         from satcfdi.models import Signer

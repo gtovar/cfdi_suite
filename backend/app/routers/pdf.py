@@ -50,8 +50,23 @@ from ..services.redis_safety import safe_redis_call
 from ..services.internal_auth import verify_cloud_tasks
 from ..services.error_reporting import report
 from ..services import batch_state_store
+from ..middleware import PDF_SINGLE_XML_MAX_BYTES
 
 router = APIRouter(prefix="/api", tags=["PDF"])
+
+_UPLOAD_READ_CHUNK_BYTES = 64 * 1024
+
+
+async def _read_pdf_xml_upload(file: UploadFile) -> bytes:
+    """Mantiene soporte de XML de 50 MB sin una lectura ilimitada."""
+    chunks: list[bytes] = []
+    received = 0
+    while chunk := await file.read(_UPLOAD_READ_CHUNK_BYTES):
+        received += len(chunk)
+        if received > PDF_SINGLE_XML_MAX_BYTES:
+            raise HTTPException(413, "El XML excede el límite de 50 MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class _SafeUrl(str):
@@ -267,7 +282,7 @@ async def start_pdf_generation(
     template: Optional[str] = Form(None)
 ):
     job_id = str(uuid.uuid4())
-    xml_content = await file.read()
+    xml_content = await _read_pdf_xml_upload(file)
     
     template_id = "default"
     if template:
