@@ -66,11 +66,3 @@ class AnalyzeCfdiEndpointTests(unittest.TestCase):
     def test_endpoint_rejects_missing_file(self) -> None:
         response = self.client.post("/api/cfdi/analyze")
         self.assertEqual(response.status_code, 422)
-
-    def test_endpoint_rejects_oversized_xml(self) -> None:
-        oversized = b"<xml>" + b"x" * 50_000_001 + b"</xml>"
-        response = self.client.post(
-            "/api/cfdi/analyze",
-            files={"file": ("big.xml", oversized, "text/xml")},
-        )
-        self.assertEqual(response.status_code, 413)

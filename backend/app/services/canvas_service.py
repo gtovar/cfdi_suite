@@ -6,6 +6,17 @@ Para N > 2000 divide en chunks (mismas funciones, spawn-safe si algo externo
 las llama vía multiprocessing) — el aislamiento por proceso ahora vive un
 nivel arriba, en pdf_pipeline._POOL, que aísla el documento completo.
 
+¿Por qué ReportLab y WeasyPrint coexisten? Son dos pipelines separados con
+propósitos distintos:
+- ReportLab (este archivo): dibuja tablas de conceptos e impuestos del CFDI con
+  coordenadas precisas (drawString). Programático, no tiene HTML ni templates.
+- WeasyPrint (shell_service.py): convierte HTML+CSS a PDF. El usuario sube un
+  diseño HTML personalizado de factura y WeasyPrint lo renderiza tal cual.
+
+No son redundantes. ReportLab pinta la tabla de datos fiscales (precisión
+milimétrica). WeasyPrint pinta el diseño visual (flexibilidad creativa del
+usuario). Uno no reemplaza al otro.
+
 Auditoría SSTI (#11, 2026-07-27): NO hay superficie de Server-Side Template
 Injection. Este archivo usa exclusivamente la API programática de ReportLab
 (rl_canvas) para dibujar texto, líneas y rectángulos en el PDF. No usa Jinja2,

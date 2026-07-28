@@ -47,6 +47,25 @@ from ..services import batch_state_store
 
 router = APIRouter(prefix="/api", tags=["PDF"])
 
+
+class _SafeUrl(str):
+    """Signed URL con representacion opaca para logging.
+
+    Se comporta como str normal para JSON/fetch, pero __str__/__repr__
+    redactan el query string para que un print() o logger.info() accidental
+    no exponga el token firmado en Cloud Logging o Sentry.
+    """
+    def __new__(cls, url: str):
+        obj = super().__new__(cls, url)
+        return obj
+
+    def __str__(self) -> str:
+        return self.split("?")[0] + "?[REDACTED]"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
 # Techo duro por conexión SSE. Cada stream abierto ocupa un slot de
 # concurrencia de la instancia de Cloud Run (concurrency=5, confirmado en
 # deploy-backend.yml -- corregido 2026-07-23, el comentario original decía
@@ -349,9 +368,10 @@ async def start_pdf_zip_generation(
                 await asyncio.to_thread(blob_xml.upload_from_string, xml_content, content_type="application/xml")
 
     except Exception as infra_err:
+        report(infra_err, contexto="almacenar_xmls_zip")
         raise HTTPException(
             status_code=500,
-            detail=f"Error al almacenar en GCS o Redis: {str(infra_err)}"
+            detail="Error al almacenar los archivos extraídos del ZIP"
         )
 
     just_ids = [item[0] for item in job_ids]
@@ -679,7 +699,7 @@ async def request_upload_url():
         )
 
         return {
-            "uploadUrl": upload_url,
+            "uploadUrl": _SafeUrl(upload_url),
             "gcsPath": gcs_path
         }
     except Exception as e:
@@ -717,7 +737,7 @@ async def get_pdf_download_url(job_id: str):
             service_account_email=service_account_email,
             access_token=credentials.token,
         )
-        return {"downloadUrl": download_url}
+        return {"downloadUrl": _SafeUrl(download_url)}
     except HTTPException:
         raise
     except Exception as e:

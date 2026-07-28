@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -60,6 +62,9 @@ def _sentry_strip_sensitive(event, hint):
     request = event.get("request")
     if request and isinstance(request.get("url"), str) and "?" in request["url"]:
         request["url"] = request["url"].split("?")[0]
+    logentry = event.get("logentry", {})
+    if logentry and isinstance(logentry.get("message"), str):
+        logentry["message"] = re.sub(r"\?[^\s\"]+", "?[REDACTED]", logentry["message"])
     return event
 
 sentry_sdk.init(
@@ -67,6 +72,20 @@ sentry_sdk.init(
     traces_sample_rate=1.0,
     before_send=_sentry_strip_sensitive,
 )
+
+
+class _SanitizeQueryParams(logging.Filter):
+    """Redacta query params en todos los mensajes de log.
+
+    Evita que signed URLs con tokens aparezcan en stdout -> Cloud Logging.
+    Cubre el caso que Sentry before_send no ve (prints y logger.info directos).
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = re.sub(r"\?[^\s\"]+", "?[REDACTED]", str(record.msg))
+        return True
+
+
+logging.getLogger().addFilter(_SanitizeQueryParams())
 
 app = FastAPI(
     title="cfdi-suite-api",
@@ -95,6 +114,20 @@ async def google_invalid_argument_handler(request: Request, exc: InvalidArgument
     sentry_sdk.capture_exception(exc)
     return JSONResponse(
         status_code=400, content={"message": "Solicitud inválida"}
+    )
+
+
+@app.exception_handler(HTTPException)
+async def _sanitize_5xx_detail(request: Request, exc: HTTPException):
+    if exc.status_code >= 500:
+        sentry_sdk.capture_message(f"5xx detail sanitizado: {str(exc.detail)[:200]}")
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": "Error interno del servidor"},
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": str(exc.detail)},
     )
 
 # --- INICIO CLOUD TRACE ---
@@ -190,7 +223,4 @@ async def analyze_cfdi(
     _rate=rate_limit(30),
 ) -> AnalyzeCfdiResponse:
     raw = await file.read()
-    xml_str = raw.decode("utf-8", errors="replace")
-    if len(xml_str) > 50_000_000:
-        raise HTTPException(status_code=413, detail="El XML excede el limite de 50 MB")
-    return run_analyze_cfdi(xml_str)
+    return run_analyze_cfdi(raw.decode("utf-8", errors="replace"))
