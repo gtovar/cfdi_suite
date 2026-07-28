@@ -1845,8 +1845,9 @@ si vale la pena arreglarla.
   autorización explícita**: se promovió
   `cfdi-suite-api-00155-4d9` al 100%; la consulta posterior confirmó esa
   revisión activa y `/api/health` respondió `{"status":"ok"}`. La
-  revisión anterior se conserva de momento como rollback, no como artefacto
-  temporal de esta validación.
+  revisión anterior `cfdi-suite-api-zipbudget` se eliminó después de esa
+  validación; `gcloud run revisions describe` ya confirma que no existe y la
+  revisión activa conserva el 100% de tráfico con health check sano.
 
 - **Security Scan / Bandit (workflow `30348765265`)** — falló al encontrar
   seis hallazgos MEDIUM ya presentes antes de Plan 02: B310 en `pdf.py`
