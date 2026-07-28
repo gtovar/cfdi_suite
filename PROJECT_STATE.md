@@ -1794,12 +1794,14 @@ si vale la pena arreglarla.
 - **`test_redis_resilience_guardrail.py` tiene números de línea caducos
   (2026-07-28)** — el ALLOWLIST de `HEAD` espera
   `pdf.py:1081` y `batch_shard_worker.py:183`, mientras que el mismo código
-  base ya contiene las llamadas en las líneas 1106 y 186, respectivamente
-  (`git show HEAD:... | nl -ba`). La suite completa falla por esta deriva de
-  líneas, no por una llamada Redis nueva; el diff de este fix no toca el
-  worker ni esas llamadas. No corregido: actualizar ese guardrail es una
-  decisión de mantenimiento Redis separada y no se debe mezclar con el
-  cierre de Bandit.
+  base ya contiene las llamadas en las líneas 1127 y 186, respectivamente
+  (`git show HEAD:... | nl -ba`; verificación repetida con la suite Python
+  3.12 del plan de `cryptography`: 356 passed, 1 skipped, 1 failed). La suite
+  completa falla por esta deriva de líneas, no por una llamada Redis nueva;
+  el diff de la remediación sólo toca `backend/requirements.in` y
+  `backend/requirements.txt`. No corregido: actualizar ese guardrail es una
+  decisión de mantenimiento Redis separada y no se debe mezclar con una
+  actualización de dependencias.
 
 - **Security Scan / Safety (workflow `30350547693`, 2026-07-28)** — tras
   cerrar Bandit, el job llega por primera vez al paso siguiente y `safety
@@ -1817,6 +1819,11 @@ si vale la pena arreglarla.
   `SFTY-20260615-96125` para `cryptography==47.0.0`, cuyo rango afectado que
   Safety ya publica es `>=0.5.0,<48.0.1`; requiere permitir y validar
   `cryptography>=48.0.1` en un plan separado. No se añadió ningún ignore.
+  **Remediación local posterior:** `cryptography` se resolvió a `48.0.1` con
+  lock regenerado bajo Python 3.12 (el runtime de CI/Cloud Run), sin cambios
+  de versiones transitivas. `safety==3.8.1 check -r
+  backend/requirements.txt --output json` concluyó sin vulnerabilidades
+  reportadas; sigue pendiente publicar y confirmar el job de GitHub Actions.
 
 - **`PythonSatcfdiProvider` apunta a un wrapper inexistente (2026-07-28)** —
   `backend/app/providers/python_satcfdi.py:22` construye
