@@ -27,7 +27,23 @@ derivar clave de `Authorization`, ausente en EventSource/query.
    bloquear todo query rompe EventSource.
 9. **Costo de sobreestimar / prueba mínima:** hashing no evita filtración de URL;
    probar 4 requests con límite 2, SSE permitido y POST query 401.
-10. **Recomendación:** proceder con estado/fingerprint y allowlist GET; pendiente.
+10. **Recomendación:** proceder con estado/fingerprint y allowlist GET.
+
+## Cierre (2026-07-28)
+
+**CERRADO por Decision Expander.** La huella autenticada se calcula una vez y
+se guarda con la identidad en `request.state`; el rate limiter no vuelve a
+interpretar `Authorization`. Query bearer sólo funciona como fallback en GET
+de SSE y descarga ZIP expresamente permitidos. El bearer válido conserva la
+compatibilidad con el capability token de descarga SAT.
+
+Evidencia: 54 pruebas focalizadas del plan y 92 pruebas conjuntas pasan. La
+prueba de límite por query obtiene `200, 200, 429, 429`; POST y GET fuera de la
+allowlist devuelven 401; SSE/descarga incluyen `Cache-Control: no-store` y
+`Referrer-Policy: no-referrer`.
+
+Riesgo residual documentado: los query tokens pueden ser visibles por proxies
+o logs externos antes de llegar a la aplicación.
 
 ## Implementación
 

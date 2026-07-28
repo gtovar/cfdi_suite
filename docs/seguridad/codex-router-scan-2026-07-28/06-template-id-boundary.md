@@ -29,7 +29,17 @@ rutas de templates en servicios.
    validar existencia rompe personalización/fallback.
 9. **Costo de sobreestimar / prueba mínima:** no asumir que la regex acepta todos
    IDs actuales; probar IDs personalizados y ataques codificados.
-10. **Recomendación:** proceder como hardening con validador compartido; pendiente.
+10. **Recomendación:** proceder como hardening con validador compartido.
+
+## Cierre (2026-07-28)
+
+**CERRADO por Decision Expander.** El regex se centralizó en una capa neutral
+y se valida antes de encolar y antes de cargar en las rutas PDF y los payloads
+internos. Un ID válido que no existe conserva el fallback previo.
+
+Evidencia: 48 pruebas focalizadas del plan y 92 pruebas conjuntas pasan,
+incluyendo `../default`, separadores, ruta absoluta, codificación URL, IDs
+personalizados válidos y la conservación del fallback.
 
 ## Implementación
 

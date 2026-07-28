@@ -198,6 +198,8 @@ DEFAULT_HEADER_HTML = """\
 
 def get_html_template(template_id: str) -> str:
     """Lee el HTML guardado para un template_id, o devuelve el default."""
+    from .template_ids import validate_template_id
+    validate_template_id(template_id)
     path = HTML_TEMPLATES_DIR / f"{template_id}.html"
     if path.exists():
         return path.read_text(encoding="utf-8")
@@ -206,6 +208,8 @@ def get_html_template(template_id: str) -> str:
 
 def save_html_template(template_id: str, html: str) -> None:
     """Guarda el HTML de un template en disco, sanitizado."""
+    from .template_ids import validate_template_id
+    validate_template_id(template_id)
     allowed_tags = [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup",
         "dd", "div", "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6",

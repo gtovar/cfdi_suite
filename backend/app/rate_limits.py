@@ -10,7 +10,6 @@ para usar en cualquier endpoint de FastAPI.
 """
 from __future__ import annotations
 
-import hashlib
 import time
 from collections import defaultdict
 
@@ -18,10 +17,7 @@ from fastapi import Depends, HTTPException, Request
 
 
 def _rate_limit_key(request: Request) -> str:
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        return hashlib.sha256(auth[len("Bearer "):].encode()).hexdigest()[:24]
-    return ""
+    return getattr(request.state, "auth_fingerprint", "")
 
 
 def rate_limit(max_requests: int, window_seconds: int = 60):

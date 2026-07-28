@@ -29,6 +29,18 @@ concurrencia.
    si reintentos internos multiplican llamadas; instrumentar concurrencia.
 10. **Recomendación:** proceder; devolver 413 antes de Diverza si hay 501 UUIDs.
 
+## Cierre (2026-07-28)
+
+**CERRADO por Decision Expander, tras segunda ronda.** El parser conserva
+`read_only=True`, rechaza el UUID válido 501 con 413 y el lote usa un pool de
+20 workers con colas acotadas. Los resultados siguen indexados y los eventos
+SSE mantienen su contrato.
+
+Evidencia: 36 pruebas focalizadas y 93 pruebas conjuntas pasan. La prueba
+end-to-end de POST multipart con 501 UUIDs verifica 413 y
+`httpx.AsyncClient.put.assert_not_called()`: no empieza ninguna consulta a
+Diverza después del rechazo.
+
 ## Implementación
 
 Detener al exceder 500 UUIDs válidos y usar cola con 20 workers, resultados

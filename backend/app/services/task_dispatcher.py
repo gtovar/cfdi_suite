@@ -4,6 +4,8 @@ from google.cloud import tasks_v2
 from google.api_core.exceptions import InvalidArgument
 import sentry_sdk
 
+from .template_ids import validate_template_id
+
 GCP_PROJECT = os.getenv("GCP_PROJECT", "ultra-acre-431617-p0")
 GCP_REGION = os.getenv("GCP_REGION", "us-central1")
 QUEUE_NAME = os.getenv("CFDI_QUEUE_NAME", "pdf-generator-queue")
@@ -44,6 +46,8 @@ def get_tasks_client():
     return _client
 
 def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_shell: str = None, batch_id: str = None):
+    # Este borde también protege invocaciones internas que no pasan por HTTP.
+    validate_template_id(template_id)
     client = get_tasks_client()  # Se inicializa de forma segura aquí
     parent = client.queue_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME)
     payload = {
@@ -71,6 +75,8 @@ def enqueue_zip_extraction(gcs_path: str, batch_id: str, template_id: str):
     BackgroundTask en memoria — así el trabajo sobrevive al reciclaje de
     instancias de Cloud Run y Cloud Tasks reintenta si falla a medio camino.
     """
+    # Validar antes de crear/enviar la Cloud Task, no sólo al consumirla.
+    validate_template_id(template_id)
     client = get_tasks_client()
     parent = client.queue_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME)
     payload = {

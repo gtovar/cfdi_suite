@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, Response
 
 from ..services.canvas_service import DEFAULT_COLUMNS, FIELD_ENUM
 from ..services.error_reporting import report
+from ..services.template_ids import TEMPLATE_ID_RE, validate_template_id
 
 router = APIRouter()
 
@@ -17,9 +18,9 @@ _DESIGN_DIR    = Path(__file__).parent.parent.parent / "templates" / "design"
 _HTML_DIR      = Path(__file__).parent.parent.parent / "templates" / "html"
 _DESIGN_DIR.mkdir(exist_ok=True)
 
-# Identificador de plantilla válido (anti path-traversal). Case-insensitive para
-# ids recibidos; los ids generados por _slugify siempre salen en minúsculas.
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$", re.IGNORECASE)
+# Alias de compatibilidad para consumidores internos; la definición canónica
+# vive en services.template_ids y se comparte con los flujos PDF.
+_ID_RE = TEMPLATE_ID_RE
 
 # ── Validación de design config (contrato Fase 0, sección 1.6) ──────────────────
 
@@ -160,8 +161,10 @@ def _validate_design(body) -> None:
 
 def _validate_id_or_400(template_id: str) -> None:
     """Rechaza ids con path-traversal o caracteres inválidos (400) antes de tocar disco."""
-    if not isinstance(template_id, str) or not _ID_RE.match(template_id):
-        raise HTTPException(status_code=400, detail=f"Identificador de plantilla inválido: {template_id!r}")
+    try:
+        validate_template_id(template_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 def _slugify(nombre: str) -> str:

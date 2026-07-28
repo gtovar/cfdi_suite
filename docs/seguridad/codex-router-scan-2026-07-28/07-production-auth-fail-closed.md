@@ -28,8 +28,22 @@ abre la API. El despliegue no fuerza aún una bandera de producción fail-closed
    al acceso anónimo pero exige orden de deploy.
 9. **Costo de sobreestimar / prueba mínima:** comprobar que el secreto llega al
    runtime, no sólo existe en Secret Manager; probar arranque con/sin ambos.
-10. **Recomendación:** proceder como garantía de despliegue con flag explícito;
-    pendiente.
+10. **Recomendación:** proceder como garantía de despliegue con flag explícito.
+
+## Cierre (2026-07-28)
+
+**CERRADO por Decision Expander.** El workflow inyecta
+`API_BEARER_TOKEN` desde Secret Manager y ahora fija
+`REQUIRE_API_AUTH=true`. El lifespan aborta antes de atender tráfico si la
+bandera está activa y falta el secreto; sin bandera, desarrollo local conserva
+su modo explícito sin secreto.
+
+Evidencia: `backend/.venv/bin/python -m pytest
+backend/tests/test_lifespan_api_auth.py -q` pasó **3 pruebas**: producción sin
+secreto falla, producción con secreto arranca y local sin bandera arranca.
+
+Pendiente operativo, fuera de este cambio: en el siguiente deploy confirmar
+que la revisión nueva recibe el secreto y queda Ready antes de mover tráfico.
 
 ## Implementación
 

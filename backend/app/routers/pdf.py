@@ -49,6 +49,7 @@ from ..services.redis_errors import is_redis_quota_error
 from ..services.redis_safety import safe_redis_call
 from ..services.internal_auth import verify_cloud_tasks
 from ..services.error_reporting import report
+from ..services.template_ids import validate_template_id
 from ..services import batch_state_store
 from ..middleware import PDF_SINGLE_XML_MAX_BYTES
 
@@ -180,10 +181,36 @@ def _validate_owned_upload_zip_path(gcs_path: object) -> None:
         )
 
 
+def _validate_template_id_or_400(template_id: object) -> str:
+    """Valida el ID antes de encolar o abrir cualquier archivo de plantilla."""
+    try:
+        return validate_template_id(template_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _template_id_from_form(template: str | None) -> str:
+    """Extrae el ID opcional de form-data, conservando el fallback histórico.
+
+    JSON malformado o sin ``_id`` seguía significando ``default``; un ``_id``
+    explícito pero inseguro se rechaza antes de que alcance Cloud Tasks.
+    """
+    if not template:
+        return "default"
+    try:
+        template_data = json.loads(template)
+        template_id = template_data.get("_id", "default") if isinstance(template_data, dict) else "default"
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return "default"
+    return _validate_template_id_or_400(template_id)
+
+
 @router.post("/internal/generate-pdf")
 async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
     if not verify_cloud_tasks(request):
         raise HTTPException(status_code=403, detail="Acceso denegado")
+
+    _validate_template_id_or_400(payload.template_id)
 
     print(f"Iniciando generación de PDF para Job ID: {payload.job_id}")
     # Best-effort, nunca puede tumbar el trabajo real de abajo si Redis está
@@ -284,13 +311,7 @@ async def start_pdf_generation(
     job_id = str(uuid.uuid4())
     xml_content = await _read_pdf_xml_upload(file)
     
-    template_id = "default"
-    if template:
-        try:
-            template_data = json.loads(template)
-            template_id = template_data.get("_id", "default")
-        except Exception:
-            pass
+    template_id = _template_id_from_form(template)
 
     # ☁️ NUEVO: Subir XML temporal a Google Cloud Storage
     storage_client = storage.Client()
@@ -338,13 +359,7 @@ async def start_pdf_zip_generation(
 
     batch_id = str(uuid.uuid4())
     
-    template_id = "default"
-    if template:
-        try:
-            template_data = json.loads(template)
-            template_id = template_data.get("_id", "default")
-        except Exception:
-            pass
+    template_id = _template_id_from_form(template)
 
     job_ids = []
     manifest: dict[str, str] = {}
@@ -543,7 +558,11 @@ async def batch_progress(batch_id: str):
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -652,7 +671,11 @@ async def download_batch_zip(batch_id: str):
     return StreamingResponse(
         stream_zip(),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"'}
+        headers={
+            "Content-Disposition": f'attachment; filename="resultado_pdfs_{batch_id}.zip"',
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+        },
     )
 
 @router.get("/cfdi/pdf/{job_id}/progress")
@@ -694,7 +717,11 @@ async def pdf_progress(job_id: str):
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 @router.get("/cfdi/pdf/{job_id}/download")
@@ -842,6 +869,7 @@ async def internal_extract_zip(payload: ExtractZipPayload, request: Request):
         raise HTTPException(status_code=403, detail="Acceso denegado")
 
     _validate_owned_upload_zip_path(payload.gcs_path)
+    _validate_template_id_or_400(payload.template_id)
     ran = await process_zip_in_background(payload.gcs_path, payload.batch_id, payload.template_id)
     return {"status": "success" if ran else "skipped_already_in_progress"}
 
@@ -981,6 +1009,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     # internas o invocaciones directas de workers. No se debe tocar GCS, y
     # mucho menos limpiar un blob, si no es un ZIP temporal propio.
     _validate_owned_upload_zip_path(gcs_path)
+    _validate_template_id_or_400(template_id)
 
     # Lock de idempotencia -- encontrado 2026-07-12 auditando logs reales de
     # Cloud Run: una extracción que tarda más que el dispatch deadline de
@@ -1293,6 +1322,7 @@ async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
     reintenta automáticamente si falla a medio camino.
     """
     _validate_owned_upload_zip_path(payload.gcsPath)
+    template_id = _template_id_from_form(payload.template)
 
     try:
         storage_client = storage.Client()
@@ -1300,14 +1330,6 @@ async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
         await asyncio.to_thread(validate_gcs_zip_size, blob)
     except ZipBudgetError as error:
         raise HTTPException(status_code=413, detail="El ZIP excede el presupuesto permitido.") from error
-
-    template_id = "default"
-    if payload.template:
-        try:
-            template_data = json.loads(payload.template)
-            template_id = template_data.get("_id", "default")
-        except Exception:
-            pass
 
     batch_id = str(uuid.uuid4())
 

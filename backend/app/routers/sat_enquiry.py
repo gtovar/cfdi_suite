@@ -41,6 +41,9 @@ _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+MAX_BATCH_UUIDS = 500
+BATCH_ENQUIRY_WORKERS = 20
+BATCH_ENQUIRY_QUEUE_SIZE = 20
 
 
 def _is_uuid(value: str) -> bool:
@@ -322,6 +325,11 @@ def _parse_excel_input(content: bytes) -> ParsedInput:
                 if uuid:
                     descartadas += 1
                 continue
+            if len(rows) >= MAX_BATCH_UUIDS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"El archivo excede el máximo de {MAX_BATCH_UUIDS} UUIDs válidos",
+                )
             rows.append(
                 {
                     "uuid": uuid,
@@ -334,6 +342,59 @@ def _parse_excel_input(content: bytes) -> ParsedInput:
         return ParsedInput(rows, descartadas)
     finally:
         wb.close()
+
+
+async def _batch_enquiry_results(
+    client: httpx.AsyncClient,
+    rows: list[dict[str, str]],
+    tenant_id: str,
+):
+    """Produce resultados sin materializar una tarea por cada fila del Excel."""
+    work_queue: asyncio.Queue[tuple[int, dict[str, str]] | None] = asyncio.Queue(
+        maxsize=BATCH_ENQUIRY_QUEUE_SIZE
+    )
+    result_queue: asyncio.Queue[tuple[int, dict[str, Any]]] = asyncio.Queue(
+        maxsize=BATCH_ENQUIRY_QUEUE_SIZE
+    )
+
+    async def worker() -> None:
+        while True:
+            item = await work_queue.get()
+            try:
+                if item is None:
+                    return
+                idx, row = item
+                await result_queue.put(
+                    await _enquiry_indexed(
+                        client,
+                        idx,
+                        row["uuid"],
+                        row["rfc_emisor"],
+                        row["rfc_receptor"],
+                        row["total_cfdi"],
+                        row["motive"],
+                        tenant_id,
+                    )
+                )
+            finally:
+                work_queue.task_done()
+
+    async def producer() -> None:
+        for idx, row in enumerate(rows):
+            await work_queue.put((idx, row))
+        for _ in range(BATCH_ENQUIRY_WORKERS):
+            await work_queue.put(None)
+
+    workers = [asyncio.create_task(worker()) for _ in range(BATCH_ENQUIRY_WORKERS)]
+    producer_task = asyncio.create_task(producer())
+    try:
+        for _ in rows:
+            yield await result_queue.get()
+    finally:
+        producer_task.cancel()
+        for task in workers:
+            task.cancel()
+        await asyncio.gather(producer_task, *workers, return_exceptions=True)
 
 
 def _build_result_excel(
@@ -444,6 +505,8 @@ async def batch_sat_enquiry(
 
     try:
         rows, descartadas = _parse_excel_input(content)
+    except HTTPException:
+        raise
     except Exception as exc:
         report(exc, contexto="leer_excel")
         raise HTTPException(status_code=400, detail="No se pudo leer el archivo de Excel") from exc
@@ -470,25 +533,8 @@ async def batch_sat_enquiry(
         async with httpx.AsyncClient(
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=20)
         ) as client:
-            tasks = [
-                asyncio.create_task(
-                    _enquiry_indexed(
-                        client,
-                        idx,
-                        row["uuid"],
-                        row["rfc_emisor"],
-                        row["rfc_receptor"],
-                        row["total_cfdi"],
-                        row["motive"],
-                        tenant_id,
-                    )
-                )
-                for idx, row in enumerate(rows)
-            ]
-
             processed = 0
-            for coro in asyncio.as_completed(tasks):
-                idx, result = await coro
+            async for idx, result in _batch_enquiry_results(client, rows, tenant_id):
                 results[idx] = result
                 processed += 1
                 yield f"data: {json.dumps({'type': 'progress', 'processed': processed, 'total': total})}\n\n"
@@ -540,7 +586,11 @@ async def batch_sat_enquiry(
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -576,5 +626,9 @@ def get_batch_result(token: str) -> Response:
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="consultas_sat.xlsx"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="consultas_sat.xlsx"',
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+        },
     )

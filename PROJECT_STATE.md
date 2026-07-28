@@ -18,8 +18,26 @@ sin objeto nuevo residual en `uploads/`. El análisis posterior de
 `decision-expander` aprobó el cierre. Detalle completo:
 `docs/seguridad/codex-router-scan-2026-07-28/09-plan-01-validation-report.md`.
 
-**Siguiente plan:** 05 — token por query y rate limit. Los planes 02–07 siguen
-pendientes; no se implementaron durante el Plan 01.
+## Cierre más reciente — Planes 04–07 de seguridad (2026-07-28)
+
+**CERRADOS con Decision Expander y validación local.**
+
+- **04 XLSX/SAT:** máximo de 500 UUIDs válidos, 413 antes de Diverza, pool y
+  colas de 20, con orden y SSE conservados.
+- **05 Query auth/rate limit:** fingerprint en `request.state`, query bearer
+  limitado a GET explícitos y cabeceras anti-cache/referrer.
+- **06 `template_id`:** validador compartido en bordes PDF, carga y Cloud Tasks;
+  el fallback de IDs válidos inexistentes se conserva.
+- **07 Auth fail-closed:** deploy fija `REQUIRE_API_AUTH=true` y el lifespan
+  rechaza producción sin `API_BEARER_TOKEN`; no se hizo deploy real.
+
+Evidencia: suite de cierre focalizada **93 passed**, con una advertencia conocida
+de deprecación Starlette/httpx. Detalle en
+`docs/seguridad/codex-router-scan-2026-07-28/`.
+
+**Pendiente operativo:** en el próximo deploy de Cloud Run verificar que la
+revisión recibe `API_BEARER_TOKEN` de Secret Manager y queda Ready antes de
+mover tráfico.
 
 ### B-lite — Fase 3 de seguridad, identidad real en el backend (2026-07-27)
 
@@ -1802,6 +1820,11 @@ si vale la pena arreglarla.
   `ModuleNotFoundError`; `git show HEAD:backend/app/services/shell_service.py`
   ya importaba `bleach`, por lo que este cambio no lo introdujo. No corregido:
   requiere reparar/recrear el entorno de desarrollo, fuera de este fix.
+  **Verificación adicional de Planes 04–07:** tras `git stash push
+  --include-untracked` de todos los cambios de estos planes, la misma prueba
+  `backend/tests/test_pdf_pipeline.py::test_generate_from_data_default_produce_pdf_valido`
+  falló con el mismo `ModuleNotFoundError: bleach`; después se restauró el
+  stash. Por tanto no bloquea ni fue introducido por los Planes 04–07.
 
 - **`test_redis_resilience_guardrail.py` tiene números de línea caducos
   (2026-07-28)** — el ALLOWLIST de `HEAD` espera

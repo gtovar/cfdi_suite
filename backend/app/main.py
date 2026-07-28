@@ -47,6 +47,12 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    if os.getenv("REQUIRE_API_AUTH", "").lower() == "true" and not os.getenv(
+        "API_BEARER_TOKEN"
+    ):
+        raise RuntimeError(
+            "API_BEARER_TOKEN must be configured when REQUIRE_API_AUTH=true"
+        )
     (_BACKEND_ROOT / "shells").mkdir(exist_ok=True)
     (_BACKEND_ROOT / "templates" / "html").mkdir(parents=True, exist_ok=True)
     yield

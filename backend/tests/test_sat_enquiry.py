@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,6 +14,8 @@ try:
     from backend.app.main import app
     from backend.app.routers.sat_enquiry import (
         _DIVERZA_BASE,
+        BATCH_ENQUIRY_WORKERS,
+        _batch_enquiry_results,
         _call_diverza,
         _choose_best_json,
         _extract_json_objects,
@@ -160,6 +163,85 @@ class ParseExcelInputTests(unittest.TestCase):
         self.assertEqual(parsed[0]["uuid"], "ddd44444-4444-4444-8444-444444444444")
         # 2, no 3: la fila con UUID vacío no cuenta.
         self.assertEqual(descartadas, 2)
+
+    def test_accepts_500_valid_uuids(self):
+        rows = [
+            {"UUID": f"00000000-0000-4000-8000-{number:012d}", "RFC emisor": "AAA", "RFC receptor": "BBB", "TotalCFDI": "1", "Motive": "01"}
+            for number in range(500)
+        ]
+        parsed, descartadas = _parse_excel_input(_make_xlsx(rows))
+        self.assertEqual(len(parsed), 500)
+        self.assertEqual(descartadas, 0)
+
+    def test_rejects_501_valid_uuids(self):
+        rows = [
+            {"UUID": f"00000000-0000-4000-8000-{number:012d}", "RFC emisor": "AAA", "RFC receptor": "BBB", "TotalCFDI": "1", "Motive": "01"}
+            for number in range(501)
+        ]
+        with self.assertRaisesRegex(Exception, "máximo de 500 UUIDs válidos") as raised:
+            _parse_excel_input(_make_xlsx(rows))
+        self.assertEqual(raised.exception.status_code, 413)
+
+    def test_batch_endpoint_rejects_501_before_any_diverza_call(self):
+        """El rechazo de tamaño ocurre antes de crear el stream o sus workers."""
+        rows = [
+            {
+                "UUID": f"00000000-0000-4000-8000-{number:012d}",
+                "RFC emisor": "AAA",
+                "RFC receptor": "BBB",
+                "TotalCFDI": "1",
+                "Motive": "01",
+            }
+            for number in range(501)
+        ]
+        put = AsyncMock()
+        with (
+            TestClient(app) as client,
+            patch("httpx.AsyncClient.put", put),
+        ):
+            response = client.post(
+                "/api/sat/enquiry/batch",
+                files={
+                    "file": (
+                        "lote.xlsx",
+                        _make_xlsx(rows),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("máximo de 500 UUIDs válidos", response.json()["detail"])
+        put.assert_not_called()
+
+
+@unittest.skipIf(TestClient is None, f"fastapi no disponible: {_IMPORT_ERROR}")
+class BatchEnquiryPoolTests(unittest.TestCase):
+    def test_never_exceeds_worker_limit_and_preserves_indices(self):
+        rows = [
+            {"uuid": str(index), "rfc_emisor": "A", "rfc_receptor": "B", "total_cfdi": "1", "motive": "01"}
+            for index in range(BATCH_ENQUIRY_WORKERS * 2)
+        ]
+        active = 0
+        maximum_active = 0
+
+        async def fake_enquiry(client, idx, *args):
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            await asyncio.sleep(0)
+            active -= 1
+            return idx, {"uuid": str(idx)}
+
+        async def collect():
+            with patch("backend.app.routers.sat_enquiry._enquiry_indexed", side_effect=fake_enquiry):
+                return [
+                    result async for result in _batch_enquiry_results(MagicMock(), rows, "tenant")
+                ]
+
+        results = asyncio.run(collect())
+        self.assertLessEqual(maximum_active, BATCH_ENQUIRY_WORKERS)
+        self.assertEqual(sorted(index for index, _ in results), list(range(len(rows))))
 
 
 @unittest.skipIf(TestClient is None, f"fastapi no disponible: {_IMPORT_ERROR}")

@@ -152,7 +152,12 @@ def generate_from_data(
       - Páginas 2..N: continuación de la tabla en canvas streaming
       - Última página: footer con totales, UUID
     """
-    # 2. Configuración de diseño: la inyectada en memoria tiene prioridad; si no,
+    # 2. Validar antes de formar cualquier path de template. Un ID válido que
+    #    no exista conserva el fallback histórico a la configuración default.
+    from .template_ids import validate_template_id
+    validate_template_id(template_id)
+
+    # 3. Configuración de diseño: la inyectada en memoria tiene prioridad; si no,
     #    se carga de disco por template_id (camino de producción).
     if design_config is not None:
         render_config = design_config
@@ -162,7 +167,7 @@ def generate_from_data(
         _design_path = _Path(__file__).resolve().parents[2] / "templates" / "design" / f"{template_id}.json"
         render_config = _json.loads(_design_path.read_text()) if _design_path.exists() else None
 
-    # 3. Header: WeasyPrint renderiza el template HTML del usuario
+    # 4. Header: WeasyPrint renderiza el template HTML del usuario
     from .shell_service import get_html_template, render_shell
     html_template = html_shell or get_html_template(template_id)
     header_pdf = render_shell(html_template, cfdi_data, render_config)
