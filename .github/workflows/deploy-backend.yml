@@ -86,10 +86,12 @@ jobs:
           # signed URLs).
           flags: |
             --allow-unauthenticated
-            --to-latest
             --cpu=2
             --memory=2Gi
             --max-instances=10
             --timeout=1800
             --concurrency=5
             --service-account=cfdi-suite-api-sa@ultra-acre-431617-p0.iam.gserviceaccount.com
+
+      - name: Route traffic to latest ready revision
+        run: gcloud run services update-traffic cfdi-suite-api --to-latest --region us-central1
