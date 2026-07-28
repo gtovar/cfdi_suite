@@ -1811,6 +1811,24 @@ si vale la pena arreglarla.
   triage/actualización de dependencias y pruebas de compatibilidad como plan
   de seguridad separado. Evidencia: workflow GitHub `30350547693`, paso
   “Run safety (dependency vulns)”.
+  Actualización local posterior: al subir únicamente `pypdf` a `6.14.2` y
+  `lxml` a `6.1.1`, `safety==3.8.1 check -r backend/requirements.txt` bajó de
+  35 a **1** aviso. El único restante es
+  `SFTY-20260615-96125` para `cryptography==47.0.0`, cuyo rango afectado que
+  Safety ya publica es `>=0.5.0,<48.0.1`; requiere permitir y validar
+  `cryptography>=48.0.1` en un plan separado. No se añadió ningún ignore.
+
+- **`PythonSatcfdiProvider` apunta a un wrapper inexistente (2026-07-28)** —
+  `backend/app/providers/python_satcfdi.py:22` construye
+  `cfdi_suite/wrappers/python-satcfdi-wrapper.py`, pero `rg --files` confirma
+  que el único wrapper existente está en
+  `frontend/src/cfdi/engine/python-satcfdi-wrapper.py`; ejecutar el path que
+  usa el provider devuelve `can't open file ... No such file or directory`.
+  La línea procede de `285a67c` ("fix: corregir path del wrapper
+  python-satcfdi en Cloud Run"), por lo que antecede a este triage y no fue
+  introducida aquí. No corregido: es un defecto funcional independiente; la
+  validación de Safety usó el wrapper existente sólo para evaluar la
+  exposición XXE de `satcfdi`.
 
 - **Security Scan / Bandit (workflow `30348765265`)** — falló al encontrar
   seis hallazgos MEDIUM ya presentes antes de Plan 02: B310 en `pdf.py`
