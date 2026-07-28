@@ -432,6 +432,34 @@ class BatchMetadataTtlTests(unittest.TestCase):
         mock_bucket.blob.return_value.upload_from_string.assert_called_once()
         mock_enqueue.assert_called_once()
 
+    def test_start_pdf_generation_limpia_xml_y_devuelve_503_si_no_encola(self) -> None:
+        import io
+
+        from fastapi.testclient import TestClient
+
+        from backend.app.main import app
+
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "enqueue_pdf_generation", side_effect=RuntimeError("tasks unavailable")),
+        ):
+            mock_redis.set = AsyncMock()
+            response = TestClient(app).post(
+                "/api/cfdi/pdf/start",
+                files={"file": ("factura.xml", io.BytesIO(b"<xml/>"), "application/xml")},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Servicio temporalmente no disponible", response.json()["detail"])
+        mock_blob.delete.assert_called_once()
+
     def test_direct_path_enqueue_failure_sets_error_status_ttl_to_24h(self) -> None:
         """start_pdf_zip_generation (~283-346): si Cloud Tasks rechaza el
         encolado, el job nunca progresará — su status "error" debe vivir

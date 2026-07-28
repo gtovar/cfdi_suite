@@ -317,7 +317,16 @@ async def start_pdf_generation(
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
     blob_xml = bucket.blob(f"xml_temp/{job_id}.xml")
-    await asyncio.to_thread(blob_xml.upload_from_string, xml_content, content_type="application/xml")
+    try:
+        await asyncio.to_thread(
+            blob_xml.upload_from_string, xml_content, content_type="application/xml"
+        )
+    except Exception as exc:
+        report(exc, contexto="almacenar_xml_individual")
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo preparar el XML para conversión. Intenta de nuevo.",
+        ) from exc
     # <-- El XML ya está en GCS -- lo que sigue (status best-effort + encolar
     # la tarea real) nunca debe fallar por un problema de Redis. Encontrado en
     # vivo el 23 de julio: esta escritura, sin protección, tumbaba con 500 el
@@ -330,9 +339,16 @@ async def start_pdf_generation(
 
     try:
         await asyncio.to_thread(enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=template_id)
-    except Exception as e:
-        report(e, contexto="encolar_pdf")
-        raise HTTPException(status_code=500, detail="Error al encolar la generación del PDF") from e
+    except Exception as exc:
+        report(exc, contexto="encolar_pdf")
+        try:
+            await asyncio.to_thread(blob_xml.delete)
+        except Exception as cleanup_exc:
+            report(cleanup_exc, contexto="limpiar_xml_no_encolado")
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo programar la conversión. Intenta de nuevo.",
+        ) from exc
     
     return {"jobId": job_id}
 

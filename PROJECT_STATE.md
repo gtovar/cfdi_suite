@@ -1801,6 +1801,15 @@ documento. A partir de ahora, cualquier cosa que se encuentre rota "de paso"
 con evidencia (no solo "creo que ya estaba así"), para poder decidir después
 si vale la pena arreglarla.
 
+- **Runner frontend no inicializa `localStorage` (2026-07-28)** —
+  `npx vitest run src/components/ConversionMasivaPage.test.tsx --environment
+  happy-dom` falla antes de renderizar los 13 tests existentes con
+  `TypeError: localStorage.clear is not a function` y el warning de Node sobre
+  `--localstorage-file` sin ruta válida. Evidencia: se guardaron los cambios
+  del incidente con `git stash --include-untracked`, se repitió la prueba en
+  el árbol limpio (13/13 fallan igual) y se restauró el stash. No corregido:
+  requiere reparar la configuración del runner/frontend en una tarea separada.
+
 - **Suite backend: 10 fallos reproducidos sin Plan 03 (2026-07-28)** — se
   creó el worktree temporal `/private/tmp/cfdi-plan03-baseline` en el padre
   `d754218` y se ejecutó `backend/.venv/bin/python -m pytest backend/tests -q`.

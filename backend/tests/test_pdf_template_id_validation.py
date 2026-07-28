@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
+from google.api_core.exceptions import AlreadyExists, ServiceUnavailable
 
 from backend.app.routers import pdf as pdf_router
 from backend.app.services import task_dispatcher
@@ -100,3 +101,31 @@ class PdfTemplateIdBoundaryTests(unittest.TestCase):
         self.assertEqual(result, "tasks/custom-template")
         payload = json.loads(client.create_task.call_args.kwargs["request"]["task"]["http_request"]["body"])
         self.assertEqual(payload["template_id"], "cliente_acme-2026")
+
+    def test_dispatcher_reintenta_timeout_con_tarea_idempotente(self) -> None:
+        client = MagicMock()
+        client.queue_path.return_value = "queues/pdf-generator"
+        client.task_path.return_value = "queues/pdf-generator/tasks/pdf-job-test"
+        response = MagicMock()
+        response.name = "queues/pdf-generator/tasks/pdf-job-test"
+        client.create_task.side_effect = [ServiceUnavailable("temporal"), response]
+        with (
+            patch.object(task_dispatcher, "get_tasks_client", return_value=client),
+            patch("backend.app.services.task_dispatcher.time.sleep") as sleep,
+        ):
+            result = task_dispatcher.enqueue_pdf_generation("job-test", "", "default")
+
+        self.assertEqual(result, "queues/pdf-generator/tasks/pdf-job-test")
+        self.assertEqual(client.create_task.call_count, 2)
+        self.assertEqual(sleep.call_count, 1)
+        task = client.create_task.call_args.kwargs["request"]["task"]
+        self.assertEqual(task["name"], "queues/pdf-generator/tasks/pdf-job-test")
+
+    def test_dispatcher_acepta_tarea_ya_creada_como_exito(self) -> None:
+        client = MagicMock()
+        client.queue_path.return_value = "queues/pdf-generator"
+        client.task_path.return_value = "queues/pdf-generator/tasks/pdf-job-test"
+        client.create_task.side_effect = AlreadyExists("ya existe")
+        with patch.object(task_dispatcher, "get_tasks_client", return_value=client):
+            result = task_dispatcher.enqueue_pdf_generation("job-test", "", "default")
+        self.assertEqual(result, "queues/pdf-generator/tasks/pdf-job-test")

@@ -1,7 +1,8 @@
 import json
 import os
+import time
 from google.cloud import tasks_v2
-from google.api_core.exceptions import InvalidArgument
+from google.api_core.exceptions import AlreadyExists, DeadlineExceeded, InternalServerError, InvalidArgument, ServiceUnavailable
 import sentry_sdk
 
 from .template_ids import validate_template_id
@@ -38,12 +39,33 @@ def _oidc_token() -> dict:
     }
 
 _client = None
+_TRANSIENT_TASK_ERRORS = (DeadlineExceeded, InternalServerError, ServiceUnavailable)
 
 def get_tasks_client():
     global _client
     if _client is None:
         _client = tasks_v2.CloudTasksClient()
     return _client
+
+
+def _create_task_idempotently(client, parent: str, task: dict, task_id: str) -> str:
+    """Crea una Cloud Task con nombre estable para poder reintentar sin duplicar.
+
+    La UI de XMLs sueltos reintenta peticiones cuando una respuesta se pierde.
+    Sin nombre determinista, un timeout entre Cloud Tasks y Cloud Run podía
+    convertir un reintento legítimo en dos conversiones del mismo XML.
+    """
+    task_name = client.task_path(GCP_PROJECT, GCP_REGION, QUEUE_NAME, task_id)
+    task["name"] = task_name
+    for attempt in range(3):
+        try:
+            return client.create_task(request={"parent": parent, "task": task}).name
+        except AlreadyExists:
+            return task_name
+        except _TRANSIENT_TASK_ERRORS:
+            if attempt == 2:
+                raise
+            time.sleep(0.25 * (2**attempt))
 
 def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_shell: str = None, batch_id: str = None):
     # Este borde también protege invocaciones internas que no pasan por HTTP.
@@ -66,8 +88,7 @@ def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_she
             "body": json.dumps(payload).encode("utf-8")
         }
     }
-    response = client.create_task(request={"parent": parent, "task": task})
-    return response.name
+    return _create_task_idempotently(client, parent, task, f"pdf-{job_id}")
 
 def enqueue_zip_extraction(gcs_path: str, batch_id: str, template_id: str):
     """

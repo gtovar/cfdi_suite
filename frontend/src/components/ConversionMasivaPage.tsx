@@ -97,6 +97,26 @@ interface ConversionMasivaPageProps {
 // mostrar el batch como recuperable.
 const ACTIVE_BATCH_KEY = 'cfdi-active-batch';
 const ACTIVE_BATCH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const PENDING_LOOSE_FILES_KEY = 'cfdi-pending-loose-files';
+
+interface PendingLooseFiles {
+  count: number;
+  totalBytes: number;
+  savedAt: number;
+}
+
+function loadPendingLooseFiles(): PendingLooseFiles | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_LOOSE_FILES_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingLooseFiles;
+    return Number.isInteger(parsed.count) && parsed.count > 0 && typeof parsed.totalBytes === 'number'
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 // Red de seguridad para la descarga de PDFs: si Redis pierde el detalle de
 // status de ESTE lote (ver _reconcile_none_statuses_with_gcs en pdf.py),
@@ -127,6 +147,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   const [readyFileIds, setReadyFileIds] = useState<string[]>([]);
   const [wasRestored, setWasRestored] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [pendingLooseFiles, setPendingLooseFiles] = useState<PendingLooseFiles | null>(loadPendingLooseFiles);
 
   // Señal de "lote totalmente terminado" independiente del status derivado
   // de Redis -- si Redis perdió el detalle de status de este lote (ver
@@ -167,6 +188,17 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
 
   const allSelected = entries.length > 0 && entries.every((e) => selectedRows.has(e.file.name));
   const someSelected = entries.some((e) => selectedRows.has(e.file.name));
+
+  useEffect(() => {
+    if (!entries.length) return;
+    const pending = {
+      count: entries.length,
+      totalBytes: entries.reduce((sum, entry) => sum + entry.file.size, 0),
+      savedAt: Date.now(),
+    };
+    sessionStorage.setItem(PENDING_LOOSE_FILES_KEY, JSON.stringify(pending));
+    setPendingLooseFiles(pending);
+  }, [entries]);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -211,6 +243,8 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     setPhase('idle');
     setIsZipMode(false);
     setZipFile(null);
+    sessionStorage.removeItem(PENDING_LOOSE_FILES_KEY);
+    setPendingLooseFiles(null);
     setBatchId(null);
     setBatchProgress(null);
     setBatchConnState(null);
@@ -646,6 +680,26 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
           )}
           <input ref={fileInputRef} type="file" multiple accept=".xml,.zip" className="hidden" onChange={handleFileSelect} />
         </div>
+
+        {pendingLooseFiles && !entries.length && !isZipMode && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <p>
+              La pestaña se recargó con {pendingLooseFiles.count.toLocaleString('es-MX')} XMLs
+              ({formatBytes(pendingLooseFiles.totalBytes)}) seleccionados. Por seguridad, el navegador
+              no puede restaurar sus archivos: selecciónalos otra vez para continuar.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                sessionStorage.removeItem(PENDING_LOOSE_FILES_KEY);
+                setPendingLooseFiles(null);
+              }}
+              className="shrink-0 font-semibold underline"
+            >
+              Ocultar
+            </button>
+          </div>
+        )}
 
       {/* Aviso explícito de recuperación — antes esto pasaba en silencio
           (reconstrucción del estado sin ningún mensaje al usuario) */}

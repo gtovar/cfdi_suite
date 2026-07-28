@@ -126,6 +126,11 @@ async def google_invalid_argument_handler(request: Request, exc: InvalidArgument
 
 @app.exception_handler(HTTPException)
 async def _sanitize_5xx_detail(request: Request, exc: HTTPException):
+    if exc.status_code == 503:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Servicio temporalmente no disponible. Intenta de nuevo."},
+        )
     if exc.status_code >= 500:
         sentry_sdk.capture_message(f"5xx detail sanitizado: {str(exc.detail)[:200]}")
         return JSONResponse(

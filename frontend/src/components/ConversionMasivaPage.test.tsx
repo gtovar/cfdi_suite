@@ -29,6 +29,7 @@ vi.mock('../lib/pdf-download', async () => {
 import ConversionMasivaPage from './ConversionMasivaPage';
 
 const ACTIVE_BATCH_KEY = 'cfdi-active-batch';
+const PENDING_LOOSE_FILES_KEY = 'cfdi-pending-loose-files';
 
 function seedActiveBatch(startedAt: number, batchId = 'batch-abc', total = 5) {
   localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify({ batchId, total, startedAt }));
@@ -81,6 +82,18 @@ describe('ConversionMasivaPage — recuperación de lote (Fase 3)', () => {
     expect(watchBatchProgress).toHaveBeenCalledWith('shared-xyz', expect.any(Function), expect.any(Function));
     expect(fetchReadyFileIds).toHaveBeenCalledWith('shared-xyz');
     expect(container.textContent).toContain('Recuperamos tu lote anterior');
+  });
+
+  it('explica qué pasó con XMLs sueltos tras un refresh sin prometer restaurarlos', () => {
+    sessionStorage.setItem(PENDING_LOOSE_FILES_KEY, JSON.stringify({
+      count: 150,
+      totalBytes: 629_527_686,
+      savedAt: Date.now(),
+    }));
+    ({ container } = renderReact(<ConversionMasivaPage />));
+
+    expect(container.textContent).toContain('150 XMLs');
+    expect(container.textContent).toContain('no puede restaurar sus archivos');
   });
 
   it('muestra el link persistente con el batch_id cuando hay un lote activo', () => {
