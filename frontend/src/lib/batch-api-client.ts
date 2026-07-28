@@ -45,11 +45,11 @@ export async function analyzeOneForBatch(
   signal?: AbortSignal,
 ): Promise<BatchFileResult> {
   try {
-    const xml = await file.text();
+    const form = new FormData();
+    form.append('file', file);
     const res = await apiFetch('/api/cfdi/analyze', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ xml }),
+      body: form,
       signal,
     });
 

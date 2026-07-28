@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import sentry_sdk 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -19,7 +19,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from .contracts import AnalysisIssue, AnalyzeCfdiRequest, AnalyzeCfdiResponse
+from .contracts import AnalysisIssue, AnalyzeCfdiResponse
 from .rate_limits import rate_limit
 from .security import verify_user_identity
 from .observability import record_analyze_cfdi_error
@@ -185,8 +185,12 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/cfdi/analyze", response_model=AnalyzeCfdiResponse)
-def analyze_cfdi(
-    payload: AnalyzeCfdiRequest,
+async def analyze_cfdi(
+    file: UploadFile = File(...),
     _rate=rate_limit(30),
 ) -> AnalyzeCfdiResponse:
-    return run_analyze_cfdi(payload.xml)
+    raw = await file.read()
+    xml_str = raw.decode("utf-8", errors="replace")
+    if len(xml_str) > 50_000_000:
+        raise HTTPException(status_code=413, detail="El XML excede el limite de 50 MB")
+    return run_analyze_cfdi(xml_str)

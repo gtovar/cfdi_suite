@@ -5,13 +5,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .policy import (
-    ANALYZE_CFDI_XML_MAX_CHARS,
     FALLBACK_REASON_PROVIDER_RUNTIME_FAILURE,
 )
-
-
-class AnalyzeCfdiRequest(BaseModel):
-    xml: str = Field(min_length=1, max_length=ANALYZE_CFDI_XML_MAX_CHARS)
 
 
 class AnalysisIssue(BaseModel):

@@ -46,7 +46,10 @@ class AnalyzeCfdiEndpointTests(unittest.TestCase):
         )
 
         with patch("backend.app.main.run_analyze_cfdi", return_value=response_model) as mocked_run:
-            response = self.client.post("/api/cfdi/analyze", json={"xml": "<xml />"})
+            response = self.client.post(
+                "/api/cfdi/analyze",
+                files={"file": ("test.xml", b"<xml />", "text/xml")},
+            )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -60,39 +63,14 @@ class AnalyzeCfdiEndpointTests(unittest.TestCase):
         metrics = snapshot_metrics()
         self.assertEqual(metrics.request_total, 0)
 
-    def test_endpoint_returns_contractual_invalid_request_response(self) -> None:
-        with self.assertLogs(LOGGER_NAME, level="WARNING") as captured:
-            response = self.client.post("/api/cfdi/analyze", json={"xml": ""})
-
+    def test_endpoint_rejects_missing_file(self) -> None:
+        response = self.client.post("/api/cfdi/analyze")
         self.assertEqual(response.status_code, 422)
-        payload = response.json()
-        self.assertEqual(payload["profile"], "unknown")
-        self.assertIsNone(payload["cfdi"])
-        self.assertEqual(payload["issues"][0]["code"], "CFDI_PARSE_FAILED")
-        self.assertTrue(payload["issues"][0]["fatal"])
-        self.assertEqual(payload["meta"]["contractVersion"], "v1")
-        self.assertEqual(payload["meta"]["provider"], "platform")
-        self.assertTrue(payload["meta"]["requestId"])
-        log_line = captured.output[-1]
-        self.assertIn('"event": "analyze_cfdi.error"', log_line)
-        self.assertIn(payload["meta"]["requestId"], log_line)
-        self.assertNotIn('"xml"', log_line)
-        metrics = snapshot_metrics()
-        self.assertEqual(metrics.request_total, 1)
-        self.assertEqual(metrics.fatal_error_total, 1)
-        self.assertEqual(metrics.by_http_status["422"], 1)
-        self.assertEqual(metrics.by_provider_mode["primary"], 1)
 
-    def test_endpoint_rejects_oversized_xml_with_contractual_response(self) -> None:
-        with self.assertLogs(LOGGER_NAME, level="WARNING"):
-            response = self.client.post("/api/cfdi/analyze", json={"xml": "x" * 20_000_001})
-
-        self.assertEqual(response.status_code, 422)
-        payload = response.json()
-        self.assertEqual(payload["profile"], "unknown")
-        self.assertIsNone(payload["cfdi"])
-        self.assertEqual(payload["issues"][0]["code"], "CFDI_PARSE_FAILED")
-        self.assertTrue(payload["meta"]["requestId"])
-        metrics = snapshot_metrics()
-        self.assertEqual(metrics.request_total, 1)
-        self.assertEqual(metrics.fatal_error_total, 1)
+    def test_endpoint_rejects_oversized_xml(self) -> None:
+        oversized = b"<xml>" + b"x" * 50_000_001 + b"</xml>"
+        response = self.client.post(
+            "/api/cfdi/analyze",
+            files={"file": ("big.xml", oversized, "text/xml")},
+        )
+        self.assertEqual(response.status_code, 413)

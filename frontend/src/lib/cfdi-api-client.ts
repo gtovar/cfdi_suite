@@ -42,13 +42,11 @@ export async function analyzeCFDI(
     detail: 'Enviando el archivo al backend Python.',
   });
 
-  const xml = await file.text();
+  const form = new FormData();
+  form.append('file', file);
   const response = await apiFetch('/api/cfdi/analyze', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ xml }),
+    body: form,
   });
 
   onProgress?.({
