@@ -1782,6 +1782,18 @@ documento. A partir de ahora, cualquier cosa que se encuentre rota "de paso"
 con evidencia (no solo "creo que ya estaba así"), para poder decidir después
 si vale la pena arreglarla.
 
+- **Suite backend: 10 fallos reproducidos sin Plan 03 (2026-07-28)** — se
+  creó el worktree temporal `/private/tmp/cfdi-plan03-baseline` en el padre
+  `d754218` y se ejecutó `backend/.venv/bin/python -m pytest backend/tests -q`.
+  Resultado idéntico al commit de Plan 03: **341 passed, 7 skipped, 10 failed**.
+  Nueve fallos de `test_pdf_pipeline.py`/`test_table_preview_equivalence.py`
+  terminan en `ModuleNotFoundError: bleach`; el décimo es
+  `test_redis_resilience_guardrail.py`, cuyo allowlist tiene líneas caducas
+  para `pdf.py` y `batch_shard_worker.py`. Amplía, con verificación contra el
+  padre, los dos hallazgos ya documentados inmediatamente abajo. No corregido:
+  ambos están fuera del presupuesto multipart y requieren mantenimiento del
+  entorno/guardrail en una tarea separada.
+
 - **Suite backend incompleta por entorno local (2026-07-28)** — 9 pruebas de
   `test_pdf_pipeline.py` y `test_table_preview_equivalence.py` fallan antes
   de llegar a su aserción porque `backend/.venv` no tiene `bleach`, aunque

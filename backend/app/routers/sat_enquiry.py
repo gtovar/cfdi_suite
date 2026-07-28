@@ -21,6 +21,7 @@ from ..credentials import get as get_cred
 from ..rate_limits import rate_limit
 from ..security import verify_user_identity
 from ..services.error_reporting import report
+from ..middleware import SAT_XLSX_MAX_BYTES
 
 router = APIRouter(prefix="/api/sat", tags=["sat"])
 
@@ -418,7 +419,19 @@ async def single_sat_enquiry(
     return EnquiryResult(uuid=body.uuid, **result)
 
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+_UPLOAD_READ_CHUNK_BYTES = 64 * 1024
+
+
+async def _read_xlsx_upload(file: UploadFile) -> bytes:
+    """Lee el XLSX por chunks y aplica el límite antes de parsearlo."""
+    chunks: list[bytes] = []
+    received = 0
+    while chunk := await file.read(_UPLOAD_READ_CHUNK_BYTES):
+        received += len(chunk)
+        if received > SAT_XLSX_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="El archivo excede el límite de 10 MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.post("/enquiry/batch")
@@ -427,10 +440,7 @@ async def batch_sat_enquiry(
     tenant_id: str = Depends(verify_user_identity),
     _rate=rate_limit(5),
 ) -> StreamingResponse:
-    content = await file.read()
-
-    if len(content) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="El archivo excede el límite de 10 MB")
+    content = await _read_xlsx_upload(file)
 
     try:
         rows, descartadas = _parse_excel_input(content)

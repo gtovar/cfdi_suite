@@ -17,7 +17,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 
 try:
     from backend.app.routers import batch as batch_router
@@ -46,6 +46,23 @@ class _FakeRequest:
 
 @unittest.skipIf(batch_router is None, f"backend no disponible: {_IMPORT_ERROR}")
 class BatchAnalyzeGcsDurabilityTests(unittest.TestCase):
+    def test_archivo_invalido_no_crea_estado_ni_sube_archivos_anteriores(self) -> None:
+        """La validación en primera pasada preserva el comportamiento atómico."""
+        with (
+            patch.object(batch_router, "redis_client") as mock_redis,
+            patch.object(batch_router, "storage") as mock_storage_module,
+        ):
+            files = [
+                UploadFile(filename="valido.xml", file=io.BytesIO(b"<cfdi/>")),
+                UploadFile(filename="invalido.xml", file=io.BytesIO(b"no es xml")),
+            ]
+            with self.assertRaises(HTTPException) as raised:
+                _run(batch_router.batch_analyze(files=files))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        mock_storage_module.Client.assert_not_called()
+        mock_redis.pipeline.assert_not_called()
+
     def test_sube_xml_a_gcs_sin_encolar_antes_de_la_suscripcion(self) -> None:
         mock_bucket = MagicMock()
         mock_storage_client = MagicMock()

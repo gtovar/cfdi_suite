@@ -26,19 +26,28 @@ que un request sin `Content-Length` eluda una comprobación sólo de header.
    límite demasiado uniforme rompe XML PDF de 50 MB.
 9. **Costo de sobreestimar / prueba mínima:** no confiar sólo en Content-Length;
    probar stream sin header y suma de lote.
-10. **Recomendación:** proceder con middleware ASGI y chunks; pendiente.
+10. **Recomendación:** proceder con middleware ASGI y chunks.
 
 ## Implementación
 
-Middleware de bytes por ruta antes del parseo, contadores en chunk y eliminación
-de `asyncio.gather()` que materialice lotes completos.
+Middleware de bytes por ruta antes del parseo: 50 MiB para análisis/PDF
+individual, 100 MiB agregados y 20 MiB por archivo para batch/DIOT, 10 MiB
+para XLSX/SAT y 5 MiB combinados para e.firma. Los lectores cuentan por chunks;
+batch valida el lote completo antes de crear estado o subir a GCS y DIOT consume
+un iterable de una pasada, sin `asyncio.gather()` para materializar el lote.
 
 ## Pruebas
 
-Headers y streams sin header, agregado 100 MB, límites por endpoint, rechazo
-temprano y equivalencia funcional para archivos válidos.
+Headers y streams sin header, agregado 100 MiB, límites por endpoint, rechazo
+temprano, preservación de 50 MiB para XML individual, rechazo XLSX/e.firma y
+equivalencia funcional para archivos válidos.
 
 ## Rollback
 
 Revertir middleware y lectores en el commit dedicado; conservar códigos 413 y
 métricas para diagnosticar falsos positivos.
+
+## Estado
+
+**Implementado; pendiente de revisión explícita de cierre.** La suite focalizada
+ejecutó 38 pruebas con éxito antes de publicar.

@@ -35,6 +35,7 @@ from .routers.sat_enquiry import router as sat_router
 from .routers.pusher_auth import router as pusher_auth_router
 from .services.analyze_cfdi import run_analyze_cfdi
 from .services import redis_safety
+from .middleware import RouteBodySizeLimitMiddleware
 from google.api_core.exceptions import InvalidArgument
 
 # === PARCHE GLOBAL DE SEGURIDAD PARA MULTIPART ===
@@ -144,6 +145,9 @@ except Exception as e:
 # --- FIN CLOUD TRACE ---
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+# Debe permanecer exterior a FastAPI/Starlette: así cuenta el stream ASGI
+# antes de que el parser multipart lo copie a SpooledTemporaryFile.
+app.add_middleware(RouteBodySizeLimitMiddleware)
 _allowed_origins = os.getenv(
     "ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 ).split(",")

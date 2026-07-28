@@ -31,6 +31,7 @@ from ..services.redis_safety import safe_redis_call_sync
 from ..services.internal_auth import verify_cloud_tasks
 from ..services.error_reporting import report
 from ..rate_limits import rate_limit
+from ..middleware import BATCH_FILE_MAX_BYTES, BATCH_TOTAL_MAX_BYTES
 
 router = APIRouter(prefix="/api/cfdi/batch")
 
@@ -136,8 +137,26 @@ def _is_valid_xml_content(raw: bytes) -> bool:
     return raw.lstrip().startswith((b"<?xml", b"<"))
 
 
-async def _read_upload(f: UploadFile) -> tuple[str, bytes]:
-    return (f.filename or "archivo.xml", await f.read())
+_UPLOAD_READ_CHUNK_BYTES = 64 * 1024
+
+
+async def _read_upload_limited(f: UploadFile, *, total_bytes: int) -> tuple[str, bytes, int]:
+    """Lee un archivo sin confiar en Content-Length ni materializar el lote.
+
+    ``total_bytes`` es el acumulado de los archivos previos; se retorna el
+    nuevo acumulado para que todos los endpoints apliquen el mismo presupuesto.
+    """
+    filename = f.filename or "archivo.xml"
+    chunks: list[bytes] = []
+    file_bytes = 0
+    while chunk := await f.read(_UPLOAD_READ_CHUNK_BYTES):
+        file_bytes += len(chunk)
+        if file_bytes > BATCH_FILE_MAX_BYTES:
+            raise HTTPException(413, f"El archivo {filename} excede el límite de 20 MB")
+        if total_bytes + file_bytes > BATCH_TOTAL_MAX_BYTES:
+            raise HTTPException(413, "El lote excede el límite agregado de 100 MB")
+        chunks.append(chunk)
+    return filename, b"".join(chunks), total_bytes + file_bytes
 
 @router.post("/analyze")
 async def batch_analyze(
@@ -149,14 +168,19 @@ async def batch_analyze(
     if len(files) > MAX_FILES:
         raise HTTPException(400, f"Máximo {MAX_FILES} archivos por lote")
 
-    batch_id = str(uuid.uuid4())
-    contents = list(await asyncio.gather(*[_read_upload(f) for f in files]))
-
-    for fname, raw in contents:
-        if len(raw) > ANALYZE_CFDI_XML_MAX_CHARS:
-            raise HTTPException(400, f"El archivo {fname} excede el límite de {ANALYZE_CFDI_XML_MAX_CHARS} caracteres")
+    # Validamos el lote completo antes de crear estado o escribir en GCS. El
+    # primer pase es secuencial y conserva como máximo un archivo en memoria;
+    # después rebobinamos los UploadFile spooled para subir sólo un lote válido.
+    total_bytes = 0
+    for upload in files:
+        fname, raw, total_bytes = await _read_upload_limited(upload, total_bytes=total_bytes)
+        if len(raw.decode("utf-8", errors="replace")) > ANALYZE_CFDI_XML_MAX_CHARS:
+            raise HTTPException(413, f"El archivo {fname} excede el límite de {ANALYZE_CFDI_XML_MAX_CHARS} caracteres")
         if not _is_valid_xml_content(raw):
             raise HTTPException(400, f"El archivo {fname} no parece ser un XML válido")
+        await upload.seek(0)
+
+    batch_id = str(uuid.uuid4())
 
     # Inicializamos el estado del lote en Redis -- best-effort: es solo
     # coordinación (contador de progreso), el contenido real de cada XML ya
@@ -165,7 +189,7 @@ async def batch_analyze(
     safe_redis_call_sync(lambda: (
         redis_client.pipeline()
         .hmset(_batch_hash_key(batch_id), {
-            "total_files": len(contents),
+            "total_files": len(files),
             "completed_count": 0,
             "status": "ready"
         })
@@ -179,7 +203,9 @@ async def batch_analyze(
     # Guardamos primero todos los XML. El navegador inicia los workers sólo
     # después de confirmar la suscripción a Pusher, evitando que eventos
     # rápidos se publiquen antes de que exista un receptor.
-    for fname, raw in contents:
+    total_bytes = 0
+    for upload in files:
+        fname, raw, total_bytes = await _read_upload_limited(upload, total_bytes=total_bytes)
         fname = _safe_filename(fname)
         xml_str = raw.decode("utf-8", errors="replace")
 
@@ -194,7 +220,7 @@ async def batch_analyze(
             bucket.blob(gcs_path).upload_from_string, xml_str, content_type="application/xml"
         )
 
-    return {"batch_id": batch_id, "total_files": len(contents), "status": "ready"}
+    return {"batch_id": batch_id, "total_files": len(files), "status": "ready"}
 
 
 @router.post("/{batch_id}/start")
@@ -434,12 +460,14 @@ async def batch_diot(
     if not 1 <= month <= 12:
         raise HTTPException(400, "El mes debe estar entre 1 y 12")
 
-    xml_list = list(await asyncio.gather(*[f.read() for f in files]))
     try:
         loop = asyncio.get_running_loop()
         diot_bytes = await loop.run_in_executor(
             None,
-            lambda: generate_diot(xml_list, year=year, month=month, rfc_presentante=rfc_presentante or None, razon_social=razon_social or None)
+            lambda: generate_diot(
+                _read_diot_uploads(files), year=year, month=month,
+                rfc_presentante=rfc_presentante or None, razon_social=razon_social or None,
+            )
         )
     except ValueError as e:
         report(e, contexto="diot_entrada")
@@ -451,3 +479,21 @@ async def batch_diot(
     rfc_label = (rfc_presentante or "DIOT").upper().replace(" ", "_")
     filename = f"DIOT_{rfc_label}_{year}{str(month).zfill(2)}.txt"
     return StreamingResponse(iter([diot_bytes]), media_type="text/plain; charset=windows-1252", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _read_diot_uploads(files: list[UploadFile]):
+    """Adaptador síncrono para el worker DIOT; los archivos ya están spooled."""
+    total_bytes = 0
+    for upload in files:
+        filename = upload.filename or "archivo.xml"
+        chunks: list[bytes] = []
+        file_bytes = 0
+        while chunk := upload.file.read(_UPLOAD_READ_CHUNK_BYTES):
+            file_bytes += len(chunk)
+            if file_bytes > BATCH_FILE_MAX_BYTES:
+                raise ValueError(f"El archivo {filename} excede el límite de 20 MB")
+            if total_bytes + file_bytes > BATCH_TOTAL_MAX_BYTES:
+                raise ValueError("El lote excede el límite agregado de 100 MB")
+            chunks.append(chunk)
+        total_bytes += file_bytes
+        yield b"".join(chunks)

@@ -42,5 +42,12 @@ backend/shells/
 # Dumps de repomix (contexto para IA), no versionar
 repomix-output-*.md
 
+# Artefactos locales de asistentes IA, no versionar
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v4/
+.opencode/
+docs/aider/
+
 # Config local de CORS para el bucket de GCS, no versionar
 cors-gcs.json

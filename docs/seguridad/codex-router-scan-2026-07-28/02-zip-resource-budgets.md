@@ -31,8 +31,7 @@ de referencia es 367 MB.
    límite menor a 367 MB rompe producción.
 9. **Costo de sobreestimar / prueba mínima:** POST policy depende de soporte de
    cliente y firma; probar fixture de 367 MB y límites exactos/ratio 1,027×.
-10. **Recomendación:** proceder con presupuesto central y POST V4; no ejecutar
-    en esta sesión.
+10. **Recomendación:** proceder con presupuesto central y POST V4.
 
 ## Implementación
 
@@ -48,3 +47,8 @@ controlada del fixture 367 MB y contrato de campos POST del frontend.
 
 Revertir el commit y restaurar temporalmente PUT; conservar métricas de rechazo
 para ajustar límites sin perder compatibilidad.
+
+## Estado
+
+**Implementado y desplegado** en `9a524d6`. La validación cubre los cuatro
+presupuestos, la política POST V4 y el fixture compatible de 367 MB.
