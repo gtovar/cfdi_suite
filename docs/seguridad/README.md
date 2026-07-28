@@ -20,6 +20,7 @@
 | Configurar CI/CD seguro | [09-ci-cd-hardening.md](09-ci-cd-hardening.md) |
 | Ver hallazgos del red team (adversarial) | [red-team-findings.md](red-team-findings.md) |
 | Ver decisiones del CTO (triage) | [red-team-reconciliation.md](red-team-reconciliation.md) |
+| Ver planes del scan Codex de routers (2026-07-28) | [codex-router-scan-2026-07-28/README.md](codex-router-scan-2026-07-28/README.md) |
 
 ---
 
