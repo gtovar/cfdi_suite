@@ -1,0 +1,20 @@
+# Contexto de `gcloud run deploy --source`: Docker aplica .dockerignore
+# después de subir el source, así que estas exclusiones evitan transferir el
+# entorno local de desarrollo y fixtures pesados a Cloud Build.
+.gcloudignore
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+.env.*
+tests/
+test-fixtures/
+repomix-output-*.md
+.DS_Store
