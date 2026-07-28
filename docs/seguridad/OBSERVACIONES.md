@@ -258,5 +258,10 @@ El documento recomienda la Opción B porque no depende de que el header `Content
 | #3 | **APLICAR CON CAMBIOS** | Agregar `logging.Filter`, wrapper `__repr__`, cambiar regex por `split("?")[0]`. |
 | #4 | **NO APLICAR** | El riesgo ya está cubierto por pip hashes + filesystem inmutable de Cloud Run. |
 | #5 | **APLICAR CON CAMBIOS** | Agregar semáforo de concurrencia, verificar límite de Cloud Run, combinar A+B. |
+| **Extra** | **APLICADO** | `POST /api/cfdi/analyze` migrado de JSON a multipart/form-data. Límite individual subido a 50 MB. `AnalyzeCfdiRequest` eliminado (ya no se usa). |
 
-**Total**: 3 fixes que sí se aplican con ajustes menores, 1 que se aplica tal cual, 1 que se rechaza.
+**Total**: 4 fixes pendientes, 1 rechazado, 1 aplicado extra.
+
+## Nota sobre el límite de tamaño de XML (post-migración a multipart)
+
+Tras la migración a multipart (commit `947ef38`), el límite individual pasó de 20 MB (JSON) a **50 MB** (multipart). El límite se verifica manualmente en `main.py:195` porque ya no se usa Pydantic para validar el request body. Para archivos mayores a 50 MB, usar **Análisis masivo** que sube a GCS vía multipart sin límite artificial.
