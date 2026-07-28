@@ -78,7 +78,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             mock_redis.pipeline = MagicMock(return_value=pipe_cm)
             mock_redis.delete = AsyncMock()
 
-            _run(pdf_router.process_zip_in_background("uploads/some.zip", "batch-2", "default"))
+            _run(pdf_router.process_zip_in_background("uploads/123e4567-e89b-12d3-a456-426614174000.zip", "batch-2", "default"))
 
         mock_redis.set.assert_any_call(
             "pdf:extracting_total:batch-2", 1, ex=pdf_router.BATCH_METADATA_TTL_SECONDS
@@ -136,6 +136,97 @@ class BatchMetadataTtlTests(unittest.TestCase):
         mock_redis.expire.assert_any_call(
             unittest.mock.ANY, pdf_router.BATCH_METADATA_TTL_SECONDS
         )
+
+    def test_start_zip_gcs_only_accepts_request_upload_path_shape(self) -> None:
+        """El endpoint público no puede convertir una ruta arbitraria en una
+        tarea interna capaz de descargar y borrar cualquier objeto del bucket."""
+        valid_path = "uploads/123e4567-e89b-12d3-a456-426614174000.zip"
+
+        with (
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(pdf_router, "enqueue_zip_extraction") as mock_enqueue,
+        ):
+            mock_redis.set = AsyncMock()
+            result = _run(pdf_router.start_pdf_zip_gcs_generation(
+                pdf_router.ProcessGcsZipPayload(gcsPath=valid_path)
+            ))
+
+        self.assertIn("batchId", result)
+        mock_enqueue.assert_called_once()
+        self.assertEqual(mock_enqueue.call_args.kwargs["gcs_path"], valid_path)
+
+        for invalid_path in (
+            "credenciales/default-tenant/emisores.enc",
+            "uploads/../credenciales/default-tenant/emisores.enc",
+            "uploads/123e4567-e89b-12d3-a456-426614174000.xml",
+            "uploads/not-a-uuid.zip",
+            "/uploads/123e4567-e89b-12d3-a456-426614174000.zip",
+        ):
+            with self.subTest(gcs_path=invalid_path), self.assertRaises(pdf_router.HTTPException) as error:
+                _run(pdf_router.start_pdf_zip_gcs_generation(
+                    pdf_router.ProcessGcsZipPayload(gcsPath=invalid_path)
+                ))
+            self.assertEqual(error.exception.status_code, 400)
+
+    def test_internal_extract_zip_revalidates_cloud_task_payload(self) -> None:
+        payload = pdf_router.ExtractZipPayload(
+            gcs_path="credenciales/default-tenant/emisores.enc",
+            batch_id="batch-malicioso",
+            template_id="default",
+        )
+        with (
+            patch.object(pdf_router, "verify_cloud_tasks", return_value=True),
+            patch.object(pdf_router, "process_zip_in_background") as mock_process,
+        ):
+            with self.assertRaises(pdf_router.HTTPException) as error:
+                _run(pdf_router.internal_extract_zip(payload, MagicMock()))
+
+        self.assertEqual(error.exception.status_code, 400)
+        mock_process.assert_not_called()
+
+    def test_process_zip_never_opens_or_deletes_credentials_path(self) -> None:
+        """Guardia de regresión del efecto destructivo: incluso si alguien
+        llama el procesador directo, la ruta de credenciales no llega a GCS."""
+        mock_storage_client = MagicMock()
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+        ):
+            with self.assertRaises(pdf_router.HTTPException) as error:
+                _run(pdf_router.process_zip_in_background(
+                    "credenciales/default-tenant/emisores.enc", "batch-malicioso", "default"
+                ))
+
+        self.assertEqual(error.exception.status_code, 400)
+        mock_storage_client.bucket.assert_not_called()
+        mock_redis.set.assert_not_called()
+
+    def test_invalid_zip_with_owned_path_keeps_cleanup_scoped_to_uploads(self) -> None:
+        """Un ZIP corrupto sigue el manejo de error existente, pero el único
+        objeto elegible para cleanup es el ZIP temporal con UUID validado."""
+        valid_path = "uploads/123e4567-e89b-12d3-a456-426614174003.zip"
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        def write_invalid_zip(path):
+            with open(path, "wb") as file:
+                file.write(b"not a zip")
+
+        mock_blob.download_to_filename.side_effect = write_invalid_zip
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+        ):
+            mock_redis.set = AsyncMock(return_value=True)
+            mock_redis.delete = AsyncMock()
+            ran = _run(pdf_router.process_zip_in_background(valid_path, "batch-invalid-zip", "default"))
+
+        self.assertTrue(ran)
+        mock_bucket.blob.assert_called_with(valid_path)
+        mock_blob.delete.assert_called_once()
 
     def test_internal_generate_pdf_sets_status_ttl(self) -> None:
         from backend.app.routers.pdf import GeneratePdfPayload
@@ -420,7 +511,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             mock_redis.pipeline = MagicMock(return_value=pipe_cm)
             mock_redis.delete = AsyncMock()
 
-            _run(pdf_router.process_zip_in_background("uploads/some.zip", "batch-5", "default"))
+            _run(pdf_router.process_zip_in_background("uploads/123e4567-e89b-12d3-a456-426614174000.zip", "batch-5", "default"))
 
         mock_redis.set.assert_any_call(
             unittest.mock.ANY, b"error", ex=pdf_router.BATCH_METADATA_TTL_SECONDS
@@ -441,7 +532,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
         ):
             mock_redis.set = AsyncMock(return_value=False)  # SET NX no adquirido
 
-            ran = _run(pdf_router.process_zip_in_background("uploads/some.zip", "batch-lock", "default"))
+            ran = _run(pdf_router.process_zip_in_background("uploads/123e4567-e89b-12d3-a456-426614174000.zip", "batch-lock", "default"))
 
         self.assertFalse(ran)
         mock_redis.set.assert_awaited_once_with(
@@ -476,7 +567,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             mock_zip_instance.infolist.return_value = []
             mock_zipfile.return_value.__enter__.return_value = mock_zip_instance
 
-            ran = _run(pdf_router.process_zip_in_background("uploads/some.zip", "batch-lock-down", "default"))
+            ran = _run(pdf_router.process_zip_in_background("uploads/123e4567-e89b-12d3-a456-426614174000.zip", "batch-lock-down", "default"))
 
         # No debe abortar solo porque Redis truene al adquirir el lock -- debe
         # seguir hasta el final (batch vacío, pero SÍ corrió).
@@ -537,7 +628,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             patch.object(pdf_router, "redis_client", mock_redis),
             patch.object(pdf_router, "publish_batch_signal"),
         ):
-            ran = _run(pdf_router.process_zip_in_background("uploads/batch-remote.zip", "batch-remote", "default"))
+            ran = _run(pdf_router.process_zip_in_background("uploads/123e4567-e89b-12d3-a456-426614174001.zip", "batch-remote", "default"))
 
         self.assertTrue(ran)
         mock_blob.download_to_filename.assert_not_called()
@@ -546,7 +637,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             if path.startswith("xml_temp/"):
                 self.assertEqual(path, "xml_temp/_manifest_batch-remote.json")
         mock_trigger.assert_called_once_with(
-            "batch-remote", 30, "default", "uploads/batch-remote.zip"
+            "batch-remote", 30, "default", "uploads/123e4567-e89b-12d3-a456-426614174001.zip"
         )
         mock_blob.delete.assert_not_called()
         pipe_cm.sadd.assert_called_once()
@@ -594,7 +685,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
             patch.object(pdf_router, "redis_client", mock_redis),
             patch.object(pdf_router, "enqueue_pdf_generation"),
         ):
-            ran = _run(pdf_router.process_zip_in_background("uploads/batch-chico.zip", "batch-chico", "default"))
+            ran = _run(pdf_router.process_zip_in_background("uploads/123e4567-e89b-12d3-a456-426614174002.zip", "batch-chico", "default"))
 
         self.assertTrue(ran)
         mock_trigger.assert_not_called()
