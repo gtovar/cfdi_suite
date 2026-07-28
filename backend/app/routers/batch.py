@@ -59,6 +59,13 @@ def _batch_hash_key(batch_id: str) -> str:
 def _batch_results_key(batch_id: str) -> str:
     return f"batch:{batch_id}:results"
 
+
+def _assert_batch_id(batch_id: str) -> str:
+    try:
+        return str(uuid.UUID(batch_id))
+    except ValueError as exc:
+        raise HTTPException(400, "Identificador de lote inválido") from exc
+
 # Configuración dinámica de Redis mediante variables de entorno
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
@@ -160,7 +167,7 @@ async def batch_analyze(
         .hmset(_batch_hash_key(batch_id), {
             "total_files": len(contents),
             "completed_count": 0,
-            "status": "processing"
+            "status": "ready"
         })
         .expire(_batch_hash_key(batch_id), REDIS_TTL)
         .execute()
@@ -169,7 +176,9 @@ async def batch_analyze(
 
     bucket = _analysis_bucket()
 
-    # Encolar cada archivo de manera inmediata en Cloud Tasks
+    # Guardamos primero todos los XML. El navegador inicia los workers sólo
+    # después de confirmar la suscripción a Pusher, evitando que eventos
+    # rápidos se publiquen antes de que exista un receptor.
     for fname, raw in contents:
         fname = _safe_filename(fname)
         xml_str = raw.decode("utf-8", errors="replace")
@@ -185,10 +194,46 @@ async def batch_analyze(
             bucket.blob(gcs_path).upload_from_string, xml_str, content_type="application/xml"
         )
 
-        # Le pasamos a Cloud Tasks la RUTA de GCS, no el XML completo
-        enqueue_cfdi_analysis(batch_id, fname, gcs_path)
+    return {"batch_id": batch_id, "total_files": len(contents), "status": "ready"}
 
-    return {"batch_id": batch_id, "total_files": len(contents), "status": "processing"}
+
+@router.post("/{batch_id}/start")
+async def start_batch_analysis(batch_id: str):
+    """Encola un lote listo después de que el navegador confirmó Pusher.
+
+    El marcador en GCS usa precondición de creación: dos llamadas de inicio
+    (doble clic o reconexión) sólo pueden encolar los archivos una vez.
+    """
+    batch_id = _assert_batch_id(batch_id)
+    bucket = _analysis_bucket()
+    blobs = await asyncio.to_thread(
+        lambda: list(bucket.list_blobs(prefix=f"xml_temp/analysis_{batch_id}/"))
+    )
+    if not blobs:
+        raise HTTPException(404, "El lote de procesamiento no existe o ya caducó")
+
+    start_marker = bucket.blob(f"xml_temp/analysis_start_{batch_id}.json")
+
+    try:
+        await asyncio.to_thread(
+            start_marker.upload_from_string,
+            json.dumps({"batch_id": batch_id}),
+            content_type="application/json",
+            if_generation_match=0,
+        )
+    except Exception as exc:
+        # Un marcador ya creado significa que el lote ya fue iniciado. No
+        # reencolamos: Cloud Tasks ejecutará las tareas originales.
+        if exc.__class__.__name__ in {"PreconditionFailed", "Conflict"}:
+            return {"batch_id": batch_id, "status": "processing", "already_started": True}
+        raise
+
+    for blob in blobs:
+        filename = Path(blob.name).name
+        enqueue_cfdi_analysis(batch_id, filename, blob.name)
+
+    safe_redis_call_sync(lambda: redis_client.hset(_batch_hash_key(batch_id), "status", "processing"))
+    return {"batch_id": batch_id, "status": "processing", "total_files": len(blobs), "already_started": False}
 
 def _build_status_response(total: int, completed: int, results: list[dict]) -> dict:
     status = "done" if completed >= total else "processing"

@@ -1765,6 +1765,15 @@ documento. A partir de ahora, cualquier cosa que se encuentre rota "de paso"
 con evidencia (no solo "creo que ya estaba así"), para poder decidir después
 si vale la pena arreglarla.
 
+- **`frontend/src/components/ConversionMasivaPage.test.tsx`** — `npm run lint`
+  (`tsc --noEmit`) falla con 6 errores `TS2345` en los mocks de los tests
+  (líneas 135, 157, 188, 216, 236 y 264): sus callbacks reciben dos
+  parámetros, pero el tipo actual espera `() => Promise<void>`. Confirmado
+  preexistente el 2026-07-28 en un worktree temporal creado desde `HEAD`
+  (`827f893`): el mismo `npm run lint` falla con los mismos seis errores,
+  sin los cambios de reconciliación de Análisis masivo. No corregido porque
+  está fuera de este diagnóstico.
+
 - ~~**`frontend/src/components/editor/DocumentSettings.jsx:295`** — error de
   TypeScript (`TS1005: '...' expected`) que hace fallar `npm run lint`~~
   **RESUELTO 2026-07-13** (piloto react-doctor): era un comentario JSX en

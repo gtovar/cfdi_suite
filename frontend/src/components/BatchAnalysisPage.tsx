@@ -53,6 +53,11 @@ import type { BatchProgressStatus } from './FloatingBatchWidget';
 type Phase = 'idle' | 'processing' | 'done';
 type FilterStatus = 'all' | 'ok' | 'con_errores' | 'error';
 
+interface BatchStatusPayload {
+  status: 'ready' | 'processing' | 'done';
+  results: BatchFileResult[];
+}
+
 interface BatchAnalysisPageProps {
   onProgressUpdate?: (status: BatchProgressStatus | null) => void;
   onSelectFile?: (file: File) => void;
@@ -234,6 +239,23 @@ export function splitByQuincena(
     },
     { first: [], second: [] },
   );
+}
+
+export function mergeBatchStatus(queue: QueueEntry[], results: BatchFileResult[]): QueueEntry[] {
+  const resultByFilename = new Map(results.map((result) => [result.filename, result]));
+  const knownFilenames = new Set(queue.map((entry) => entry.file.name));
+  const merged = queue.map((entry) => ({
+    ...entry,
+    result: resultByFilename.get(entry.file.name) ?? entry.result,
+  }));
+
+  for (const result of results) {
+    if (!knownFilenames.has(result.filename)) {
+      merged.push({ file: new File([], result.filename), result });
+    }
+  }
+
+  return merged;
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -753,8 +775,9 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   }, []);
 
 
-  // Reemplazamos la función de Polling por una de Suscripción en Tiempo Real con Auto-Hidratación
-  async function startPollingStatus(batchId: string) {
+  // Pusher se confirma antes de iniciar un lote nuevo. /status sólo se usa al
+  // restaurar la página o cuando Pusher recupera una conexión, no como polling.
+  async function startPollingStatus(batchId: string, startAfterSubscription = false) {
     // Limpieza de intervalos o conexiones previas si existieran
     if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     if (channelRef.current) {
@@ -762,39 +785,6 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       pusherRef.current?.unsubscribe(`private-batch_${batchId}`);
     }
 
-    try {
-      // === PASO A: HIDRATACIÓN (Una sola petición HTTP rápida) ===
-      // Le preguntamos al servidor qué lleva procesado hasta este milisegundo exacto.
-      // Esto resuelve el problema de si el usuario recarga la página (F5).
-      const response = await apiFetch(`/api/cfdi/batch/status/${batchId}`);
-      if (response.ok) {
-        const data = await response.json();
-
-        setQueue((prevQueue) => {
-          const baselineQueue = prevQueue.length > 0 ? prevQueue : data.results.map((res: any) => ({
-            file: new File([], res.filename),
-            result: null
-          }));
-
-          return baselineQueue.map((entry) => {
-            const serverResult = data.results.find((r: any) => r.filename === entry.file.name);
-            return serverResult ? { ...entry, result: serverResult } : entry;
-          });
-        });
-
-        if (data.status === 'done') {
-          localStorage.removeItem('cfdi_active_batch_id');
-          setPhase('done');
-          setProcessEndTime(Date.now());
-          setShowModal(true);
-          return; // Si el lote ya había terminado en segundo plano, terminamos aquí.
-        }
-      }
-    } catch (err) {
-      console.warn("[Auto-Hidratación] No se pudo recuperar el estado inicial, confiando en WebSockets...", err);
-    }
-
-    // === PASO B: ESCUCHAR (Conexión persistente por fuera de Vercel) ===
     // Inicializamos Pusher usando tu Llave Pública de producción/desarrollo
     if (!pusherRef.current) {
       pusherRef.current = new Pusher(import.meta.env.VITE_PUSHER_KEY || 'TU_PUSHER_KEY_AQUÍ', {
@@ -810,6 +800,73 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
     const channel = pusherRef.current.subscribe(`private-batch_${batchId}`);
     channelRef.current = channel;
+
+    let finished = false;
+    let onConnectionStateChange: ((states: { current: string }) => void) | null = null;
+    const finishBatch = () => {
+      if (finished) return;
+      finished = true;
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+      channel.unbind_all();
+      if (onConnectionStateChange) {
+        pusherRef.current?.connection.unbind('state_change', onConnectionStateChange);
+      }
+      pusherRef.current?.unsubscribe(`private-batch_${batchId}`);
+      localStorage.removeItem('cfdi_active_batch_id');
+      activeBatchIdRef.current = null;
+      setPhase('done');
+      setProcessEndTime(Date.now());
+      setShowModal(true);
+    };
+
+    let reconciling = false;
+    let startRequested = false;
+    let subscriptionReady = false;
+    let shouldStart = startAfterSubscription;
+    const reconcileStatus = async () => {
+      if (reconciling) return;
+      reconciling = true;
+      try {
+        const response = await apiFetch(`/api/cfdi/batch/status/${batchId}`);
+        if (!response.ok) return;
+        const data = await response.json() as BatchStatusPayload;
+        setQueue((prevQueue) => mergeBatchStatus(prevQueue, data.results));
+        if (data.status === 'done') finishBatch();
+        if (data.status === 'ready') {
+          shouldStart = true;
+          if (subscriptionReady) void requestStart();
+        }
+      } catch (err) {
+        console.warn('[batch] No se pudo reconciliar el estado del lote', err);
+      } finally {
+        reconciling = false;
+      }
+    };
+
+    const requestStart = async () => {
+      if (!shouldStart || startRequested || finished) return;
+      startRequested = true;
+      try {
+        const response = await apiFetch(`/api/cfdi/batch/${batchId}/start`, { method: 'POST' });
+        if (!response.ok) throw new Error(`No se pudo iniciar el lote (${response.status})`);
+      } catch (err) {
+        console.error('[batch] No se pudo iniciar el lote tras suscribirse a Pusher', err);
+        setPhase('idle');
+        localStorage.removeItem('cfdi_active_batch_id');
+      }
+    };
+
+    const onSubscriptionSucceeded = () => {
+      subscriptionReady = true;
+      void requestStart();
+      void reconcileStatus();
+    };
+    channel.bind('pusher:subscription_succeeded', onSubscriptionSucceeded);
+
+    onConnectionStateChange = (states: { current: string }) => {
+      if (states.current === 'connected') void reconcileStatus();
+    };
+    pusherRef.current.connection.bind('state_change', onConnectionStateChange);
 
     // Escuchamos el evento exacto que dispara nuestro webhook de Cloud Tasks
     channel.bind('file_processed', (parsedResult: any) => {
@@ -832,20 +889,14 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         // Validación de cierre: Evaluamos si con esta factura entrante completamos el lote entero
         const completedCount = nextQueue.filter((e) => e.result !== null).length;
         if (completedCount >= nextQueue.length && nextQueue.length > 0) {
-          // Desconectamos el WebSocket limpiamente
-          channel.unbind_all();
-          pusherRef.current?.unsubscribe(`private-batch_${batchId}`);
-          localStorage.removeItem('cfdi_active_batch_id');
-
-          // Despachamos el estado final en la interfaz
-          setPhase('done');
-          setProcessEndTime(Date.now());
-          setShowModal(true);
+          finishBatch();
         }
 
         return nextQueue;
       });
     });
+
+    if (!startAfterSubscription) await reconcileStatus();
   }
 
   // Tu función modificada de procesamiento masivo limpio
@@ -875,9 +926,10 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
     // Guardamos el ID del lote en el navegador para garantizar resiliencia ante cierres o fallos
     localStorage.setItem('cfdi_active_batch_id', data.batch_id);
+    activeBatchIdRef.current = data.batch_id;
 
-    // Comenzamos a escuchar el State Store de Redis
-    startPollingStatus(data.batch_id);
+    // Pusher confirma la suscripción antes de encolar los workers.
+    startPollingStatus(data.batch_id, true);
     } catch (err) {
       console.error("[batch] Error iniciando flujo asíncrono:", err);
       setPhase('idle');
@@ -1162,7 +1214,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       .then((data) => {
         // Guardamos el ID del nuevo lote de reintento y empezamos el polling
         localStorage.setItem('cfdi_active_batch_id', data.batch_id);
-        startPollingStatus(data.batch_id);
+        startPollingStatus(data.batch_id, true);
       })
       .catch((err) => {
         console.error("[batch] Error en reintento asíncrono:", err);

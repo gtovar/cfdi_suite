@@ -46,7 +46,7 @@ class _FakeRequest:
 
 @unittest.skipIf(batch_router is None, f"backend no disponible: {_IMPORT_ERROR}")
 class BatchAnalyzeGcsDurabilityTests(unittest.TestCase):
-    def test_sube_xml_a_gcs_y_encola_la_ruta_no_el_contenido(self) -> None:
+    def test_sube_xml_a_gcs_sin_encolar_antes_de_la_suscripcion(self) -> None:
         mock_bucket = MagicMock()
         mock_storage_client = MagicMock()
         mock_storage_client.bucket.return_value = mock_bucket
@@ -62,14 +62,15 @@ class BatchAnalyzeGcsDurabilityTests(unittest.TestCase):
 
         batch_id = result["batch_id"]
         mock_bucket.blob.assert_any_call(f"xml_temp/analysis_{batch_id}/factura.xml")
-        mock_enqueue.assert_called_once_with(batch_id, "factura.xml", f"xml_temp/analysis_{batch_id}/factura.xml")
+        mock_enqueue.assert_not_called()
+        self.assertEqual(result["status"], "ready")
         # El contenido del XML nunca se le pasa a Redis
         for call in mock_redis.set.call_args_list if mock_redis.set.called else []:
             self.assertNotIn("<cfdi/>", str(call))
 
     def test_batch_se_crea_igual_si_redis_falla_al_inicializar(self) -> None:
         """Si Redis truena al crear el hash de metadata (hmset), el batch
-        igual se crea y el archivo igual se sube a GCS y se encola -- antes
+        igual se crea y el archivo igual se sube a GCS y queda listo para iniciar -- antes
         de este fix, Redis era el único lugar donde vivía el XML, así que un
         fallo aquí habría sido catastrófico; ahora es solo coordinación."""
         mock_bucket = MagicMock()
@@ -87,9 +88,56 @@ class BatchAnalyzeGcsDurabilityTests(unittest.TestCase):
             files = [UploadFile(filename="factura.xml", file=io.BytesIO(b"<cfdi/>"))]
             result = _run(batch_router.batch_analyze(files=files))
 
-        self.assertEqual(result["status"], "processing")
-        mock_enqueue.assert_called_once()
+        self.assertEqual(result["status"], "ready")
+        mock_enqueue.assert_not_called()
         mock_bucket.blob.return_value.upload_from_string.assert_called_once()
+
+
+@unittest.skipIf(batch_router is None, f"backend no disponible: {_IMPORT_ERROR}")
+class StartBatchAnalysisTests(unittest.TestCase):
+    def test_encola_xmls_despues_de_confirmar_suscripcion(self) -> None:
+        batch_id = "2e4af825-2316-4c20-95d7-2641aa5a6771"
+        xml_blob = MagicMock()
+        xml_blob.name = f"xml_temp/analysis_{batch_id}/factura.xml"
+        mock_bucket = MagicMock()
+        mock_bucket.list_blobs.return_value = [xml_blob]
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(batch_router, "storage") as mock_storage_module,
+            patch.object(batch_router, "enqueue_cfdi_analysis") as mock_enqueue,
+        ):
+            mock_storage_module.Client.return_value = mock_storage_client
+            outcome = _run(batch_router.start_batch_analysis(batch_id))
+
+        self.assertEqual(outcome["status"], "processing")
+        self.assertFalse(outcome["already_started"])
+        mock_enqueue.assert_called_once_with(batch_id, "factura.xml", xml_blob.name)
+
+    def test_inicio_repetido_no_reencola_archivos(self) -> None:
+        batch_id = "2e4af825-2316-4c20-95d7-2641aa5a6771"
+
+        class PreconditionFailed(Exception):
+            pass
+
+        mock_bucket = MagicMock()
+        xml_blob = MagicMock()
+        xml_blob.name = f"xml_temp/analysis_{batch_id}/factura.xml"
+        mock_bucket.list_blobs.return_value = [xml_blob]
+        mock_bucket.blob.return_value.upload_from_string.side_effect = PreconditionFailed()
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(batch_router, "storage") as mock_storage_module,
+            patch.object(batch_router, "enqueue_cfdi_analysis") as mock_enqueue,
+        ):
+            mock_storage_module.Client.return_value = mock_storage_client
+            outcome = _run(batch_router.start_batch_analysis(batch_id))
+
+        self.assertTrue(outcome["already_started"])
+        mock_enqueue.assert_not_called()
 
 
 @unittest.skipIf(batch_router is None, f"backend no disponible: {_IMPORT_ERROR}")

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from 'vitest';
-import { computeMonthBreakdown, splitByQuincena } from './BatchAnalysisPage';
+import { computeMonthBreakdown, mergeBatchStatus, splitByQuincena } from './BatchAnalysisPage';
 
 // ── computeMonthBreakdown ──────────────────────────────────────────────────────
 
@@ -135,5 +135,39 @@ describe('splitByQuincena', () => {
     const { first, second } = splitByQuincena(files, () => NaN);
     expect(first).toHaveLength(0);
     expect(second).toHaveLength(1);
+  });
+});
+
+describe('mergeBatchStatus', () => {
+  const result = (filename: string) => ({
+    filename,
+    status: 'con_errores' as const,
+    profile: 'ingreso' as const,
+    rfc_emisor: '',
+    rfc_receptor: '',
+    nombre_emisor: '',
+    total: '116.00',
+    fecha: '2026-04-17',
+    findings_count: 1,
+    error: null,
+  });
+
+  it('reconciles results that arrived before the Pusher subscription', () => {
+    const queue = [
+      { file: makeFile('one.xml'), result: null },
+      { file: makeFile('two.xml'), result: null },
+    ];
+
+    const merged = mergeBatchStatus(queue, [result('one.xml'), result('two.xml')]);
+
+    expect(merged.map((entry) => entry.result?.filename)).toEqual(['one.xml', 'two.xml']);
+  });
+
+  it('adds server results absent from a restored in-memory queue', () => {
+    const merged = mergeBatchStatus([], [result('completed-before-refresh.xml')]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.file.name).toBe('completed-before-refresh.xml');
+    expect(merged[0]?.result?.status).toBe('con_errores');
   });
 });
