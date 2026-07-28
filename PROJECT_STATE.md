@@ -4,6 +4,23 @@
 ## Checkpoint activo
 `seguridad/fase-2` — 54 commits sobre `main`, **nada desplegado**. B-lite aplicado (5 commits).
 
+## Cierre más reciente — Plan 01, propiedad de rutas GCS (2026-07-28)
+
+**CERRADO Y VALIDADO EN PRODUCCIÓN.** `start-zip-gcs`,
+`internal/extract-zip`, el procesador y el cleanup aceptan exclusivamente
+`uploads/{uuid-canónico}.zip`. Una ruta de credenciales, FIEL, PDF, XML o
+traversal se rechaza antes de Redis/GCS y nunca puede alcanzar `blob.delete()`.
+
+Evidencia: 18 pruebas focalizadas, suite backend **338 passed**, deploy Cloud
+Run exitoso (workflow `30343726063`) y smoke autenticado en vivo: health 200,
+ruta prohibida 400, URL de subida canónica, ZIP sintético subido/iniciado 200 y
+sin objeto nuevo residual en `uploads/`. El análisis posterior de
+`decision-expander` aprobó el cierre. Detalle completo:
+`docs/seguridad/codex-router-scan-2026-07-28/09-plan-01-validation-report.md`.
+
+**Siguiente plan:** 05 — token por query y rate limit. Los planes 02–07 siguen
+pendientes; no se implementaron durante el Plan 01.
+
 ### B-lite — Fase 3 de seguridad, identidad real en el backend (2026-07-27)
 
 5 commits aplicados. Cierra **14 hallazgos abiertos** incluidos los CRITICAL
