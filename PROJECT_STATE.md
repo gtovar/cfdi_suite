@@ -29,15 +29,16 @@ sin objeto nuevo residual en `uploads/`. El análisis posterior de
 - **06 `template_id`:** validador compartido en bordes PDF, carga y Cloud Tasks;
   el fallback de IDs válidos inexistentes se conserva.
 - **07 Auth fail-closed:** deploy fija `REQUIRE_API_AUTH=true` y el lifespan
-  rechaza producción sin `API_BEARER_TOKEN`; no se hizo deploy real.
+  rechaza producción sin `API_BEARER_TOKEN`; validado en Cloud Run con revisión
+  `cfdi-suite-api-00159-vqn` al 100% de tráfico, health 200 y ruta protegida
+  sin token 401.
 
 Evidencia: suite de cierre focalizada **93 passed**, con una advertencia conocida
 de deprecación Starlette/httpx. Detalle en
 `docs/seguridad/codex-router-scan-2026-07-28/`.
 
-**Pendiente operativo:** en el próximo deploy de Cloud Run verificar que la
-revisión recibe `API_BEARER_TOKEN` de Secret Manager y queda Ready antes de
-mover tráfico.
+El workflow de deploy promueve explícitamente la última revisión lista después
+de crearla, evitando retener tráfico en una revisión anterior.
 
 ### B-lite — Fase 3 de seguridad, identidad real en el backend (2026-07-27)
 

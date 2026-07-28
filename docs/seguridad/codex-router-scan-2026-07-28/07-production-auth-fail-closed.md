@@ -42,8 +42,13 @@ Evidencia: `backend/.venv/bin/python -m pytest
 backend/tests/test_lifespan_api_auth.py -q` pasó **3 pruebas**: producción sin
 secreto falla, producción con secreto arranca y local sin bandera arranca.
 
-Pendiente operativo, fuera de este cambio: en el siguiente deploy confirmar
-que la revisión nueva recibe el secreto y queda Ready antes de mover tráfico.
+**Validado en producción:** el deploy `222f98e` dejó
+`cfdi-suite-api-00159-vqn` Ready y con 100% del tráfico. `/api/health` devolvió
+200 y una ruta protegida sin token devolvió 401, sin crear datos de prueba.
+
+El workflow promueve ahora explícitamente la última revisión lista después del
+deploy; antes retenía el tráfico en la revisión anterior aunque creara una
+nueva correctamente.
 
 ## Implementación
 
