@@ -86,6 +86,15 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
 
+# No es configurable ni procede de una petición: es el endpoint documentado de
+# GCP para recuperar únicamente el email de la service account de esta instancia.
+_METADATA_SERVICE_ACCOUNT_EMAIL_URL = (
+    "http://metadata.google.internal/computeMetadata/v1/instance/"
+    "service-accounts/default/email"
+)
+_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
+_METADATA_TIMEOUT_SECONDS = 2
+
 # TTL de las claves de metadata de un batch en Redis (batch_ids, extracting_total,
 # pdf:status:*). Debe ser >= al lifecycle real de GCS sobre pdfs/uploads/xml_temp
 # (1 día, ver infra/gcs-lifecycle.json) para que get_batch_snapshot pueda seguir
@@ -694,6 +703,24 @@ async def download_pdf(job_id: str):
         headers={"Content-Disposition": f'attachment; filename="cfdi_{job_id}.pdf"'}
     )
 
+def _get_metadata_service_account_email() -> str | None:
+    """Obtiene el email desde el endpoint fijo de metadata de GCP.
+
+    No acepta URL, host ni headers del llamador; mantenerlo así evita que este
+    fallback se convierta accidentalmente en una superficie SSRF.
+    """
+    try:
+        request = urllib.request.Request(
+            _METADATA_SERVICE_ACCOUNT_EMAIL_URL, headers=_METADATA_HEADERS,
+        )
+        # URL sin parámetros, constante del metadata server de GCP.
+        with urllib.request.urlopen(request, timeout=_METADATA_TIMEOUT_SECONDS) as response:  # nosec B310
+            return response.read().decode("utf-8").strip() or None
+    except Exception as error:
+        print(f"Advertencia: No se pudo obtener el email del metadata server: {error}")
+        return None
+
+
 def _get_signing_credentials():
     """
     Credenciales base + email de service account, usados para firmar URLs
@@ -706,13 +733,7 @@ def _get_signing_credentials():
 
     service_account_email = getattr(credentials, 'service_account_email', None)
     if not service_account_email:
-        try:
-            meta_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
-            req = urllib.request.Request(meta_url, headers={"Metadata-Flavor": "Google"})
-            with urllib.request.urlopen(req, timeout=2) as response:
-                service_account_email = response.read().decode('utf-8').strip()
-        except Exception as e:
-            print(f"Advertencia: No se pudo obtener el email del metadata server: {e}")
+        service_account_email = _get_metadata_service_account_email()
 
     return credentials, service_account_email
 

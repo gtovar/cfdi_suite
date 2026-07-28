@@ -6,6 +6,110 @@
 
 ---
 
+## Plan 02 — Cierre de excepciones Bandit de catálogos y metadata (2026-07-28)
+
+### Contexto comprobado
+
+- **Hecho:** el scan de Bandit bloquea por `B310` en
+  `app/routers/pdf.py` y por `B608` + `B301` en
+  `app/services/catalogs.py`.
+- **Hecho:** la URL de metadata no procede de una petición ni de una variable:
+  es el endpoint fijo de GCP para el email de la cuenta de servicio y lleva el
+  header `Metadata-Flavor: Google`.
+- **Hecho:** los únicos catálogos solicitados por el renderer son
+  `c_ClaveUnidad`, `c_RegimenFiscal`, `c_UsoCFDI`, `c_Moneda`,
+  `c_FormaPago` y `c_MetodoPago`.
+- **Hecho:** `satcfdi==4.9.16` está fijado en `backend/requirements.txt`; el
+  wheel instalado declara `catalogs.db` en su `RECORD` con SHA-256 y la DB
+  instalada mide 45,367,296 bytes. Su SHA-256 en el entorno de referencia es
+  `9f257048a3fdd9b9306728c518073b34297c50a368eb4ffa7d35d158b749728b`.
+
+### Decision-expander — cuatro decisiones
+
+#### 1. URL del metadata server
+
+- **Qué existe / intención:** se usa únicamente como fallback cuando ADC no
+  expone `service_account_email`, para firmar URLs GCS en Cloud Run.
+- **Supuesto débil descartado:** que sea una URL controlable por usuario; no
+  lo es. Bandit sólo identifica la llamada HTTP, no esa procedencia fija.
+- **Variables y límites:** se requiere HTTP (así opera el metadata server),
+  timeout corto y el header obligatorio; eliminar el fallback rompería los
+  entornos ADC donde no se publica el email.
+- **Alternativas:** omitir el fallback; usar otro cliente de IAM; o encapsular
+  el endpoint fijo. Las dos primeras reducen compatibilidad sin mejorar el
+  control de entrada.
+- **Riesgo y prueba mínima:** una futura edición podría convertirlo en URL
+  variable. Extraer constantes privadas, una función dedicada y probar URL,
+  header, timeout, éxito y fallo.
+- **Recomendación (aprobada):** encapsular en un helper sin parámetros,
+  etiquetar sólo esa línea `# nosec B310` con la razón y documentarla.
+
+#### 2. Allowlist de tablas SQL
+
+- **Qué existe / intención:** el nombre de tabla se interpolaba, aunque hoy
+  llegaba de literales internos. Las claves sí usan parámetros SQLite.
+- **Variable omitida:** una llamada futura a `describe()` podría pasar un
+  nombre no esperado y volver peligrosa la interpolación.
+- **Alternativas:** construir SQL dinámico como ahora; una tabla por función;
+  o allowlist central. Una tabla por función duplica código; la allowlist
+  conserva extensibilidad explícita.
+- **Riesgo y prueba mínima:** negar una tabla legítima al agregar un catálogo.
+  La prueba debe aceptar los seis nombres usados y rechazar cualquier otro
+  antes de ejecutar SQL.
+- **Recomendación (aprobada):** `_ALLOWED_TABLES` inmutable, validada por una
+  sola función antes de toda consulta interpolada; `B608` queda suprimido sólo
+  en las dos consultas que ya pasan por esa barrera.
+
+#### 3. `pickle` en la DB de catálogos
+
+- **Qué existe / intención:** el formato del paquete `satcfdi` es pickle, no
+  JSON; no hay bytes de usuario ni escritura de DB en producción.
+- **Riesgo real:** una sustitución de la DB o de la dependencia comprometida
+  antes de arrancar sí podría ejecutar un pickle malicioso. El `try/except`
+  actual además ocultaría un error de integridad.
+- **Alternativas:** reimplementar/migrar toda la DB a JSON; confiar sólo en
+  pip; o autenticar el artefacto antes de deserializar. Migrar requiere fork y
+  mantenimiento de los catálogos SAT; pip por sí solo no protege una DB
+  reemplazada después de instalarse.
+- **Límite:** el hash debe rotar deliberadamente junto con cada actualización
+  de `satcfdi`; no se debe aceptar un hash desde entorno, red o input.
+- **Prueba mínima:** hash esperado permite la DB; mismatch lanza un error
+  específico antes de abrir/deserializar; tal error no se convierte en una
+  descripción vacía.
+- **Recomendación (aprobada):** verificar SHA-256 y tamaño de la DB desde su
+  ruta de paquete, con valores constantes versionados. Mantener `pickle` sólo
+  detrás de ese control y marcar cada uso `# nosec B301` con referencia.
+
+#### 4. Configuración Bandit
+
+- **Qué existe / intención:** `bandit -r app/ -ll` es bloqueante en CI. Un
+  `skip` global ocultaría regresiones futuras de B301/B608/B310.
+- **Alternativas:** desactivar reglas globalmente; ignorar el job; excepciones
+  inline revisables. Sólo la última conserva detección para código nuevo.
+- **Riesgo y prueba mínima:** que una excepción demasiado amplia tape otra
+  línea. Debe ejecutarse Bandit sin skips globales y resultar limpio; el texto
+  de cada `nosec` debe decir el invariante que lo hace seguro.
+- **Recomendación (aprobada):** no añadir `skips` en workflow ni `.bandit`;
+  usar excepciones de regla concretas, documentación y pruebas de los
+  invariantes anteriores.
+
+### Plan ejecutable aprobado por decision-expander
+
+1. Encapsular el acceso al metadata server y probar su contrato fijo.
+2. Añadir allowlist de los seis catálogos y usarla en todas las consultas.
+3. Añadir verificación de tamaño y SHA-256 de `catalogs.db` antes de devolver
+   la conexión; propagar el fallo de integridad.
+4. Documentar las excepciones exactas de Bandit, aplicar `nosec` acotados y
+   añadir pruebas unitarias de metadata, allowlist e integridad.
+5. Ejecutar pruebas focalizadas, la suite relevante y Bandit sin exclusiones;
+   si todo pasa, subir el cambio y validar el workflow de GitHub.
+
+**Criterio de cierre:** no hay skip global, el artefacto no confiable no llega
+a `pickle.loads`, ninguna tabla fuera de allowlist llega a SQL, y Bandit queda
+verde con sus excepciones justificadas.
+
+---
+
 ## Arquitectura de implementación
 
 ```

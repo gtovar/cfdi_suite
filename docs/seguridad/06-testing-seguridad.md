@@ -33,20 +33,28 @@ bandit -r backend/ --skip B101,B601  # o: # nosec B101 en el código
 | Bandit ID | Descripción | Probabilidad en cfdi-suite |
 |-----------|-------------|---------------------------|
 | B108 | `hardcoded_tmp_directory` | Baja — se usa `tempfile` |
-| B301 | `pickle` usage | MEDIA — `catalogs.py:31,54` usa `pickle.loads` sobre DB local (bajo riesgo, ver `red-team-findings.md` V7) |
+| B301 | `pickle` usage | MEDIA — `catalogs.py` deserializa sólo la DB de `satcfdi==4.9.16` tras validar tamaño y SHA-256 fijos (ver `plan-fixes.md` Plan 02) |
 | B303 | `hashlib.md5` | Baja |
 | B307 | `eval` usage | Baja — no detectado |
 | B322 | `input()` | Nula |
 | B501 | `ssl_cert_reqs` check | ALTA — `pdf.py:74` tiene `ssl_cert_reqs=None` |
 | B506 | `yaml.load` | Baja |
 | B602 | `subprocess_shell=True` | MEDIA — hay llamadas a subprocess en el wrapper Python |
-| B608 | `SQL injection` | Nula — no hay SQL |
+| B608 | `SQL injection` | Controlada — los dos SQL dinámicos de `catalogs.py` aceptan sólo `_ALLOWED_TABLES` inmutable |
 
 **Falsos positivos comunes y cómo suprimirlos:**
 
 ```python
-# pickle.loads en DB local de solo lectura — suprimido
-val = pickle.loads(v)  # nosec B301
+# pickle.loads únicamente después de validar hash/tamaño de DB de satcfdi.
+# `_verify_catalog_db` autentica el origen antes de deserializar.
+return pickle.loads(payload)  # nosec B301
+
+# Identificador SQL validado contra allowlist inmutable.
+# `table` pasó `_validate_catalog_table`.
+cursor.execute(f"SELECT value FROM C756_{table}")  # nosec B608
+
+# Endpoint fijo de GCP, sin input de usuario.
+urllib.request.urlopen(request, timeout=2)  # nosec B310
 
 # subprocess con lista de args (sin shell=True) — seguro pero bandit lo marca
 subprocess.run(["python", wrapper, arg])  # nosec B603

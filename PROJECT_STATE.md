@@ -1782,6 +1782,25 @@ documento. A partir de ahora, cualquier cosa que se encuentre rota "de paso"
 con evidencia (no solo "creo que ya estaba así"), para poder decidir después
 si vale la pena arreglarla.
 
+- **Suite backend incompleta por entorno local (2026-07-28)** — 9 pruebas de
+  `test_pdf_pipeline.py` y `test_table_preview_equivalence.py` fallan antes
+  de llegar a su aserción porque `backend/.venv` no tiene `bleach`, aunque
+  `backend/requirements.txt:31` lo fija como `bleach==6.4.0`. Evidencia
+  reproducible: `backend/.venv/bin/python -c 'import bleach'` devuelve
+  `ModuleNotFoundError`; `git show HEAD:backend/app/services/shell_service.py`
+  ya importaba `bleach`, por lo que este cambio no lo introdujo. No corregido:
+  requiere reparar/recrear el entorno de desarrollo, fuera de este fix.
+
+- **`test_redis_resilience_guardrail.py` tiene números de línea caducos
+  (2026-07-28)** — el ALLOWLIST de `HEAD` espera
+  `pdf.py:1081` y `batch_shard_worker.py:183`, mientras que el mismo código
+  base ya contiene las llamadas en las líneas 1106 y 186, respectivamente
+  (`git show HEAD:... | nl -ba`). La suite completa falla por esta deriva de
+  líneas, no por una llamada Redis nueva; el diff de este fix no toca el
+  worker ni esas llamadas. No corregido: actualizar ese guardrail es una
+  decisión de mantenimiento Redis separada y no se debe mezclar con el
+  cierre de Bandit.
+
 - **Security Scan / Bandit (workflow `30348765265`)** — falló al encontrar
   seis hallazgos MEDIUM ya presentes antes de Plan 02: B310 en `pdf.py`
   (`urllib.request.urlopen` para el metadata server) y B608/B301 en
