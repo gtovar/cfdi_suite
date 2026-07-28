@@ -109,68 +109,68 @@
 | BATCH6-CANDIDATE-31 | GCS signed URL access_token in query string combined with CORS wildcard … | LOW | sin panelear | batch-6 | backend/app/routers/pdf.py:668 | — |
 | BATCH6-CANDIDATE-32 | Production Cloud Run URL hardcoded in multiple public versioned files — … | LOW | sin panelear | batch-6 | frontend/vercel.json:5 | — |
 | TEMPLATE-PATH-TRAVERSAL-01 | Path traversal via template_id sin validar en 7 endpoints | MEDIUM | rechazado por panel | batch-4 | backend/app/routers/templates.py:160,304,317,335,341,357,421,428 | — |
-| #1 | XXE via lxml en produccion | CRITICAL | OPEN | audit | canvas_service.py:835,869,983 | Sí |
-| #10 | Excel formula injection | MEDIUM | OPEN | audit | - | Sí |
-| #11 | SSTI via template upload | MEDIUM | OPEN | audit | - | Sí |
+| #1 | XXE via lxml en produccion | CRITICAL | CLOSED | audit | canvas_service.py:835,869,983 | Sí |
+| #10 | Excel formula injection | MEDIUM | CLOSED | audit | - | Sí |
+| #11 | SSTI via template upload | MEDIUM | CLOSED | audit | - | Sí |
 | #12 | Pusher public channels — no auth | MEDIUM |  | audit | - | Sí |
-| #13 | Signed URL `access_token` en logs | MEDIUM | OPEN | audit | - | Sí |
-| #14 | `pickle.loads` en codigo | MEDIUM | OPEN | audit | - | Sí |
-| #15 | Race condition en batch TTL | MEDIUM | OPEN | audit | - | Sí |
-| #16 | Dependency confusion risk | MEDIUM | OPEN | audit | - | Sí |
-| #17 | SRI missing on third-party scripts | MEDIUM | OPEN | audit | - | Sí |
+| #13 | Signed URL `access_token` en logs | MEDIUM | CLOSED | audit | - | Sí |
+| #14 | `pickle.loads` en codigo | MEDIUM | CLOSED | audit | - | Sí |
+| #15 | Race condition en batch TTL | MEDIUM | CLOSED | audit | - | Sí |
+| #16 | Dependency confusion risk | MEDIUM | CLOSED | audit | - | Sí |
+| #17 | SRI missing on third-party scripts | MEDIUM | CLOSED | audit | - | Sí |
 | #18 | `_job_results` loggea solo 5 entries | MEDIUM |  | audit | - | Sí |
-| #19 | CORS `allow_methods=["*"]` | LOW | TRIVIAL | audit | - | Sí |
-| #2 | Cloud Tasks sin OIDC — endpoints internos spoofables | CRITICAL | OPEN | audit | task_dispatcher.py:30-36, pdf.py:107-108, batch.py:213-231,301 | Sí |
-| #20 | `console.log` de variables Vite en prod | LOW | TRIVIAL | audit | - | Sí |
-| #21 | `SSL_CERT_REQS` inconsistente entre batch y API | LOW | TRIVIAL | audit | batch.py:49 tiene ssl_cert_reqs="required" pero pdf.py:74 y batch_shard_worker.py:59 tienen None. | Sí |
-| #22 | `PUSHER_KEY` y `VERCEL_URL` en GitHub Secrets | LOW | TRIVIAL | audit | - | Sí |
-| #23 | Timeout Cloud Run documentado a 1800s | LOW | TRIVIAL | audit | - | Sí |
-| #24 | Vercel sin headers de seguridad | HIGH | OPEN | audit | - | Sí |
-| #25 | GCS CORS wildcard (`"*"`) | HIGH | OPEN | audit | - | Sí |
-| #26 | Cloud Run usa default compute SA con Editor | HIGH | OPEN | audit | deploy-backend.yml:61-67 | Sí |
-| #27 | Pusher key hardcodeada en prod | MEDIUM | OPEN | audit | - | Sí |
-| #28 | `VERCEL_TOKEN` via `--token=` flag | MEDIUM | OPEN | audit | - | Sí |
-| #29 | Sin pre-commit hooks | MEDIUM | OPEN | audit | - | Sí |
-| #3 | Cross-session data leak via `_job_results` | HIGH | OPEN | audit | sat_enquiry.py:24,359-374 | Sí |
-| #30 | Secretos en `--set-env-vars` de Cloud Run | MEDIUM | OPEN | audit | - | Sí |
-| #31 | Batch shard job sin SA dedicada ni secretos | MEDIUM | OPEN | audit | - | Sí |
-| #32 | detect-secrets baseline stale (19 dias) | LOW | TRIVIAL | audit | - | Sí |
-| #33 | `npm audit` no funcional | LOW | TRIVIAL | audit | - | Sí |
-| #34 | Supply chain: sin hash pinning en requirements.txt | LOW | TRIVIAL | audit | - | Sí |
-| #35 | SSRF via WeasyPrint — shell_preview | HIGH | OPEN | audit | shell_service.py:255-257, templates.py:357-371 | Sí |
-| #36 | FIEL (e.firma) usado sin autenticacion contra el SAT | MEDIUM | OPEN | audit | - | Sí |
-| #37 | FIEL (e.firma) se puede sobrescribir o borrar sin autenticacion | MEDIUM | OPEN | audit | - | Sí |
+| #19 | CORS `allow_methods=["*"]` | LOW | CLOSED | audit | - | Sí |
+| #2 | Cloud Tasks sin OIDC — endpoints internos spoofables | CRITICAL | CLOSED | audit | task_dispatcher.py:30-36, pdf.py:107-108, batch.py:213-231,301 | Sí |
+| #20 | `console.log` de variables Vite en prod | LOW | CLOSED | audit | - | Sí |
+| #21 | `SSL_CERT_REQS` inconsistente entre batch y API | LOW | CLOSED | audit | batch.py:49 tiene ssl_cert_reqs="required" pero pdf.py:74 y batch_shard_worker.py:59 tienen None. | Sí |
+| #22 | `PUSHER_KEY` y `VERCEL_URL` en GitHub Secrets | LOW | CLOSED | audit | - | Sí |
+| #23 | Timeout Cloud Run documentado a 1800s | LOW | CLOSED | audit | - | Sí |
+| #24 | Vercel sin headers de seguridad | HIGH | CLOSED | audit | - | Sí |
+| #25 | GCS CORS wildcard (`"*"`) | HIGH | CLOSED | audit | - | Sí |
+| #26 | Cloud Run usa default compute SA con Editor | HIGH | CLOSED | audit | deploy-backend.yml:61-67 | Sí |
+| #27 | Pusher key hardcodeada en prod | MEDIUM | CLOSED | audit | - | Sí |
+| #28 | `VERCEL_TOKEN` via `--token=` flag | MEDIUM | CLOSED | audit | - | Sí |
+| #29 | Sin pre-commit hooks | MEDIUM | CLOSED | audit | - | Sí |
+| #3 | Cross-session data leak via `_job_results` | HIGH | CLOSED | audit | sat_enquiry.py:24,359-374 | Sí |
+| #30 | Secretos en `--set-env-vars` de Cloud Run | MEDIUM | CLOSED | audit | - | Sí |
+| #31 | Batch shard job sin SA dedicada ni secretos | MEDIUM | CLOSED | audit | - | Sí |
+| #32 | detect-secrets baseline stale (19 dias) | LOW | CLOSED | audit | - | Sí |
+| #33 | `npm audit` no funcional | LOW | CLOSED | audit | - | Sí |
+| #34 | Supply chain: sin hash pinning en requirements.txt | LOW | CLOSED | audit | - | Sí |
+| #35 | SSRF via WeasyPrint — shell_preview | HIGH | CLOSED | audit | shell_service.py:255-257, templates.py:357-371 | Sí |
+| #36 | FIEL (e.firma) usado sin autenticacion contra el SAT | MEDIUM | CLOSED | audit | - | Sí |
+| #37 | FIEL (e.firma) se puede sobrescribir o borrar sin autenticacion | MEDIUM | CLOSED | audit | - | Sí |
 | #38 | SSRF via UUID path traversal a Diverza API | HIGH |  | audit | - | Sí |
 | #39 | Zip bomb / Memory DoS via openpyxl sin `read_only` | HIGH |  | audit | - | Sí |
-| #4 | Error details leaked in HTTP responses | HIGH | OPEN | audit | sat_enquiry.py:193-198,303, main.py:75, templates.py, pdf.py, batch.py:334, rfc_validation.py | Sí |
+| #4 | Error details leaked in HTTP responses | HIGH | CLOSED | audit | sat_enquiry.py:193-198,303, main.py:75, templates.py, pdf.py, batch.py:334, rfc_validation.py | Sí |
 | #40 | Iframe srcDoc con HTML sin sanitizar + `allow-same-origin` indocumentado | MEDIUM |  | audit | - | Sí |
-| #41 | Cero sanitizacion HTML en pipeline de templates | MEDIUM | OPEN | audit | InvoiceDesigner.jsx:1458, templates.py:341-349, shell_service.py:175-178 | Sí |
-| #42 | Ausencia de `.dockerignore` — `.env` bakeado en imagen Docker | MEDIUM | OPEN | audit | - | Sí |
-| #43 | Sin validacion MIME/content-type en uploads | MEDIUM | OPEN | audit | zip_manifest.py:21-24, pdf.py:240-243, batch.py:102-110 | Sí |
-| #44 | Sin limite de tamano por archivo en batch_analyze → OOM | MEDIUM | OPEN | audit | batch.py:78,102-110, policy.py:3 | Sí |
+| #41 | Cero sanitizacion HTML en pipeline de templates | MEDIUM | CLOSED | audit | InvoiceDesigner.jsx:1458, templates.py:341-349, shell_service.py:175-178 | Sí |
+| #42 | Ausencia de `.dockerignore` — `.env` bakeado en imagen Docker | MEDIUM | CLOSED | audit | - | Sí |
+| #43 | Sin validacion MIME/content-type en uploads | MEDIUM | CLOSED | audit | zip_manifest.py:21-24, pdf.py:240-243, batch.py:102-110 | Sí |
+| #44 | Sin limite de tamano por archivo en batch_analyze → OOM | MEDIUM | CLOSED | audit | batch.py:78,102-110, policy.py:3 | Sí |
 | #45 | Batch status endpoint sin autenticacion | MEDIUM |  | audit | - | Sí |
-| #46 | Diverza response → formula injection en Excel | MEDIUM | OPEN | audit | sat_enquiry.py:95-98,198,259-272 | Sí |
-| #47 | Base image sin digest pinning | MEDIUM | OPEN | audit | - | Sí |
+| #46 | Diverza response → formula injection en Excel | MEDIUM | CLOSED | audit | sat_enquiry.py:95-98,198,259-272 | Sí |
+| #47 | Base image sin digest pinning | MEDIUM | CLOSED | audit | - | Sí |
 | #48 | Single-stage build retiene build tools en imagen final | MEDIUM |  | audit | - | Sí |
-| #49 | `pip install` sin `--require-hashes` en Dockerfile | MEDIUM | OPEN | audit | - | Sí |
-| #5 | Fernet key silent loss on cold start | MEDIUM | OPEN | audit | - | Sí |
-| #50 | Contenedor corre como root — sin `USER` directive | LOW |  | audit | - | Sí |
-| #51 | logoUrl interpolada en HTML sin escape | LOW |  | audit | - | Sí |
-| #52 | Blob URLs abiertas via `window.open()` sin sandbox | LOW |  | audit | - | Sí |
-| #53 | apt packages sin version pinning | LOW |  | audit | - | Sí |
-| #54 | Sin `HEALTHCHECK` en Dockerfile | LOW |  | audit | - | Sí |
-| #55 | `cloudbuild.yaml` sin `--service-account` | LOW |  | audit | - | Sí |
-| #56 | Divergencia merge vs overwrite entre pipelines | LOW |  | audit | - | Sí |
-| #57 | Filename del usuario interpolado en rutas GCS sin sanitizar | LOW |  | audit | - | Sí |
-| #58 | Doc-code mismatch: `is_valid_xml_entry` | LOW |  | audit | - | Sí |
-| #59 | `credential_id` expuesto en API publica de emisores | LOW |  | audit | - | Sí |
-| #6 | Zero rate limiting — Diverza credits exposed | HIGH | OPEN | audit | main.py, sat_enquiry.py:286, batch.py:102 | Sí |
-| #60 | `console.log` de URL de API en BatchAnalysisPage + pdf-download | LOW |  | audit | - | Sí |
-| #61 | URL hardcodeada de Cloud Run como fallback | LOW |  | audit | - | Sí |
-| #62 | Path traversal via `template_id` sin validar — REFUTADO por panel advers… | MEDIUM | OPEN (LOW) | audit | templates.py:304,317,335-338,341-349,357-371,421-439 | Sí |
+| #49 | `pip install` sin `--require-hashes` en Dockerfile | MEDIUM | CLOSED | audit | - | Sí |
+| #5 | Fernet key silent loss on cold start | MEDIUM | CLOSED | audit | - | Sí |
+| #50 | Contenedor corre como root — sin `USER` directive | LOW | CLOSED | audit | - | Sí |
+| #51 | logoUrl interpolada en HTML sin escape | LOW | CLOSED | audit | - | Sí |
+| #52 | Blob URLs abiertas via `window.open()` sin sandbox | LOW | CLOSED | audit | - | Sí |
+| #53 | apt packages sin version pinning | LOW | CLOSED | audit | - | Sí |
+| #54 | Sin `HEALTHCHECK` en Dockerfile | LOW | CLOSED | audit | - | Sí |
+| #55 | `cloudbuild.yaml` sin `--service-account` | LOW | CLOSED | audit | - | Sí |
+| #56 | Divergencia merge vs overwrite entre pipelines | LOW | CLOSED | audit | - | Sí |
+| #57 | Filename del usuario interpolado en rutas GCS sin sanitizar | LOW | CLOSED | audit | - | Sí |
+| #58 | Doc-code mismatch: `is_valid_xml_entry` | LOW | CLOSED | audit | - | Sí |
+| #59 | `credential_id` expuesto en API publica de emisores | LOW | CLOSED | audit | - | Sí |
+| #6 | Zero rate limiting — Diverza credits exposed | HIGH | CLOSED | audit | main.py, sat_enquiry.py:286, batch.py:102 | Sí |
+| #60 | `console.log` de URL de API en BatchAnalysisPage + pdf-download | LOW | CLOSED | audit | - | Sí |
+| #61 | URL hardcodeada de Cloud Run como fallback | LOW | CLOSED | audit | - | Sí |
+| #62 | Path traversal via `template_id` sin validar — REFUTADO por panel advers… | MEDIUM |  | audit | - | Sí |
 | #7 | No CI security scanning | HIGH |  | audit | - | Sí |
-| #8 | `ET.fromstring` sin `defusedxml` | HIGH | OPEN | audit | Archivos listados | Sí |
-| #9 | Redis `ssl_cert_reqs=None` | HIGH | OPEN | audit | - | Sí |
+| #8 | `ET.fromstring` sin `defusedxml` | HIGH | CLOSED | audit | Archivos listados | Sí |
+| #9 | Redis `ssl_cert_reqs=None` | HIGH | CLOSED | audit | - | Sí |
 
 ## Hallazgos Rechazados por Panel Adversarial
 
