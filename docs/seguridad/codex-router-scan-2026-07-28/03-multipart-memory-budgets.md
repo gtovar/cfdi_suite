@@ -49,5 +49,5 @@ métricas para diagnosticar falsos positivos.
 
 ## Estado
 
-**Implementado; pendiente de revisión explícita de cierre.** La suite focalizada
-ejecutó 38 pruebas con éxito antes de publicar.
+**Cerrado y validado en CI.** La suite focalizada ejecutó 38 pruebas con éxito
+después del push y todos los checks del PR #12 terminaron en verde.
