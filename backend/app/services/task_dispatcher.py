@@ -41,6 +41,16 @@ def _oidc_token() -> dict:
 _client = None
 _TRANSIENT_TASK_ERRORS = (DeadlineExceeded, InternalServerError, ServiceUnavailable)
 
+
+class TaskEnqueueUncertainError(RuntimeError):
+    """Cloud Tasks pudo haber aceptado la tarea aunque no respondió.
+
+    El llamador debe conservar el XML: borrar el insumo en este caso puede
+    hacer fallar una tarea que Cloud Tasks ya registró. La regla lifecycle de
+    GCS limpia ese respaldo si finalmente no hubo tarea.
+    """
+
+
 def get_tasks_client():
     global _client
     if _client is None:
@@ -62,9 +72,11 @@ def _create_task_idempotently(client, parent: str, task: dict, task_id: str) -> 
             return client.create_task(request={"parent": parent, "task": task}).name
         except AlreadyExists:
             return task_name
-        except _TRANSIENT_TASK_ERRORS:
+        except _TRANSIENT_TASK_ERRORS as exc:
             if attempt == 2:
-                raise
+                raise TaskEnqueueUncertainError(
+                    "Cloud Tasks no confirmó la creación de la tarea"
+                ) from exc
             time.sleep(0.25 * (2**attempt))
 
 def enqueue_pdf_generation(job_id: str, xml_b64: str, template_id: str, html_shell: str = None, batch_id: str = None):

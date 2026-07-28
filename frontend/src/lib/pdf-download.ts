@@ -3,6 +3,12 @@ import { apiFetch, apiUrl } from './api-fetch';
 import { getAuthToken } from './auth-store';
 
 export type PdfConversionState = 'idle' | 'converting' | 'done' | 'error';
+export type PdfJobStatus = 'scheduled' | 'scheduling' | 'converting' | 'done';
+
+export interface PdfJobStart {
+  jobId: string;
+  status: PdfJobStatus;
+}
 
 // Estructura de control para el progreso global de un lote ZIP
 export interface BatchProgressPayload {
@@ -152,6 +158,7 @@ function subscribeWithRetry(config: SseRetryConfig): Promise<void> {
 export function waitForPdfJob(
   jobId: string,
   onStatusChange?: (state: SseConnectionState, attempt: number) => void,
+  onJobStatus?: (status: PdfJobStatus) => void,
 ): Promise<void> {
   return subscribeWithRetry({
     url: `/api/cfdi/pdf/${jobId}/progress?token=${encodeURIComponent(getAuthToken() || '')}`,
@@ -160,6 +167,7 @@ export function waitForPdfJob(
     onStatusChange,
     onMessage: (raw) => {
       const d = JSON.parse(raw) as { status: string; error?: string };
+      if (d.status === 'scheduling' || d.status === 'converting') onJobStatus?.(d.status);
       if (d.status === 'done') return { action: 'resolve' };
       if (d.status === 'error') return { action: 'reject', error: d.error || 'Error generando PDF' };
       return { action: 'continue' };
@@ -167,18 +175,40 @@ export function waitForPdfJob(
   });
 }
 
-export async function convertFileToPdf(file: File, templateId?: string): Promise<ArrayBuffer> {
+export async function startPdfJob(file: File, templateId?: string, jobId = crypto.randomUUID()): Promise<PdfJobStart> {
   const fd = new FormData();
   fd.append('file', file);
   fd.append('engine', 'canvas_pipeline');
+  fd.append('job_id', jobId);
   if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
   const res = await apiFetch('/api/cfdi/pdf/start', { method: 'POST', body: fd });
   if (!res.ok) throw new Error(`Error ${res.status} al iniciar conversión`);
-  const { jobId } = await res.json() as { jobId: string };
-  await waitForPdfJob(jobId);
+  return res.json() as Promise<PdfJobStart>;
+}
+
+export async function confirmPdfJob(jobId: string): Promise<PdfJobStart> {
+  const res = await apiFetch(`/api/cfdi/pdf/${jobId}/confirm`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Error ${res.status} al confirmar programación`);
+  return res.json() as Promise<PdfJobStart>;
+}
+
+export async function downloadPdfJob(jobId: string): Promise<ArrayBuffer> {
   const dl = await apiFetch(`/api/cfdi/pdf/${jobId}/download`);
   if (!dl.ok) throw new Error(`Error ${dl.status} al descargar PDF`);
   return dl.arrayBuffer();
+}
+
+export async function convertFileToPdf(
+  file: File,
+  templateId?: string,
+  onStarted?: (job: PdfJobStart) => void,
+  onJobStatus?: (status: PdfJobStatus) => void,
+  jobId?: string,
+): Promise<ArrayBuffer> {
+  const job = await startPdfJob(file, templateId, jobId);
+  onStarted?.(job);
+  if (job.status !== 'done') await waitForPdfJob(job.jobId, undefined, onJobStatus);
+  return downloadPdfJob(job.jobId);
 }
 
 

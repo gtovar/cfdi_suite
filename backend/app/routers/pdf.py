@@ -8,6 +8,7 @@ import zipfile
 import io
 import zlib
 import datetime
+import hashlib
 import tempfile
 import time
 
@@ -21,7 +22,7 @@ from google.cloud.storage import transfer_manager
 from remotezip import RemoteZip
 
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from opentelemetry import trace
@@ -35,7 +36,11 @@ import redis.asyncio as aioredis
 
 from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
 from ..services.realtime import publish_batch_signal
-from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
+from ..services.task_dispatcher import (
+    TaskEnqueueUncertainError,
+    enqueue_pdf_generation,
+    enqueue_zip_extraction,
+)
 from ..services.zip_manifest import (
     ZipBudgetError,
     compute_job_id,
@@ -117,6 +122,7 @@ _METADATA_TIMEOUT_SECONDS = 2
 # resolviendo un batch terminado mientras sus PDFs todavía existen en Storage.
 # Duplicada a propósito en batch_state_store.py (mismo valor) -- ver comentario ahí.
 BATCH_METADATA_TTL_SECONDS = 86400
+SINGLE_JOB_METADATA_PREFIX = "xml_temp/_single_jobs/"
 
 redis_client = aioredis.Redis(
     host=REDIS_HOST,
@@ -128,6 +134,38 @@ redis_client = aioredis.Redis(
     health_check_interval=25,
     decode_responses=False # Mantener en False para los bytes binarios del PDF
 )
+
+
+def _validated_single_job_id(value: str | None) -> str:
+    """Acepta solamente UUIDs canónicos como clave idempotente del navegador."""
+    if value is None:
+        return str(uuid.uuid4())
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(400, "job_id debe ser un UUID válido") from exc
+    if str(parsed) != value:
+        raise HTTPException(400, "job_id debe usar el formato UUID canónico")
+    return value
+
+
+def _single_job_metadata_blob(bucket, job_id: str):
+    return bucket.blob(f"{SINGLE_JOB_METADATA_PREFIX}{job_id}.json")
+
+
+async def _load_single_job_metadata(blob) -> dict | None:
+    if not await asyncio.to_thread(blob.exists):
+        return None
+    try:
+        return json.loads(await asyncio.to_thread(blob.download_as_text))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(503, "No se pudo reconciliar la programación existente.") from exc
+
+
+async def _write_single_job_metadata(blob, metadata: dict) -> None:
+    await asyncio.to_thread(
+        blob.upload_from_string, json.dumps(metadata, sort_keys=True), content_type="application/json"
+    )
 
 class GeneratePdfPayload(BaseModel):
     job_id: str
@@ -306,21 +344,46 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
 @router.post("/cfdi/pdf/start")
 async def start_pdf_generation(
     file: UploadFile = File(...),
-    template: Optional[str] = Form(None)
+    template: Optional[str] = Form(None),
+    job_id: Optional[str] = Form(None),
 ):
-    job_id = str(uuid.uuid4())
+    job_id = _validated_single_job_id(job_id)
     xml_content = await _read_pdf_xml_upload(file)
-    
     template_id = _template_id_from_form(template)
+    content_sha256 = hashlib.sha256(xml_content).hexdigest()
 
-    # ☁️ NUEVO: Subir XML temporal a Google Cloud Storage
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
     blob_xml = bucket.blob(f"xml_temp/{job_id}.xml")
+    metadata_blob = _single_job_metadata_blob(bucket, job_id)
+    existing_metadata = await _load_single_job_metadata(metadata_blob)
+    if existing_metadata and (
+        existing_metadata.get("content_sha256") != content_sha256
+        or existing_metadata.get("template_id") != template_id
+    ):
+        raise HTTPException(409, "Ese job_id ya corresponde a otro XML o plantilla.")
+
+    # Un retry que llega después de que el worker terminó no debe volver a
+    # subir el XML ni crear una nueva conversión.
+    if await asyncio.to_thread(bucket.blob(f"pdfs/{job_id}.pdf").exists):
+        return {"jobId": job_id, "status": "done"}
+
+    if not existing_metadata:
+        await _write_single_job_metadata(metadata_blob, {
+            "version": 1,
+            "job_id": job_id,
+            "template_id": template_id,
+            "content_sha256": content_sha256,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+
+    # GCS es el registro durable del input y de la identidad. Redis solo
+    # acelera el estado; no decide si un retry es recuperable.
     try:
-        await asyncio.to_thread(
-            blob_xml.upload_from_string, xml_content, content_type="application/xml"
-        )
+        if not await asyncio.to_thread(blob_xml.exists):
+            await asyncio.to_thread(
+                blob_xml.upload_from_string, xml_content, content_type="application/xml"
+            )
     except Exception as exc:
         report(exc, contexto="almacenar_xml_individual")
         raise HTTPException(
@@ -334,11 +397,21 @@ async def start_pdf_generation(
     # agotada -- el mismo defecto de Paso 1, en una función que el plan
     # original no había cubierto.
 
-    # 🟢 En Redis SOLO guardamos el estatus inicial pendiente (pesa nada)
+    # Redis es best-effort. El estado duradero anterior permite que SSE/GCS
+    # continúen reconciliando aunque esta escritura no esté disponible.
     await batch_state_store.mark_job_pending(redis_client, job_id)
 
     try:
         await asyncio.to_thread(enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=template_id)
+    except TaskEnqueueUncertainError as exc:
+        report(exc, contexto="encolar_pdf_resultado_incierto")
+        # La tarea puede existir. Devolver el ID que el navegador eligió hace
+        # posible observar GCS/SSE y confirmar luego con el MISMO nombre de
+        # Cloud Task, sin duplicar la conversión.
+        await safe_redis_call(lambda: redis_client.set(
+            f"pdf:status:{job_id}", b"scheduling", ex=BATCH_METADATA_TTL_SECONDS
+        ))
+        return JSONResponse(status_code=202, content={"jobId": job_id, "status": "scheduling"})
     except Exception as exc:
         report(exc, contexto="encolar_pdf")
         try:
@@ -350,7 +423,42 @@ async def start_pdf_generation(
             detail="No se pudo programar la conversión. Intenta de nuevo.",
         ) from exc
     
-    return {"jobId": job_id}
+    return {"jobId": job_id, "status": "scheduled"}
+
+
+@router.post("/cfdi/pdf/{job_id}/confirm")
+async def confirm_pdf_generation(job_id: str):
+    """Reintenta únicamente la programación de un XML durable ya subido.
+
+    No recibe bytes, no crea UUID y siempre conserva el mismo nombre de Task.
+    Es el camino de recuperación tras un 202 incierto o un refresh.
+    """
+    job_id = _validated_single_job_id(job_id)
+    bucket = storage.Client().bucket(BUCKET_NAME)
+    metadata = await _load_single_job_metadata(_single_job_metadata_blob(bucket, job_id))
+    if not metadata:
+        raise HTTPException(404, "No existe un trabajo recuperable para ese job_id.")
+    if await asyncio.to_thread(bucket.blob(f"pdfs/{job_id}.pdf").exists):
+        return {"jobId": job_id, "status": "done"}
+    if not await asyncio.to_thread(bucket.blob(f"xml_temp/{job_id}.xml").exists):
+        raise HTTPException(410, "El XML temporal ya no está disponible para reprogramar.")
+
+    try:
+        await asyncio.to_thread(
+            enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=metadata["template_id"]
+        )
+    except TaskEnqueueUncertainError as exc:
+        report(exc, contexto="reconfirmar_pdf_resultado_incierto")
+        await safe_redis_call(lambda: redis_client.set(
+            f"pdf:status:{job_id}", b"scheduling", ex=BATCH_METADATA_TTL_SECONDS
+        ))
+        return JSONResponse(status_code=202, content={"jobId": job_id, "status": "scheduling"})
+    except Exception as exc:
+        report(exc, contexto="reconfirmar_pdf")
+        raise HTTPException(503, "No se pudo confirmar la programación. Intenta de nuevo.") from exc
+
+    await batch_state_store.mark_job_pending(redis_client, job_id)
+    return {"jobId": job_id, "status": "scheduled"}
 
 @router.post("/cfdi/pdf/start-zip")
 async def start_pdf_zip_generation(
@@ -728,7 +836,11 @@ async def pdf_progress(job_id: str):
                 if await asyncio.to_thread(blob.exists):
                     yield 'data: {"status": "done"}\n\n'
                     break
-            yield 'data: {"status": "converting"}\n\n'
+            # "scheduling" es distinto de convertir: Cloud Tasks aún no ha
+            # confirmado el create_task, pero el input durable permite
+            # reconciliarlo sin volver a subir ni inventar un ID nuevo.
+            visible_status = "scheduling" if status == "scheduling" else "converting"
+            yield f'data: {{"status": "{visible_status}"}}\n\n'
             await asyncio.sleep(1)
     return StreamingResponse(
         event_generator(),

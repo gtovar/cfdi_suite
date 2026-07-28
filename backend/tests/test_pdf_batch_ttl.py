@@ -408,7 +408,16 @@ class BatchMetadataTtlTests(unittest.TestCase):
 
         from backend.app.main import app
 
+        mock_xml_blob = MagicMock()
+        mock_metadata_blob = MagicMock()
+        mock_pdf_blob = MagicMock()
+        for blob in (mock_xml_blob, mock_metadata_blob, mock_pdf_blob):
+            blob.exists.return_value = False
         mock_bucket = MagicMock()
+        mock_bucket.blob.side_effect = lambda path: (
+            mock_metadata_blob if path.startswith(pdf_router.SINGLE_JOB_METADATA_PREFIX)
+            else mock_pdf_blob if path.startswith("pdfs/") else mock_xml_blob
+        )
         mock_storage_client = MagicMock()
         mock_storage_client.bucket.return_value = mock_bucket
 
@@ -429,7 +438,7 @@ class BatchMetadataTtlTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("jobId", response.json())
-        mock_bucket.blob.return_value.upload_from_string.assert_called_once()
+        mock_xml_blob.upload_from_string.assert_called_once()
         mock_enqueue.assert_called_once()
 
     def test_start_pdf_generation_limpia_xml_y_devuelve_503_si_no_encola(self) -> None:
@@ -440,8 +449,15 @@ class BatchMetadataTtlTests(unittest.TestCase):
         from backend.app.main import app
 
         mock_blob = MagicMock()
+        mock_metadata_blob = MagicMock()
+        mock_pdf_blob = MagicMock()
+        for blob in (mock_blob, mock_metadata_blob, mock_pdf_blob):
+            blob.exists.return_value = False
         mock_bucket = MagicMock()
-        mock_bucket.blob.return_value = mock_blob
+        mock_bucket.blob.side_effect = lambda path: (
+            mock_metadata_blob if path.startswith(pdf_router.SINGLE_JOB_METADATA_PREFIX)
+            else mock_pdf_blob if path.startswith("pdfs/") else mock_blob
+        )
         mock_storage_client = MagicMock()
         mock_storage_client.bucket.return_value = mock_bucket
 
@@ -459,6 +475,47 @@ class BatchMetadataTtlTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("Servicio temporalmente no disponible", response.json()["detail"])
         mock_blob.delete.assert_called_once()
+
+    def test_start_pdf_generation_conserva_xml_si_encolado_es_incierto(self) -> None:
+        import io
+
+        from fastapi.testclient import TestClient
+
+        from backend.app.main import app
+        from backend.app.services.task_dispatcher import TaskEnqueueUncertainError
+
+        mock_blob = MagicMock()
+        mock_metadata_blob = MagicMock()
+        mock_pdf_blob = MagicMock()
+        for blob in (mock_blob, mock_metadata_blob, mock_pdf_blob):
+            blob.exists.return_value = False
+        mock_bucket = MagicMock()
+        mock_bucket.blob.side_effect = lambda path: (
+            mock_metadata_blob if path.startswith(pdf_router.SINGLE_JOB_METADATA_PREFIX)
+            else mock_pdf_blob if path.startswith("pdfs/") else mock_blob
+        )
+        mock_storage_client = MagicMock()
+        mock_storage_client.bucket.return_value = mock_bucket
+
+        with (
+            patch.object(pdf_router.storage, "Client", return_value=mock_storage_client),
+            patch.object(pdf_router, "redis_client") as mock_redis,
+            patch.object(
+                pdf_router,
+                "enqueue_pdf_generation",
+                side_effect=TaskEnqueueUncertainError("timeout"),
+            ),
+        ):
+            mock_redis.set = AsyncMock()
+            response = TestClient(app).post(
+                "/api/cfdi/pdf/start",
+                files={"file": ("factura.xml", io.BytesIO(b"<xml/>"), "application/xml")},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "scheduling")
+        self.assertIn("jobId", response.json())
+        mock_blob.delete.assert_not_called()
 
     def test_direct_path_enqueue_failure_sets_error_status_ttl_to_24h(self) -> None:
         """start_pdf_zip_generation (~283-346): si Cloud Tasks rechaza el

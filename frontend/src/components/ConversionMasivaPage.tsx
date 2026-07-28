@@ -16,6 +16,9 @@ import {
 } from 'lucide-react';
 import {
   type PdfConversionState,
+  type PdfJobStatus,
+  confirmPdfJob,
+  downloadPdfJob,
   type BatchProgressPayload,
   convertFileToPdf,
   triggerBlobDownload,
@@ -28,6 +31,7 @@ import {
   downloadWithProgress,
   ZIP_PROGRESS_SIZE_LIMIT_BYTES,
   Semaphore,
+  waitForPdfJob,
 } from '../lib/pdf-download';
 import type { BatchProgressStatus } from './FloatingBatchWidget';
 
@@ -35,7 +39,10 @@ import type { BatchProgressStatus } from './FloatingBatchWidget';
 
 interface ConversionEntry {
   file: File;
-  state: PdfConversionState;
+  state: PdfConversionState | 'scheduling';
+  jobId?: string;
+  schedulingAttempts?: number;
+  recovered?: boolean;
   error?: string;
   buffer?: ArrayBuffer;
 }
@@ -62,18 +69,19 @@ function getBatchShareUrl(id: string): string {
   return `${window.location.origin}${window.location.pathname}?batch=${id}`;
 }
 
-const STATE_CONFIG: Record<PdfConversionState, { label: string; className: string }> = {
+const STATE_CONFIG: Record<PdfConversionState | 'scheduling', { label: string; className: string }> = {
   idle: { label: 'Pendiente', className: 'bg-gray-100 text-gray-500' },
+  scheduling: { label: 'Confirmando programación…', className: 'bg-amber-50 text-amber-700' },
   converting: { label: 'Convirtiendo…', className: 'bg-primary-50 text-primary-600' },
   done: { label: 'Listo', className: 'bg-green-50 text-green-700' },
   error: { label: 'Error', className: 'bg-red-50 text-red-600' },
 };
 
-function StateChip({ state }: { state: PdfConversionState }) {
+function StateChip({ state }: { state: PdfConversionState | 'scheduling' }) {
   const cfg = STATE_CONFIG[state];
   return (
     <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-tiny font-medium', cfg.className)}>
-      {state === 'converting' && <Loader2 size={10} className="animate-spin" />}
+      {(state === 'converting' || state === 'scheduling') && <Loader2 size={10} className="animate-spin" />}
       {state === 'done' && <CheckCircle2 size={10} />}
       {state === 'error' && <XCircle size={10} />}
       {cfg.label}
@@ -103,6 +111,13 @@ interface PendingLooseFiles {
   count: number;
   totalBytes: number;
   savedAt: number;
+  jobs?: Array<{
+    jobId: string;
+    filename: string;
+    size: number;
+    state: PdfConversionState | 'scheduling';
+    schedulingAttempts: number;
+  }>;
 }
 
 function loadPendingLooseFiles(): PendingLooseFiles | null {
@@ -173,6 +188,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
   const restoredBatchRef = useRef(false);
+  const restoredLooseJobsRef = useRef(false);
 
   useEffect(() => {
     if (folderInputRef.current) {
@@ -191,14 +207,42 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
 
   useEffect(() => {
     if (!entries.length) return;
-    const pending = {
+    const pending: PendingLooseFiles = {
       count: entries.length,
       totalBytes: entries.reduce((sum, entry) => sum + entry.file.size, 0),
       savedAt: Date.now(),
+      jobs: entries.filter((entry) => entry.jobId).map((entry) => ({
+        jobId: entry.jobId!, filename: entry.file.name, size: entry.file.size,
+        state: entry.state, schedulingAttempts: entry.schedulingAttempts ?? 0,
+      })),
     };
     sessionStorage.setItem(PENDING_LOOSE_FILES_KEY, JSON.stringify(pending));
     setPendingLooseFiles(pending);
   }, [entries]);
+
+  // Los bytes del File no sobreviven un refresh, pero los jobs ya subidos sí.
+  // Se hidratan como Files marcadores y nunca vuelven a enviarse por POST.
+  useEffect(() => {
+    if (restoredLooseJobsRef.current || !pendingLooseFiles?.jobs?.length) return;
+    restoredLooseJobsRef.current = true;
+    const restored = pendingLooseFiles.jobs.map((job) => ({
+      file: new File([], job.filename), jobId: job.jobId, state: job.state,
+      schedulingAttempts: job.schedulingAttempts, recovered: true,
+    } satisfies ConversionEntry));
+    setEntries(restored);
+    setPhase('running');
+    for (const job of restored) {
+      void waitForPdfJob(job.jobId!, undefined, (status) => {
+        setEntries((prev) => prev.map((entry) => entry.jobId === job.jobId ? {
+          ...entry, state: status === 'scheduling' ? 'scheduling' : 'converting',
+        } : entry));
+      }).then(() => setEntries((prev) => prev.map((entry) => entry.jobId === job.jobId ? {
+        ...entry, state: 'done',
+      } : entry))).catch((error) => setEntries((prev) => prev.map((entry) => entry.jobId === job.jobId ? {
+        ...entry, state: 'error', error: error instanceof Error ? error.message : String(error),
+      } : entry)));
+    }
+  }, [pendingLooseFiles]);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -437,13 +481,33 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     const sem = new Semaphore(4);
 
     await Promise.all(
-      entries.map(async (entry) => {
+      entries.filter((entry) => !entry.recovered).map(async (entry) => {
         if (cancelledRef.current) return;
         await sem.acquire();
         try {
           if (cancelledRef.current) return;
-          setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'converting' } : e));
-          const buf = await convertFileToPdf(entry.file, templateId);
+          // Debe existir ANTES del fetch: si se pierde la respuesta HTTP, el
+          // navegador conserva esta identidad para SSE y /confirm.
+          const durableJobId = crypto.randomUUID();
+          setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'scheduling', error: undefined } : e));
+          setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+            ...e, jobId: durableJobId, state: 'scheduling', schedulingAttempts: 0,
+          } : e));
+          const buf = await convertFileToPdf(
+            entry.file,
+            templateId,
+            (job) => setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+              ...e,
+              jobId: job.jobId,
+              state: job.status === 'scheduling' ? 'scheduling' : 'converting',
+              schedulingAttempts: job.status === 'scheduling' ? 1 : 0,
+            } : e)),
+            (status: PdfJobStatus) => setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+              ...e,
+              state: status === 'scheduling' ? 'scheduling' : 'converting',
+            } : e)),
+            durableJobId,
+          );
           setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
         } catch (err) {
           setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) } : e));
@@ -518,9 +582,19 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   }
 
   async function handleDownloadOne(entry: ConversionEntry) {
-    if (entry.state === 'converting') return;
+    if (entry.state === 'converting' || entry.state === 'scheduling') return;
     if (entry.buffer) {
       triggerBlobDownload(new Blob([entry.buffer], { type: 'application/pdf' }), entry.file.name.replace(/\.xml$/i, '.pdf'));
+      return;
+    }
+    if (entry.jobId) {
+      try {
+        const buf = await downloadPdfJob(entry.jobId);
+        triggerBlobDownload(new Blob([buf], { type: 'application/pdf' }), entry.file.name.replace(/\.xml$/i, '.pdf'));
+        setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+      } catch (err) {
+        setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: String(err) } : e));
+      }
       return;
     }
     setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'converting', error: undefined } : e));
@@ -530,6 +604,23 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
       setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
     } catch (err) {
       setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: String(err) } : e));
+    }
+  }
+
+  async function handleConfirmScheduling(entry: ConversionEntry) {
+    if (!entry.jobId || (entry.schedulingAttempts ?? 0) >= 3) return;
+    setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+      ...e, state: 'scheduling', error: undefined, schedulingAttempts: (e.schedulingAttempts ?? 0) + 1,
+    } : e));
+    try {
+      const result = await confirmPdfJob(entry.jobId);
+      setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+        ...e, state: result.status === 'scheduling' ? 'scheduling' : 'converting',
+      } : e));
+    } catch (err) {
+      setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+        ...e, state: 'error', error: err instanceof Error ? err.message : String(err),
+      } : e));
     }
   }
 
@@ -1007,8 +1098,16 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                       <td className="px-3 py-2 text-right">
                         {entry.state === 'converting' ? (
                           <Loader2 size={12} className="animate-spin text-primary-400 inline" />
+                        ) : entry.state === 'scheduling' ? (
+                          (entry.schedulingAttempts ?? 0) < 3 ? (
+                            <button onClick={() => handleConfirmScheduling(entry)} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-amber-700 hover:bg-amber-50">
+                              <FileDown size={11} /> Confirmar ({entry.schedulingAttempts ?? 0}/3)
+                            </button>
+                          ) : <span className="text-tiny text-red-500">Confirmación agotada</span>
                         ) : entry.state === 'done' ? (
                           <button onClick={() => handleDownloadOne(entry)} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-green-600 hover:bg-green-50"><Download size={11} /> PDF</button>
+                        ) : entry.state === 'error' && entry.jobId && (entry.schedulingAttempts ?? 0) < 3 ? (
+                          <button onClick={() => handleConfirmScheduling(entry)} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-amber-700 hover:bg-amber-50"><FileDown size={11} /> Confirmar ({entry.schedulingAttempts ?? 0}/3)</button>
                         ) : (
                           <button onClick={() => handleDownloadOne(entry)} className={clsx('flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium transition-colors', entry.state === 'error' ? 'text-red-400 hover:bg-red-50' : 'text-gray-400 hover:bg-primary-50')}><FileDown size={11} /> {entry.state === 'error' ? 'Reintentar' : 'PDF'}</button>
                         )}

@@ -129,3 +129,16 @@ class PdfTemplateIdBoundaryTests(unittest.TestCase):
         with patch.object(task_dispatcher, "get_tasks_client", return_value=client):
             result = task_dispatcher.enqueue_pdf_generation("job-test", "", "default")
         self.assertEqual(result, "queues/pdf-generator/tasks/pdf-job-test")
+
+    def test_dispatcher_distingue_resultado_incierto_tras_reintentos(self) -> None:
+        client = MagicMock()
+        client.queue_path.return_value = "queues/pdf-generator"
+        client.task_path.return_value = "queues/pdf-generator/tasks/pdf-job-test"
+        client.create_task.side_effect = ServiceUnavailable("temporal")
+        with (
+            patch.object(task_dispatcher, "get_tasks_client", return_value=client),
+            patch("backend.app.services.task_dispatcher.time.sleep"),
+            self.assertRaises(task_dispatcher.TaskEnqueueUncertainError),
+        ):
+            task_dispatcher.enqueue_pdf_generation("job-test", "", "default")
+        self.assertEqual(client.create_task.call_count, 3)
