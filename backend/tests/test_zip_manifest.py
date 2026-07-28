@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import unittest
 import zipfile
+from unittest.mock import MagicMock
 
 try:
     from backend.app.services import zip_manifest
@@ -20,6 +21,13 @@ else:
 
 def _info(filename: str) -> zipfile.ZipInfo:
     return zipfile.ZipInfo(filename=filename)
+
+
+def _sized_info(filename: str, file_size: int, compress_size: int) -> zipfile.ZipInfo:
+    info = _info(filename)
+    info.file_size = file_size
+    info.compress_size = compress_size
+    return info
 
 
 @unittest.skipIf(zip_manifest is None, f"backend no disponible: {_IMPORT_ERROR}")
@@ -82,6 +90,49 @@ class BuildManifestTests(unittest.TestCase):
         expected_job_id = zip_manifest.compute_job_id("batch-y", "factura1.xml")
         self.assertIn(expected_job_id, manifest)
         self.assertEqual(manifest[expected_job_id], "factura1.xml")
+
+
+@unittest.skipIf(zip_manifest is None, f"backend no disponible: {_IMPORT_ERROR}")
+class ZipBudgetTests(unittest.TestCase):
+    def assert_budget(self, code: str, infolist: list[zipfile.ZipInfo]) -> None:
+        with self.assertRaises(zip_manifest.ZipBudgetError) as error:
+            zip_manifest.inspect_zip_manifest(infolist, "batch-budget")
+        self.assertEqual(error.exception.code, code)
+
+    def test_zip_benigno_pasa(self) -> None:
+        result = zip_manifest.inspect_zip_manifest(
+            [_sized_info("factura.xml", 1_000, 500), _sized_info("nota.txt", 100, 100)], "batch-ok"
+        )
+        self.assertEqual(len(result.xml_entries), 1)
+
+    def test_ratio_1027x_se_rechaza(self) -> None:
+        self.assert_budget("compression_ratio_too_high", [_sized_info("factura.xml", 1_027, 1)])
+
+    def test_mas_de_2000_entradas_se_rechaza(self) -> None:
+        self.assert_budget("too_many_entries", [_info(f"{index}.xml") for index in range(2_001)])
+
+    def test_xml_mayor_a_20_mib_se_rechaza(self) -> None:
+        self.assert_budget(
+            "xml_too_large",
+            [_sized_info("factura.xml", zip_manifest.MAX_XML_UNCOMPRESSED_BYTES + 1, 1_000_000)],
+        )
+
+    def test_total_mayor_a_8_gib_se_rechaza(self) -> None:
+        self.assert_budget(
+            "total_uncompressed_too_large",
+            [
+                _sized_info("uno.txt", zip_manifest.MAX_ZIP_UNCOMPRESSED_BYTES, 10_000_000),
+                _sized_info("dos.txt", 1, 1),
+            ],
+        )
+
+    def test_blob_gcs_mayor_a_512_mib_se_rechaza(self) -> None:
+        blob = MagicMock()
+        blob.size = zip_manifest.MAX_ZIP_COMPRESSED_BYTES + 1
+        with self.assertRaises(zip_manifest.ZipBudgetError) as error:
+            zip_manifest.validate_gcs_zip_size(blob)
+        self.assertEqual(error.exception.code, "compressed_zip_too_large")
+        blob.reload.assert_called_once()
 
 
 if __name__ == "__main__":

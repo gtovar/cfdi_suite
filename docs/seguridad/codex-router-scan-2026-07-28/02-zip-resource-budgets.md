@@ -13,7 +13,9 @@ de referencia es 367 MB.
    lifecycle; un límite aislado deja otro camino explotable.
 2. **Qué parece que se quiere decir / restricciones reales:** preservar el lote
    de 367 MB y proteger memoria, CPU, disco tmpfs y costo. Se fijan 512 MiB
-   comprimidos, 2,000 entradas, 20 MB/XML y 2 GiB descomprimidos.
+   comprimidos, 2,000 entradas, 20 MB/XML y 8 GiB descomprimidos. El fixture
+   real mide 7.83 GiB declarados; el procesamiento trabaja XMLs por chunks,
+   por lo que el total no reside simultáneamente en RAM.
 3. **Qué podría estar mal nombrado / supuestos no verificados:** “ZIP válido”
    no implica seguro; el ratio debe medirse con tamaños declarados y datos
    reales, pues metadata ZIP puede ser engañosa.
@@ -39,7 +41,7 @@ GCS sobredimensionado y aplicar los cuatro presupuestos antes de procesar.
 
 ## Pruebas
 
-ZIP benigno; ratio 1,027×; >2,000 entradas; XML >20 MB; total >2 GiB; integración
+ZIP benigno; ratio 1,027×; >2,000 entradas; XML >20 MB; total >8 GiB; integración
 controlada del fixture 367 MB y contrato de campos POST del frontend.
 
 ## Rollback

@@ -44,7 +44,7 @@ from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.pdf_pipeline import generate
 from ..services.realtime import publish_batch_signal
 from ..services.redis_safety import safe_redis_call
-from ..services.zip_manifest import build_manifest
+from ..services.zip_manifest import inspect_zip_manifest, validate_gcs_zip_size
 
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "cfdi-suite-uploads-706861124428")
 
@@ -136,12 +136,15 @@ async def run_shard() -> None:
         # (un job_id sin archivo, o viceversa) -- el peor bug para depurar,
         # se ve como un batch atorado sin error visible. Con una sola fuente
         # (el manifiesto derivado del ZIP), eso es estructuralmente imposible.
+        # Defensa en profundidad: esta tarea puede invocarse sin haber pasado
+        # por el router público; nunca abrir RemoteZip sin revisar metadata.
+        await asyncio.to_thread(validate_gcs_zip_size, bucket.blob(zip_gcs_path))
         session = get_gcs_authorized_session()
         url = gcs_object_url(BUCKET_NAME, zip_gcs_path)
         rz = await asyncio.to_thread(RemoteZip, url, session=session)
         try:
             infolist = await asyncio.to_thread(rz.infolist)
-            manifest = build_manifest(infolist, batch_id)  # job_id -> filename
+            manifest = inspect_zip_manifest(infolist, batch_id).manifest
             job_ids = list(manifest.keys())
 
             my_shard = shard_slice(job_ids, task_index, shard_size)

@@ -187,6 +187,11 @@ export async function startZipConversion(
   templateId?: string,
   onUploadProgress?: (percent: number) => void // <-- NUEVO: Callback para el Frontend
 ): Promise<{ batchId: string; totalFiles: number }> {
+  const maxZipBytes = 512 * 1024 * 1024;
+  if (file.size > maxZipBytes) {
+    throw new Error("El ZIP excede el tamaño máximo permitido de 512 MiB.");
+  }
+
   // Paso A: Pedirle al backend la URL firmada
   const resUrl = await apiFetch("/api/cfdi/pdf/request-upload", { 
     method: 'POST' 
@@ -199,13 +204,17 @@ export async function startZipConversion(
     throw new Error(`Error (${resUrl.status}) al preparar el espacio de subida segura.`);
   }
   
-  const { uploadUrl, gcsPath } = await resUrl.json() as { uploadUrl: string; gcsPath: string };
+  const { uploadUrl, gcsPath, uploadFields } = await resUrl.json() as {
+    uploadUrl: string;
+    gcsPath: string;
+    uploadFields?: Record<string, string>;
+  };
 
   // Paso B: Subir el ZIP usando XMLHttpRequest para rastrear el progreso exacto
   await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', uploadUrl, true);
-    xhr.setRequestHeader('Content-Type', 'application/zip');
+    xhr.open(uploadFields ? 'POST' : 'PUT', uploadUrl, true);
+    if (!uploadFields) xhr.setRequestHeader('Content-Type', 'application/zip');
     
     // Escuchar el progreso de subida de los bytes reales
     xhr.upload.onprogress = (e) => {
@@ -224,7 +233,16 @@ export async function startZipConversion(
     };
     
     xhr.onerror = () => reject(new Error("Error de red al intentar subir el archivo."));
-    xhr.send(file);
+    if (uploadFields) {
+      const formData = new FormData();
+      for (const [name, value] of Object.entries(uploadFields)) {
+        formData.append(name, value);
+      }
+      formData.append('file', file, file.name);
+      xhr.send(formData);
+    } else {
+      xhr.send(file);
+    }
   });
 
   // Paso C: Avisarle al backend que procese el archivo (AQUÍ ES DONDE SUELE SALTAR EL 429 SI SE LLENA)

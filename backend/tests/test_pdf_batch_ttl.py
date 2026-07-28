@@ -40,6 +40,11 @@ class BatchMetadataTtlTests(unittest.TestCase):
         _auth = patch.object(pdf_router, "verify_cloud_tasks", return_value=True)
         _auth.start()
         self.addCleanup(_auth.stop)
+        # Los casos de esta clase prueban TTL/extracción, no metadata GCS.
+        # La defensa de tamaño tiene pruebas dedicadas en test_zip_upload_policy.
+        _zip_size = patch.object(pdf_router, "validate_gcs_zip_size", return_value=1)
+        _zip_size.start()
+        self.addCleanup(_zip_size.stop)
 
     def test_process_zip_in_background_sets_extracting_total_and_batch_ids_ttl(self) -> None:
         import io

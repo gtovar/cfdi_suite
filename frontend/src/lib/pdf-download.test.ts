@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { downloadWithProgress, fetchZipEstimatedSize, waitForPdfJob, watchBatchProgress } from './pdf-download';
+import { downloadWithProgress, fetchZipEstimatedSize, startZipConversion, waitForPdfJob, watchBatchProgress } from './pdf-download';
 
 // --- Mock de EventSource para las pruebas de waitForPdfJob ---
 class MockEventSource {
@@ -102,6 +102,83 @@ describe('downloadWithProgress', () => {
   it('throws when the response is not ok', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 404 }));
     await expect(downloadWithProgress('https://example.com/missing', null, () => {})).rejects.toThrow('404');
+  });
+});
+
+describe('startZipConversion', () => {
+  it('sube por POST multipart con los campos firmados y conserva progreso', async () => {
+    class MockUploadXhr {
+      static instance: MockUploadXhr;
+      upload = { onprogress: null as ((event: ProgressEvent) => void) | null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      status = 204;
+      statusText = '';
+      method = '';
+      body: FormData | null = null;
+      open(method: string) { this.method = method; }
+      send(body: FormData) {
+        this.body = body;
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 } as ProgressEvent);
+        this.onload?.();
+      }
+    }
+    const xhr = new MockUploadXhr();
+    MockUploadXhr.instance = xhr;
+    vi.stubGlobal('XMLHttpRequest', class {
+      constructor() { return xhr; }
+    });
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        uploadUrl: 'https://storage.example/upload',
+        gcsPath: 'uploads/id.zip',
+        uploadFields: { key: 'uploads/id.zip', policy: 'signed-policy' },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ batchId: 'batch-1', totalFiles: 1 }), { status: 200 })));
+
+    const progress = vi.fn();
+    const file = new File(['zip'], 'facturas.zip', { type: 'application/zip' });
+    await startZipConversion(file, undefined, progress);
+
+    expect(xhr.method).toBe('POST');
+    expect(xhr.body?.get('key')).toBe('uploads/id.zip');
+    expect(xhr.body?.get('policy')).toBe('signed-policy');
+    const uploaded = xhr.body?.get('file') as File;
+    expect(uploaded.name).toBe(file.name);
+    expect(uploaded.size).toBe(file.size);
+    expect(progress).toHaveBeenCalledWith(50);
+    vi.unstubAllGlobals();
+  });
+
+  it('conserva PUT mientras el backend anterior todavía no entrega política POST', async () => {
+    class LegacyUploadXhr {
+      static instance: LegacyUploadXhr;
+      upload = { onprogress: null as ((event: ProgressEvent) => void) | null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      status = 200;
+      statusText = '';
+      method = '';
+      contentType = '';
+      body: File | null = null;
+      open(method: string) { this.method = method; }
+      setRequestHeader(name: string, value: string) { if (name === 'Content-Type') this.contentType = value; }
+      send(body: File) { this.body = body; this.onload?.(); }
+    }
+    const xhr = new LegacyUploadXhr();
+    LegacyUploadXhr.instance = xhr;
+    vi.stubGlobal('XMLHttpRequest', class { constructor() { return xhr; } });
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ uploadUrl: 'https://storage.example/legacy', gcsPath: 'uploads/id.zip' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ batchId: 'batch-1', totalFiles: 1 }), { status: 200 })));
+
+    const file = new File(['zip'], 'facturas.zip', { type: 'application/zip' });
+    await startZipConversion(file);
+
+    expect(xhr.method).toBe('PUT');
+    expect(xhr.contentType).toBe('application/zip');
+    expect(xhr.body).toBe(file);
+    vi.unstubAllGlobals();
   });
 });
 

@@ -23,6 +23,8 @@ except ModuleNotFoundError as error:
 else:
     _IMPORT_ERROR = None
 
+from backend.app.services.zip_manifest import ZipBudgetError
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -149,6 +151,7 @@ class RunShardZipGcsPathTests(unittest.TestCase):
             patch.object(batch_shard_worker, "redis_client", mock_redis),
             patch.object(batch_shard_worker, "RemoteZip", return_value=mock_rz),
             patch.object(batch_shard_worker, "get_gcs_authorized_session", return_value=MagicMock()),
+            patch.object(batch_shard_worker, "validate_gcs_zip_size", return_value=1),
             patch.object(batch_shard_worker.storage, "Client", return_value=MagicMock()),
             patch.object(batch_shard_worker, "generate", return_value=b"%PDF-fake"),
             patch.object(batch_shard_worker, "publish_batch_signal"),
@@ -158,6 +161,26 @@ class RunShardZipGcsPathTests(unittest.TestCase):
         mock_redis.smembers.assert_not_called()
         self.assertEqual(mock_rz.read.call_count, 5)
         mock_rz.close.assert_called_once()
+
+    def test_camino_remoto_rechaza_presupuesto_antes_de_abrir_remotezip(self) -> None:
+        env = {
+            "BATCH_ID": "batch-rechazado",
+            "ZIP_GCS_PATH": "uploads/batch-rechazado.zip",
+        }
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(batch_shard_worker.storage, "Client", return_value=MagicMock()),
+            patch.object(
+                batch_shard_worker,
+                "validate_gcs_zip_size",
+                side_effect=ZipBudgetError("compressed_zip_too_large"),
+            ),
+            patch.object(batch_shard_worker, "RemoteZip") as remote_zip,
+        ):
+            with self.assertRaises(ZipBudgetError):
+                asyncio.run(batch_shard_worker.run_shard())
+
+        remote_zip.assert_not_called()
 
     def test_camino_de_siempre_sin_zip_gcs_path_usa_smembers(self) -> None:
         """Guarda de regresión: sin ZIP_GCS_PATH, el comportamiento debe

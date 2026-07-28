@@ -36,7 +36,13 @@ import redis.asyncio as aioredis
 from ..services.pdf_pipeline import generate, PDF_PROCESS_POOL
 from ..services.realtime import publish_batch_signal
 from ..services.task_dispatcher import enqueue_pdf_generation, enqueue_zip_extraction
-from ..services.zip_manifest import is_valid_xml_entry, compute_job_id, build_manifest
+from ..services.zip_manifest import (
+    ZipBudgetError,
+    compute_job_id,
+    inspect_zip_manifest,
+    validate_gcs_zip_size,
+    validate_zip_compressed_size,
+)
 from ..services.gcs_range_auth import get_gcs_authorized_session, gcs_object_url
 from ..services.batch_job_trigger import should_use_batch_job, trigger_batch_shard_job
 from ..services.redis_errors import is_redis_quota_error
@@ -109,6 +115,7 @@ class GeneratePdfPayload(BaseModel):
 class SignedUrlResponse(BaseModel):
     uploadUrl: str
     gcsPath: str
+    uploadFields: dict[str, str]
 
 class ProcessGcsZipPayload(BaseModel):
     gcsPath: str
@@ -292,6 +299,14 @@ async def start_pdf_zip_generation(
     if not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="El archivo cargado debe ser un formato .ZIP válido.")
 
+    file.file.seek(0, os.SEEK_END)
+    upload_size = file.file.tell()
+    file.file.seek(0)
+    try:
+        validate_zip_compressed_size(upload_size)
+    except ZipBudgetError as error:
+        raise HTTPException(status_code=413, detail="El ZIP excede el presupuesto permitido.") from error
+
     header = file.file.read(4)
     file.file.seek(0)
     if header != b"PK\x03\x04":
@@ -312,12 +327,14 @@ async def start_pdf_zip_generation(
 
     try:
         with zipfile.ZipFile(file.file, "r") as z:
-            for file_info in z.infolist():
-                if is_valid_xml_entry(file_info):
-                    job_id = str(uuid.uuid4())
-                    xml_content = z.read(file_info.filename)
-                    job_ids.append((job_id, xml_content))
-                    manifest[job_id] = file_info.filename
+            validated = inspect_zip_manifest(z.infolist(), batch_id)
+            for file_info in validated.xml_entries:
+                job_id = str(uuid.uuid4())
+                xml_content = z.read(file_info.filename)
+                job_ids.append((job_id, xml_content))
+                manifest[job_id] = file_info.filename
+    except ZipBudgetError as error:
+        raise HTTPException(status_code=413, detail="El ZIP excede el presupuesto permitido.") from error
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="El archivo comprimido está dañado o corrupto.")
     except Exception as e:
@@ -709,24 +726,29 @@ async def request_upload_url():
     try:
         credentials, service_account_email = _get_signing_credentials()
         storage_client = storage.Client(credentials=credentials)
-        bucket = storage_client.bucket(BUCKET_NAME)
 
         unique_id = str(uuid.uuid4())
         gcs_path = f"uploads/{unique_id}.zip"
-        blob = bucket.blob(gcs_path)
-
-        upload_url = blob.generate_signed_url(
-            version="v4",
+        policy = storage_client.generate_signed_post_policy_v4(
+            BUCKET_NAME,
+            gcs_path,
             expiration=datetime.timedelta(minutes=15),
-            method="PUT",
-            content_type="application/zip",
+            conditions=[
+                {"bucket": BUCKET_NAME},
+                {"key": gcs_path},
+                {"Content-Type": "application/zip"},
+                ["content-length-range", 0, 512 * 1024 * 1024],
+            ],
+            fields={"Content-Type": "application/zip"},
+            credentials=credentials,
             service_account_email=service_account_email,
-            access_token=credentials.token  # <--- ESTO EVITA EL ERROR DE LA PRIVATE KEY
+            access_token=credentials.token,
         )
 
         return {
-            "uploadUrl": _SafeUrl(upload_url),
-            "gcsPath": gcs_path
+            "uploadUrl": _SafeUrl(policy["url"]),
+            "gcsPath": gcs_path,
+            "uploadFields": policy["fields"],
         }
     except Exception as e:
         traceback.print_exc()
@@ -842,7 +864,8 @@ async def _try_remote_manifest_path(bucket, gcs_path: str, batch_id: str, templa
         await safe_redis_call(lambda: redis_client.set(f"pdf:extracting_error:{batch_id}", "Error al extraer el ZIP", ex=3600))
         return True
 
-    manifest = build_manifest(infolist, batch_id)  # job_id -> filename
+    validated = inspect_zip_manifest(infolist, batch_id)
+    manifest = validated.manifest  # job_id -> filename
     total_xmls = len(manifest)
 
     if not should_use_batch_job(total_xmls):
@@ -959,6 +982,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(gcs_path)
+    await asyncio.to_thread(validate_gcs_zip_size, blob)
 
     if REMOTE_ZIP_SHARD_READ:
         ran = await _try_remote_manifest_path(bucket, gcs_path, batch_id, template_id)
@@ -989,7 +1013,8 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
     chunk_upload_seconds: list[float] = []
     try:
         with zipfile.ZipFile(temp_filename, "r") as z:
-            xml_entries = [fi for fi in z.infolist() if is_valid_xml_entry(fi)]
+            validated = inspect_zip_manifest(z.infolist(), batch_id)
+            xml_entries = validated.xml_entries
 
             # Manifiesto completo (job_id -> filename) escrito a GCS ANTES de
             # iterar el ZIP -- misma función (build_manifest) que ya usa el
@@ -1001,7 +1026,7 @@ async def process_zip_in_background(gcs_path: str, batch_id: str, template_id: s
             # tienen este manifiesto como respaldo de membresía en vez de
             # quedar con archivos "huérfanos" que existen en GCS pero de los
             # que nadie sabe que pertenecen al batch.
-            manifest = build_manifest(xml_entries, batch_id)
+            manifest = validated.manifest
             try:
                 await asyncio.to_thread(
                     _batch_manifest_blob(batch_id).upload_from_string,
@@ -1232,6 +1257,13 @@ async def start_pdf_zip_gcs_generation(payload: ProcessGcsZipPayload):
     reintenta automáticamente si falla a medio camino.
     """
     _validate_owned_upload_zip_path(payload.gcsPath)
+
+    try:
+        storage_client = storage.Client()
+        blob = storage_client.bucket(BUCKET_NAME).blob(payload.gcsPath)
+        await asyncio.to_thread(validate_gcs_zip_size, blob)
+    except ZipBudgetError as error:
+        raise HTTPException(status_code=413, detail="El ZIP excede el presupuesto permitido.") from error
 
     template_id = "default"
     if payload.template:
