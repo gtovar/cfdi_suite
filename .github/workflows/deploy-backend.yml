@@ -86,6 +86,7 @@ jobs:
           # signed URLs).
           flags: |
             --allow-unauthenticated
+            --to-latest
             --cpu=2
             --memory=2Gi
             --max-instances=10
