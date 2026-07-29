@@ -39,7 +39,7 @@ import type { BatchProgressStatus } from './FloatingBatchWidget';
 
 interface ConversionEntry {
   file: File;
-  state: PdfConversionState | 'scheduling';
+  state: PdfConversionState | 'uploading' | 'scheduling';
   jobId?: string;
   schedulingAttempts?: number;
   recovered?: boolean;
@@ -70,19 +70,20 @@ function getBatchShareUrl(id: string): string {
   return `${window.location.origin}${window.location.pathname}?batch=${id}`;
 }
 
-const STATE_CONFIG: Record<PdfConversionState | 'scheduling', { label: string; className: string }> = {
+const STATE_CONFIG: Record<PdfConversionState | 'uploading' | 'scheduling', { label: string; className: string }> = {
   idle: { label: 'Pendiente', className: 'bg-gray-100 text-gray-500' },
+  uploading: { label: 'Enviando XML…', className: 'bg-blue-50 text-blue-700' },
   scheduling: { label: 'Confirmando programación…', className: 'bg-amber-50 text-amber-700' },
   converting: { label: 'Convirtiendo…', className: 'bg-primary-50 text-primary-600' },
   done: { label: 'Listo', className: 'bg-green-50 text-green-700' },
   error: { label: 'Error', className: 'bg-red-50 text-red-600' },
 };
 
-function StateChip({ state }: { state: PdfConversionState | 'scheduling' }) {
+function StateChip({ state }: { state: PdfConversionState | 'uploading' | 'scheduling' }) {
   const cfg = STATE_CONFIG[state];
   return (
     <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-tiny font-medium', cfg.className)}>
-      {(state === 'converting' || state === 'scheduling') && <Loader2 size={10} className="animate-spin" />}
+      {(state === 'uploading' || state === 'converting' || state === 'scheduling') && <Loader2 size={10} className="animate-spin" />}
       {state === 'done' && <CheckCircle2 size={10} />}
       {state === 'error' && <XCircle size={10} />}
       {cfg.label}
@@ -116,7 +117,7 @@ interface PendingLooseFiles {
     jobId: string;
     filename: string;
     size: number;
-    state: PdfConversionState | 'scheduling';
+    state: PdfConversionState | 'uploading' | 'scheduling';
     schedulingAttempts: number;
   }>;
 }
@@ -490,9 +491,11 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
           // Debe existir ANTES del fetch: si se pierde la respuesta HTTP, el
           // navegador conserva esta identidad para SSE y /confirm.
           const durableJobId = crypto.randomUUID();
-          setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'scheduling', error: undefined } : e));
+          // Hasta recibir la respuesta del POST solo existe una identidad
+          // local: refresh puede cancelar el preflight o el multipart y no
+          // hay ningún trabajo recuperable en el backend todavía.
           setEntries((prev) => prev.map((e) => e.file === entry.file ? {
-            ...e, jobId: durableJobId, state: 'scheduling', schedulingAttempts: 0,
+            ...e, state: 'uploading', error: undefined,
           } : e));
           const buf = await convertFileToPdf(
             entry.file,
@@ -1105,7 +1108,9 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                       <td className="px-3 py-2"><span className="text-xs tabular-nums text-gray-400">{formatBytes(entry.originalSize ?? entry.file.size)}</span></td>
                       <td className="px-3 py-2"><StateChip state={entry.state} /></td>
                       <td className="px-3 py-2 text-right">
-                        {entry.state === 'converting' ? (
+                        {entry.state === 'uploading' ? (
+                          <Loader2 size={12} className="animate-spin text-blue-400 inline" />
+                        ) : entry.state === 'converting' ? (
                           <Loader2 size={12} className="animate-spin text-primary-400 inline" />
                         ) : entry.state === 'scheduling' ? (
                           (entry.schedulingAttempts ?? 0) < 3 ? (
