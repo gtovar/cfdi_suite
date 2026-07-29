@@ -153,6 +153,25 @@ def _single_job_metadata_blob(bucket, job_id: str):
     return bucket.blob(f"{SINGLE_JOB_METADATA_PREFIX}{job_id}.json")
 
 
+async def _validate_loose_batch_member(bucket, batch_id: str, job_id: str, filename: str) -> None:
+    """Autoriza una subida individual contra el manifiesto durable del lote."""
+    try:
+        uuid.UUID(batch_id)
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, "batch_id inválido") from exc
+    manifest = await batch_state_store.load_manifest(bucket, batch_id)
+    if not manifest or manifest.get(job_id) != filename:
+        raise HTTPException(404, "El archivo no pertenece a esta conversión.")
+
+
+async def _register_batch_member(batch_id: str, job_id: str) -> None:
+    """Índice Redis opcional; el manifiesto GCS sigue siendo durable."""
+    await safe_redis_call(lambda: redis_client.sadd(f"pdf:batch_ids:{batch_id}", job_id))
+    await safe_redis_call(lambda: redis_client.expire(
+        f"pdf:batch_ids:{batch_id}", BATCH_METADATA_TTL_SECONDS
+    ))
+
+
 async def _load_single_job_metadata(blob) -> dict | None:
     if not await asyncio.to_thread(blob.exists):
         return None
@@ -173,6 +192,19 @@ class GeneratePdfPayload(BaseModel):
     template_id: str
     html_shell: Optional[str] = None
     batch_id: Optional[str] = None
+
+
+LOOSE_BATCH_MAX_FILES = 499
+
+
+class LooseBatchFile(BaseModel):
+    filename: str
+    size: int
+
+
+class LooseBatchCreatePayload(BaseModel):
+    files: list[LooseBatchFile]
+    template_id: Optional[str] = None
 
 # --- NUEVOS MODELOS PARA EL FLUJO STORAGE ---
 class SignedUrlResponse(BaseModel):
@@ -341,6 +373,65 @@ async def internal_generate_pdf(payload: GeneratePdfPayload, request: Request):
         await asyncio.to_thread(publish_batch_signal, payload.batch_id, "job_done")
     return {"status": "success", "message": "PDF generado"}
 
+@router.post("/cfdi/pdf/loose-batches")
+async def create_loose_pdf_batch(payload: LooseBatchCreatePayload):
+    """Crea la lista durable antes de que el navegador empiece a subir XMLs.
+
+    No recibe bytes: evita una solicitud gigantesca y hace recuperable cada
+    archivo que llegue después, sin confundir esta lista con un Cloud Run Job.
+    """
+    if not payload.files:
+        raise HTTPException(400, "Selecciona al menos un XML.")
+    if len(payload.files) > LOOSE_BATCH_MAX_FILES:
+        raise HTTPException(
+            400,
+            "Desde 500 XML debes seleccionar un ZIP para la conversión masiva.",
+        )
+    template_id = _validate_template_id_or_400(payload.template_id or "default")
+    seen: set[str] = set()
+    for item in payload.files:
+        if not item.filename.lower().endswith(".xml") or not item.filename or item.filename in seen:
+            raise HTTPException(400, "La lista contiene nombres XML inválidos o duplicados.")
+        if item.size < 0 or item.size > PDF_SINGLE_XML_MAX_BYTES:
+            raise HTTPException(413, f"{item.filename} excede el límite de 50 MB.")
+        seen.add(item.filename)
+
+    batch_id = str(uuid.uuid4())
+    jobs = [
+        {"jobId": str(uuid.uuid4()), "filename": item.filename, "size": item.size}
+        for item in payload.files
+    ]
+    manifest = {job["jobId"]: job["filename"] for job in jobs}
+    bucket = storage.Client().bucket(BUCKET_NAME)
+    try:
+        await asyncio.to_thread(
+            _batch_manifest_blob(batch_id).upload_from_string,
+            json.dumps(manifest, sort_keys=True), content_type="application/json",
+        )
+        await asyncio.to_thread(
+            batch_state_store.loose_batch_blob(bucket, batch_id).upload_from_string,
+            json.dumps({"version": 1, "total": len(jobs)}), content_type="application/json",
+        )
+    except Exception as exc:
+        report(exc, contexto="crear_cola_xml_sueltos")
+        raise HTTPException(503, "No se pudo preparar la conversión. Intenta de nuevo.") from exc
+    return {"batchId": batch_id, "templateId": template_id, "jobs": jobs}
+
+
+@router.post("/cfdi/pdf/loose-batches/{batch_id}/files/{job_id}")
+async def upload_loose_batch_file(
+    batch_id: str,
+    job_id: str,
+    file: UploadFile = File(...),
+    template: Optional[str] = Form(None),
+):
+    """Acepta un archivo de una cola durable y lo programa sin esperar su PDF."""
+    job_id = _validated_single_job_id(job_id)
+    bucket = storage.Client().bucket(BUCKET_NAME)
+    await _validate_loose_batch_member(bucket, batch_id, job_id, file.filename or "")
+    return await _start_pdf_generation_impl(file, template, job_id, batch_id)
+
+
 @router.post("/cfdi/pdf/start")
 async def start_pdf_generation(
     file: UploadFile = File(...),
@@ -348,6 +439,12 @@ async def start_pdf_generation(
     job_id: Optional[str] = Form(None),
 ):
     job_id = _validated_single_job_id(job_id)
+    return await _start_pdf_generation_impl(file, template, job_id, None)
+
+
+async def _start_pdf_generation_impl(
+    file: UploadFile, template: Optional[str], job_id: str, batch_id: str | None,
+):
     xml_content = await _read_pdf_xml_upload(file)
     template_id = _template_id_from_form(template)
     content_sha256 = hashlib.sha256(xml_content).hexdigest()
@@ -402,7 +499,9 @@ async def start_pdf_generation(
     await batch_state_store.mark_job_pending(redis_client, job_id)
 
     try:
-        await asyncio.to_thread(enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=template_id)
+        await asyncio.to_thread(
+            enqueue_pdf_generation, job_id=job_id, xml_b64="", template_id=template_id, batch_id=batch_id
+        )
     except TaskEnqueueUncertainError as exc:
         report(exc, contexto="encolar_pdf_resultado_incierto")
         # La tarea puede existir. Devolver el ID que el navegador eligió hace
@@ -411,6 +510,9 @@ async def start_pdf_generation(
         await safe_redis_call(lambda: redis_client.set(
             f"pdf:status:{job_id}", b"scheduling", ex=BATCH_METADATA_TTL_SECONDS
         ))
+        if batch_id:
+            await _register_batch_member(batch_id, job_id)
+            await asyncio.to_thread(publish_batch_signal, batch_id, "job_accepted")
         return JSONResponse(status_code=202, content={"jobId": job_id, "status": "scheduling"})
     except Exception as exc:
         report(exc, contexto="encolar_pdf")
@@ -423,6 +525,9 @@ async def start_pdf_generation(
             detail="No se pudo programar la conversión. Intenta de nuevo.",
         ) from exc
     
+    if batch_id:
+        await _register_batch_member(batch_id, job_id)
+        await asyncio.to_thread(publish_batch_signal, batch_id, "job_accepted")
     return {"jobId": job_id, "status": "scheduled"}
 
 

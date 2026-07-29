@@ -17,10 +17,12 @@ import {
 import {
   type PdfConversionState,
   type PdfJobStatus,
+  createLoosePdfBatch,
   confirmPdfJob,
   downloadPdfJob,
   type BatchProgressPayload,
   convertFileToPdf,
+  uploadLooseBatchFile,
   triggerBlobDownload,
   startZipConversion,
   watchBatchProgress,
@@ -113,6 +115,7 @@ interface PendingLooseFiles {
   count: number;
   totalBytes: number;
   savedAt: number;
+  batchId?: string;
   jobs?: Array<{
     jobId: string;
     filename: string;
@@ -165,6 +168,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   const [wasRestored, setWasRestored] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [pendingLooseFiles, setPendingLooseFiles] = useState<PendingLooseFiles | null>(loadPendingLooseFiles);
+  const [looseSelectionError, setLooseSelectionError] = useState<string | null>(null);
 
   // Señal de "lote totalmente terminado" independiente del status derivado
   // de Redis -- si Redis perdió el detalle de status de este lote (ver
@@ -191,6 +195,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   const cancelledRef = useRef(false);
   const restoredBatchRef = useRef(false);
   const restoredLooseJobsRef = useRef(false);
+  const restoredLooseBatchRef = useRef(false);
 
   useEffect(() => {
     if (folderInputRef.current) {
@@ -213,6 +218,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
       count: entries.length,
       totalBytes: entries.reduce((sum, entry) => sum + (entry.originalSize ?? entry.file.size), 0),
       savedAt: Date.now(),
+      batchId: batchId ?? undefined,
       jobs: entries.filter((entry) => entry.jobId).map((entry) => ({
         jobId: entry.jobId!, filename: entry.file.name, size: entry.originalSize ?? entry.file.size,
         state: entry.state, schedulingAttempts: entry.schedulingAttempts ?? 0,
@@ -220,7 +226,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     };
     sessionStorage.setItem(PENDING_LOOSE_FILES_KEY, JSON.stringify(pending));
     setPendingLooseFiles(pending);
-  }, [entries]);
+  }, [entries, batchId]);
 
   // Los bytes del File no sobreviven un refresh, pero los jobs ya subidos sí.
   // Se hidratan como Files marcadores y nunca vuelven a enviarse por POST.
@@ -233,6 +239,10 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     } satisfies ConversionEntry));
     setEntries(restored);
     setPhase('running');
+    if (pendingLooseFiles.batchId) {
+      setBatchId(pendingLooseFiles.batchId);
+      return;
+    }
     for (const job of restored) {
       void waitForPdfJob(job.jobId!, undefined, (status) => {
         setEntries((prev) => prev.map((entry) => entry.jobId === job.jobId ? {
@@ -262,6 +272,11 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     // Flujo normal si son archivos XML sueltos
     const xmlFiles = files.filter((f) => f.name.endsWith('.xml'));
     if (!xmlFiles.length) return;
+    if (entries.length + xmlFiles.length >= 500) {
+      setLooseSelectionError('Desde 500 XML debes crear y seleccionar un ZIP (máximo 512 MiB comprimido).');
+      return;
+    }
+    setLooseSelectionError(null);
     setIsZipMode(false);
     setZipFile(null);
     setEntries((prev) =>
@@ -291,6 +306,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     setZipFile(null);
     sessionStorage.removeItem(PENDING_LOOSE_FILES_KEY);
     setPendingLooseFiles(null);
+    setLooseSelectionError(null);
     setBatchId(null);
     setBatchProgress(null);
     setBatchConnState(null);
@@ -327,6 +343,14 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
         id,
         (progress) => {
           setBatchProgress(progress);
+          // XML sueltos comparten este snapshot único: no abrimos un SSE por
+          // archivo. Los IDs listos son una señal durable respaldada por GCS.
+          if (!isZipMode && progress.readyIds?.length) {
+            const ready = new Set(progress.readyIds);
+            setEntries((prev) => prev.map((entry) => ready.has(entry.jobId || '')
+              ? { ...entry, state: 'done' }
+              : entry));
+          }
           if (progress.readyIds?.length) {
             setReadyFileIds((prev) => {
               const seen = new Set(prev);
@@ -345,7 +369,20 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     } catch (err) {
       setBatchError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [isZipMode]);
+
+  // Un refresh no recupera bytes de File, pero sí puede recuperar la cola
+  // durable: se reconecta una sola vez al resumen del batch, nunca a un SSE
+  // individual por cada XML.
+  useEffect(() => {
+    if (isZipMode || !batchId || !entries.some((entry) => entry.recovered) || restoredLooseBatchRef.current) return;
+    restoredLooseBatchRef.current = true;
+    setBatchProgress((current) => current ?? {
+      status: 'processing', total: entries.length, done: 0, error: 0,
+      converting: 0, pending: 0, awaitingUpload: entries.length, percentage: 0,
+    });
+    void listenToBatch(batchId);
+  }, [batchId, entries, isZipMode, listenToBatch]);
 
   // Reconexión tras refresh, o tras abrir un link compartido (?batch=<id>):
   // volver a escuchar el progreso en vez de obligar a resubir el ZIP. El
@@ -371,11 +408,12 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     const raw = localStorage.getItem(ACTIVE_BATCH_KEY);
     if (!raw) return;
     try {
-      const saved = JSON.parse(raw) as { batchId: string; total: number; startedAt: number };
+      const saved = JSON.parse(raw) as { batchId: string; total: number; startedAt: number; kind?: 'zip' | 'loose' };
       if (!saved.batchId || Date.now() - saved.startedAt > ACTIVE_BATCH_MAX_AGE_MS) {
         localStorage.removeItem(ACTIVE_BATCH_KEY);
         return;
       }
+      if (saved.kind === 'loose') return;
       setIsZipMode(true);
       setPhase('running');
       setBatchId(saved.batchId);
@@ -422,7 +460,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
   // ambos pueden no llegar nunca si Redis perdió el detalle de status de
   // este lote en particular.
   useEffect(() => {
-    if (!batchId || !isZipMode || phase !== 'running') return;
+    if (!batchId || phase !== 'running') return;
     const total = batchProgress?.total ?? 0;
     if (total > 0 && readyFileIds.length >= total) return;
 
@@ -439,7 +477,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     }, READY_FILES_POLL_MS);
 
     return () => clearInterval(tid);
-  }, [batchId, isZipMode, phase, batchProgress?.total, readyFileIds.length]);
+  }, [batchId, phase, batchProgress?.total, readyFileIds.length]);
 
   function handleRetryBatchConnection() {
     if (batchId) void listenToBatch(batchId);
@@ -457,7 +495,8 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
         localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify({
           batchId: res.batchId,
           total: res.totalFiles,
-          startedAt: Date.now()
+          startedAt: Date.now(),
+          kind: 'zip',
         }));
 
         setBatchProgress({
@@ -478,41 +517,48 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
       return;
     }
 
-    // --- EJECUCIÓN DEL MODO TRADICIONAL (XML SUELTOS DE 4 EN 4) ---
+    // --- XML SUELTOS: cola durable + 4 subidas de red ---
     if (!entries.length) return;
+    let looseBatch;
+    try {
+      looseBatch = await createLoosePdfBatch(entries.map((entry) => entry.file), templateId);
+    } catch (err) {
+      setPhase('idle');
+      setLooseSelectionError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setBatchId(looseBatch.batchId);
+    localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify({
+      batchId: looseBatch.batchId, total: looseBatch.jobs.length, startedAt: Date.now(), kind: 'loose',
+    }));
+    setBatchProgress({
+      status: 'processing', total: looseBatch.jobs.length, done: 0, error: 0,
+      converting: 0, pending: 0, awaitingUpload: looseBatch.jobs.length, percentage: 0,
+    });
+    const jobsByFilename = new Map(looseBatch.jobs.map((job) => [job.filename, job]));
+    setEntries((prev) => prev.map((entry) => {
+      const job = jobsByFilename.get(entry.file.name)!;
+      return { ...entry, jobId: job.jobId, originalSize: job.size, state: 'uploading', error: undefined };
+    }));
+    void listenToBatch(looseBatch.batchId);
     const sem = new Semaphore(4);
 
     await Promise.all(
-      entries.filter((entry) => !entry.recovered).map(async (entry) => {
+      entries.map(async (entry) => {
         if (cancelledRef.current) return;
         await sem.acquire();
         try {
           if (cancelledRef.current) return;
-          // Debe existir ANTES del fetch: si se pierde la respuesta HTTP, el
-          // navegador conserva esta identidad para SSE y /confirm.
-          const durableJobId = crypto.randomUUID();
-          // Hasta recibir la respuesta del POST solo existe una identidad
-          // local: refresh puede cancelar el preflight o el multipart y no
-          // hay ningún trabajo recuperable en el backend todavía.
+          const job = jobsByFilename.get(entry.file.name)!;
           setEntries((prev) => prev.map((e) => e.file === entry.file ? {
             ...e, state: 'uploading', error: undefined,
           } : e));
-          const buf = await convertFileToPdf(
-            entry.file,
-            templateId,
-            (job) => setEntries((prev) => prev.map((e) => e.file === entry.file ? {
-              ...e,
-              jobId: job.jobId,
-              state: job.status === 'scheduling' ? 'scheduling' : 'converting',
-              schedulingAttempts: job.status === 'scheduling' ? 1 : 0,
-            } : e)),
-            (status: PdfJobStatus) => setEntries((prev) => prev.map((e) => e.file === entry.file ? {
-              ...e,
-              state: status === 'scheduling' ? 'scheduling' : 'converting',
-            } : e)),
-            durableJobId,
-          );
-          setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done', buffer: buf } : e));
+          const accepted = await uploadLooseBatchFile(looseBatch.batchId, job.jobId, entry.file, templateId);
+          setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+            ...e, jobId: accepted.jobId,
+            state: accepted.status === 'scheduling' ? 'scheduling' : 'converting',
+            schedulingAttempts: accepted.status === 'scheduling' ? 1 : 0,
+          } : e));
         } catch (err) {
           setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'error', error: err instanceof Error ? err.message : String(err) } : e));
         } finally {
@@ -520,8 +566,6 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
         }
       }),
     );
-
-    if (!cancelledRef.current) setPhase('done');
   }, [entries, isZipMode, zipFile, templateId]);
 
   async function handleDownloadBatchZip() {
@@ -1060,6 +1104,12 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                   <span className="flex items-center gap-1 text-primary-600"><Loader2 size={12} className="animate-spin" /> Procesando de 4 en 4...</span>
                 ) : null}
               </div>
+              {batchProgress && (
+                <p className="text-tiny text-gray-500">
+                  {batchProgress.awaitingUpload ?? 0} por subir · {batchProgress.pending} en cola · {batchProgress.converting} convirtiendo
+                </p>
+              )}
+              <p className="text-tiny text-gray-400">{formatBytes(entries.reduce((sum, entry) => sum + (entry.originalSize ?? entry.file.size), 0))} seleccionados</p>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
                 <div className="h-full rounded-full bg-primary-500 transition-all duration-300" style={{ width: total > 0 ? `${((done + errors) / total) * 100}%` : '0%' }} />
               </div>
@@ -1070,6 +1120,12 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                 {isDownloadingAll ? 'Empaquetando...' : 'Descargar todos (ZIP)'}
               </button>
             )}
+          </div>
+        )}
+
+        {!isZipMode && looseSelectionError && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {looseSelectionError}
           </div>
         )}
 

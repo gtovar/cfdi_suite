@@ -10,6 +10,18 @@ export interface PdfJobStart {
   status: PdfJobStatus;
 }
 
+export interface LooseBatchJob {
+  jobId: string;
+  filename: string;
+  size: number;
+}
+
+export interface LooseBatchStart {
+  batchId: string;
+  templateId: string;
+  jobs: LooseBatchJob[];
+}
+
 // Estructura de control para el progreso global de un lote ZIP
 export interface BatchProgressPayload {
   // 'extracting': el ZIP todavía se está desempaquetando y subiendo a GCS —
@@ -22,6 +34,7 @@ export interface BatchProgressPayload {
   error: number;
   converting: number;
   pending: number;
+  awaitingUpload?: number;
   percentage: number;
   message?: string;
   // Solo presente durante status "extracting" — cuántos XMLs ya se subieron.
@@ -183,6 +196,32 @@ export async function startPdfJob(file: File, templateId?: string, jobId = crypt
   if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
   const res = await apiFetch('/api/cfdi/pdf/start', { method: 'POST', body: fd });
   if (!res.ok) throw new Error(`Error ${res.status} al iniciar conversión`);
+  return res.json() as Promise<PdfJobStart>;
+}
+
+export async function createLoosePdfBatch(files: File[], templateId?: string): Promise<LooseBatchStart> {
+  const res = await apiFetch('/api/cfdi/pdf/loose-batches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      files: files.map((file) => ({ filename: file.name, size: file.size })),
+      template_id: templateId,
+    }),
+  });
+  if (!res.ok) throw new Error(`Error ${res.status} al preparar conversión masiva`);
+  return res.json() as Promise<LooseBatchStart>;
+}
+
+export async function uploadLooseBatchFile(
+  batchId: string, jobId: string, file: File, templateId?: string,
+): Promise<PdfJobStart> {
+  const fd = new FormData();
+  fd.append('file', file);
+  if (templateId) fd.append('template', JSON.stringify({ _id: templateId }));
+  const res = await apiFetch(`/api/cfdi/pdf/loose-batches/${batchId}/files/${jobId}`, {
+    method: 'POST', body: fd,
+  });
+  if (!res.ok) throw new Error(`Error ${res.status} al subir XML`);
   return res.json() as Promise<PdfJobStart>;
 }
 

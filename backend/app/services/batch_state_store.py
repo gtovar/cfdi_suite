@@ -41,6 +41,15 @@ def batch_manifest_blob(bucket, batch_id: str):
     return bucket.blob(f"xml_temp/_manifest_{batch_id}.json")
 
 
+def loose_batch_blob(bucket, batch_id: str):
+    """Marca durable que distingue una cola de XML sueltos de un ZIP."""
+    return bucket.blob(f"xml_temp/_loose_batch_{batch_id}.json")
+
+
+async def is_loose_batch(bucket, batch_id: str) -> bool:
+    return await asyncio.to_thread(loose_batch_blob(bucket, batch_id).exists)
+
+
 async def load_manifest(bucket, batch_id: str) -> dict[str, str] | None:
     """job_id -> filename, leído de xml_temp/_manifest_{batch_id}.json en GCS.
 
@@ -64,6 +73,9 @@ async def resolve_job_ids(redis_client, bucket, batch_id: str) -> list[str]:
     """Membresía del batch: Redis (pdf:batch_ids) con el manifiesto de GCS
     como respaldo. Compartido por list_ready_files, batch_estimated_size y
     download_batch_zip."""
+    if await is_loose_batch(bucket, batch_id):
+        manifest = await load_manifest(bucket, batch_id)
+        return list(manifest.keys()) if manifest else []
     registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
     job_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
     if not job_ids:
@@ -100,12 +112,18 @@ async def reconcile_none_statuses_with_gcs(
     # prefetch de download_batch_zip.
     sem = asyncio.Semaphore(8)
 
-    async def _exists(jid: str) -> tuple[str, bool]:
+    async def _exists(jid: str) -> tuple[str, str]:
         async with sem:
-            return jid, await asyncio.to_thread(bucket.blob(f"pdfs/{jid}.pdf").exists)
+            if await asyncio.to_thread(bucket.blob(f"pdfs/{jid}.pdf").exists):
+                return jid, "done"
+            # Un manifiesto de XML sueltos se crea ANTES de las subidas. Si
+            # todavía no existe su XML, no está en Cloud Tasks: la UI debe
+            # mostrarlo como pendiente de subir, no como "convirtiendo".
+            xml_exists = await asyncio.to_thread(bucket.blob(f"xml_temp/{jid}.xml").exists)
+            return jid, "pending" if xml_exists else "awaiting_upload"
 
-    for jid, exists in await asyncio.gather(*[_exists(jid) for jid in to_check]):
-        status_by_job[jid] = "done" if exists else "pending"
+    for jid, status in await asyncio.gather(*[_exists(jid) for jid in to_check]):
+        status_by_job[jid] = status
 
 
 async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
@@ -122,8 +140,12 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
     if extracting_error:
         return {"status": "error", "message": extracting_error.decode("utf-8")}
 
+    loose_batch = await is_loose_batch(bucket, batch_id)
     total_bytes = await safe_redis_call(lambda: redis_client.get(f"pdf:extracting_total:{batch_id}"))
     manifest: dict[str, str] | None = None
+    if loose_batch:
+        manifest = await load_manifest(bucket, batch_id)
+        total_bytes = len(manifest) if manifest else None
     if total_bytes is None:
         # Puede ser la ventana breve al arrancar (aún no se conoce el total)
         # o que Redis no esté respondiendo -- en ese segundo caso, el
@@ -144,7 +166,9 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
 
     registered_raw = await safe_redis_call(lambda: redis_client.smembers(f"pdf:batch_ids:{batch_id}"))
     registered_ids = [rid.decode("utf-8") for rid in registered_raw] if registered_raw else []
-    if not registered_ids:
+    if loose_batch and manifest:
+        registered_ids = list(manifest.keys())
+    elif not registered_ids:
         if manifest is None:
             manifest = await load_manifest(bucket, batch_id)
         if manifest:
@@ -172,7 +196,7 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
             "percentage": int((extracted / total) * 100) if total else 0,
         }
 
-    done = error = converting = 0
+    done = error = converting = awaiting_upload = 0
     ready_ids: list[str] = []
     statuses = None
     if registered_ids:
@@ -203,10 +227,13 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
             error += 1
         elif status == "converting":
             converting += 1
+        elif status == "awaiting_upload":
+            awaiting_upload += 1
 
-    registered_pending = len(registered_ids) - done - error - converting
+    registered_pending = len(registered_ids) - done - error - converting - awaiting_upload
     not_yet_registered = total - len(registered_ids)
-    pending = max(registered_pending, 0) + max(not_yet_registered, 0)
+    pending = max(registered_pending, 0)
+    awaiting_upload += max(not_yet_registered, 0)
     processed = done + error
 
     return {
@@ -216,6 +243,7 @@ async def get_batch_snapshot(redis_client, bucket, batch_id: str) -> dict:
         "error": error,
         "converting": converting,
         "pending": pending,
+        "awaitingUpload": awaiting_upload,
         "percentage": int((processed / total) * 100),
         # Mismo dato que get_ready_job_ids, calculado gratis del loop de
         # arriba (sin MGET extra) -- reemplaza a readyIds del extinto canal

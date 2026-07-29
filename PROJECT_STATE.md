@@ -1810,6 +1810,16 @@ si vale la pena arreglarla.
   el árbol limpio (13/13 fallan igual) y se restauró el stash. No corregido:
   requiere reparar la configuración del runner/frontend en una tarea separada.
 
+- **`pdf-download.test.ts` depende de `VITE_PUSHER_KEY` no configurada en el
+  runner local (2026-07-29)** — ejecutar `npx vitest run
+  src/lib/pdf-download.test.ts` falla 13/23 pruebas de `watchBatchProgress`
+  antes de sus aserciones con `VITE_PUSHER_KEY no configurada`. El archivo de
+  prueba y la guarda de producción ya existían antes de la cola de XML
+  sueltos; al ejecutar exactamente la misma suite con
+  `VITE_PUSHER_KEY=test-key`, pasan **23/23**. No corregido: la configuración
+  de entorno del runner es una tarea separada; no debe ocultarse con un valor
+  de producción en el código de la app.
+
 - **Suite backend: 10 fallos reproducidos sin Plan 03 (2026-07-28)** — se
   creó el worktree temporal `/private/tmp/cfdi-plan03-baseline` en el padre
   `d754218` y se ejecutó `backend/.venv/bin/python -m pytest backend/tests -q`.
