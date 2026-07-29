@@ -43,6 +43,7 @@ interface ConversionEntry {
   jobId?: string;
   schedulingAttempts?: number;
   recovered?: boolean;
+  originalSize?: number;
   error?: string;
   buffer?: ArrayBuffer;
 }
@@ -209,10 +210,10 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     if (!entries.length) return;
     const pending: PendingLooseFiles = {
       count: entries.length,
-      totalBytes: entries.reduce((sum, entry) => sum + entry.file.size, 0),
+      totalBytes: entries.reduce((sum, entry) => sum + (entry.originalSize ?? entry.file.size), 0),
       savedAt: Date.now(),
       jobs: entries.filter((entry) => entry.jobId).map((entry) => ({
-        jobId: entry.jobId!, filename: entry.file.name, size: entry.file.size,
+        jobId: entry.jobId!, filename: entry.file.name, size: entry.originalSize ?? entry.file.size,
         state: entry.state, schedulingAttempts: entry.schedulingAttempts ?? 0,
       })),
     };
@@ -226,7 +227,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
     if (restoredLooseJobsRef.current || !pendingLooseFiles?.jobs?.length) return;
     restoredLooseJobsRef.current = true;
     const restored = pendingLooseFiles.jobs.map((job) => ({
-      file: new File([], job.filename), jobId: job.jobId, state: job.state,
+      file: new File([], job.filename), jobId: job.jobId, state: job.state, originalSize: job.size,
       schedulingAttempts: job.schedulingAttempts, recovered: true,
     } satisfies ConversionEntry));
     setEntries(restored);
@@ -617,6 +618,14 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
       setEntries((prev) => prev.map((e) => e.file === entry.file ? {
         ...e, state: result.status === 'scheduling' ? 'scheduling' : 'converting',
       } : e));
+      if (result.status !== 'done') {
+        await waitForPdfJob(entry.jobId, undefined, (status) => {
+          setEntries((prev) => prev.map((e) => e.file === entry.file ? {
+            ...e, state: status === 'scheduling' ? 'scheduling' : 'converting',
+          } : e));
+        });
+      }
+      setEntries((prev) => prev.map((e) => e.file === entry.file ? { ...e, state: 'done' } : e));
     } catch (err) {
       setEntries((prev) => prev.map((e) => e.file === entry.file ? {
         ...e, state: 'error', error: err instanceof Error ? err.message : String(err),
@@ -1093,7 +1102,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                         <span className="block max-w-[280px] truncate font-mono text-xs text-gray-800" title={entry.file.name}>{entry.file.name}</span>
                         {entry.error && <span className="block truncate text-tiny text-red-500" title={entry.error}>{entry.error}</span>}
                       </td>
-                      <td className="px-3 py-2"><span className="text-xs tabular-nums text-gray-400">{formatBytes(entry.file.size)}</span></td>
+                      <td className="px-3 py-2"><span className="text-xs tabular-nums text-gray-400">{formatBytes(entry.originalSize ?? entry.file.size)}</span></td>
                       <td className="px-3 py-2"><StateChip state={entry.state} /></td>
                       <td className="px-3 py-2 text-right">
                         {entry.state === 'converting' ? (
