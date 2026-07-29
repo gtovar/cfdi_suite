@@ -325,5 +325,110 @@ class GetBatchStatusGcsFallbackTests(unittest.TestCase):
             self.assertEqual(ctx.exception.status_code, 404)
 
 
+@unittest.skipIf(batch_router is None, f"backend no disponible: {_IMPORT_ERROR}")
+class DurableAnalysisIngressTests(unittest.TestCase):
+    def test_crea_manifiesto_antes_de_recibir_xmls(self) -> None:
+        bucket = MagicMock()
+        with (
+            patch.object(batch_router, "_analysis_bucket", return_value=bucket),
+            patch.object(batch_router, "redis_client"),
+        ):
+            result = _run(batch_router.create_durable_analysis_batch(
+                batch_router.DurableAnalysisBatchCreatePayload(
+                    files=[batch_router.DurableAnalysisFile(filename="uno.xml", size=7)]
+                )
+            ))
+
+        self.assertEqual(result["status"], "awaiting_upload")
+        self.assertEqual(len(result["jobs"]), 1)
+        job = result["jobs"][0]
+        self.assertEqual(job["filename"], "uno.xml")
+        bucket.blob.return_value.upload_from_string.assert_called_once()
+        stored = json.loads(bucket.blob.return_value.upload_from_string.call_args.args[0])
+        self.assertEqual(stored["jobs"][job["jobId"]]["filename"], "uno.xml")
+
+    def test_start_durable_reintenta_todos_los_jobs_si_el_marker_ya_existe(self) -> None:
+        batch_id = "2e4af825-2316-4c20-95d7-2641aa5a6771"
+        job_a = "68c7e49c-3d50-4bdc-8c83-9776f242aae8"
+        job_b = "b17ba091-5d51-4055-8f55-34177d186476"
+
+        class PreconditionFailed(Exception):
+            pass
+
+        blobs = []
+        for job_id in (job_a, job_b):
+            blob = MagicMock()
+            blob.name = f"xml_temp/analysis_{batch_id}/{job_id}.xml"
+            blobs.append(blob)
+        bucket = MagicMock()
+        bucket.list_blobs.return_value = blobs
+        bucket.blob.return_value.upload_from_string.side_effect = PreconditionFailed()
+        manifest = {"version": 1, "total": 2, "jobs": {
+            job_a: {"filename": "uno.xml", "size": 7},
+            job_b: {"filename": "dos.xml", "size": 7},
+        }}
+
+        with (
+            patch.object(batch_router, "_analysis_bucket", return_value=bucket),
+            patch.object(batch_router, "_load_durable_analysis_manifest", return_value=manifest),
+            patch.object(batch_router, "enqueue_cfdi_analysis") as enqueue,
+            patch.object(batch_router, "redis_client"),
+        ):
+            result = _run(batch_router.start_batch_analysis(batch_id))
+
+        self.assertTrue(result["alreadyStarted"])
+        self.assertEqual(enqueue.call_count, 2)
+        enqueue.assert_any_call(batch_id, "uno.xml", f"xml_temp/analysis_{batch_id}/{job_a}.xml", job_a)
+        enqueue.assert_any_call(batch_id, "dos.xml", f"xml_temp/analysis_{batch_id}/{job_b}.xml", job_b)
+
+    def test_durable_status_usa_manifiesto_y_gcs_sin_redis(self) -> None:
+        batch_id = "2e4af825-2316-4c20-95d7-2641aa5a6771"
+        job_a = "68c7e49c-3d50-4bdc-8c83-9776f242aae8"
+        job_b = "b17ba091-5d51-4055-8f55-34177d186476"
+        uploaded = MagicMock()
+        uploaded.name = f"xml_temp/analysis_{batch_id}/{job_a}.xml"
+        bucket = MagicMock()
+        bucket.list_blobs.return_value = [uploaded]
+        manifest = {"version": 1, "total": 2, "jobs": {
+            job_a: {"filename": "uno.xml", "size": 7},
+            job_b: {"filename": "dos.xml", "size": 7},
+        }}
+        with (
+            patch.object(batch_router, "_analysis_bucket", return_value=bucket),
+            patch.object(batch_router, "_load_durable_analysis_manifest", return_value=manifest),
+            patch.object(batch_router, "_load_results_from_gcs", return_value=[]),
+            patch.object(batch_router, "redis_client") as redis_client,
+        ):
+            result = _run(batch_router.get_batch_status(batch_id))
+
+        self.assertEqual(result["status"], "awaiting_upload")
+        self.assertEqual(result["upload"], {"total": 2, "uploaded": 1, "awaitingUpload": 1})
+        redis_client.hgetall.assert_not_called()
+
+
+class DurableAnalysisDispatchTests(unittest.TestCase):
+    def test_tarea_durable_tiene_nombre_determinista_y_job_id(self) -> None:
+        from backend.app.services import task_dispatcher
+
+        batch_id = "2e4af825-2316-4c20-95d7-2641aa5a6771"
+        job_id = "68c7e49c-3d50-4bdc-8c83-9776f242aae8"
+        client = MagicMock()
+        client.queue_path.return_value = "queues/pdf-generator-queue"
+        client.task_path.side_effect = lambda *_parts: "/".join(_parts)
+        response = MagicMock()
+        response.name = "created-task"
+        client.create_task.return_value = response
+
+        with patch.object(task_dispatcher, "get_tasks_client", return_value=client):
+            task_dispatcher.enqueue_cfdi_analysis(
+                batch_id, "uno.xml", f"xml_temp/analysis_{batch_id}/{job_id}.xml", job_id,
+            )
+
+        task = client.create_task.call_args.kwargs["request"]["task"]
+        self.assertTrue(task["name"].endswith(f"analysis-{batch_id}-{job_id}"))
+        payload = json.loads(task["http_request"]["body"])
+        self.assertEqual(payload["job_id"], job_id)
+
+
 if __name__ == "__main__":
     unittest.main()

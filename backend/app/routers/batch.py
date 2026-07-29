@@ -5,6 +5,7 @@ import uuid
 import json
 import os
 import re
+import hashlib
 from pathlib import Path
 # defusedxml, no la stdlib: el XML lo sube el usuario. xml.etree no resuelve
 # entidades EXTERNAS (un file:// da ParseError), pero sí expande las INTERNAS,
@@ -19,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from google.cloud import storage
 from pusher import Pusher
 import sentry_sdk
@@ -107,6 +109,48 @@ else:
 MAX_FILES = 500
 REDIS_TTL = 86400  # 24 horas en segundos
 
+
+class DurableAnalysisFile(BaseModel):
+    filename: str
+    size: int
+
+
+class DurableAnalysisBatchCreatePayload(BaseModel):
+    files: list[DurableAnalysisFile]
+
+
+def _durable_analysis_manifest_blob(bucket, batch_id: str):
+    """Manifiesto que existe antes de recibir los bytes de cada XML.
+
+    A diferencia del endpoint multipart histórico, el manifiesto conserva el
+    total esperado aunque el usuario recargue o una subida individual falle.
+    """
+    return bucket.blob(f"xml_temp/analysis_manifest_{batch_id}.json")
+
+
+def _durable_analysis_xml_path(batch_id: str, job_id: str) -> str:
+    # job_id, no filename: dos archivos con el mismo nombre nunca pueden
+    # sobrescribirse dentro del lote si la política de UI cambia en el futuro.
+    return f"xml_temp/analysis_{batch_id}/{job_id}.xml"
+
+
+async def _load_durable_analysis_manifest(bucket, batch_id: str) -> dict | None:
+    try:
+        raw = await asyncio.to_thread(_durable_analysis_manifest_blob(bucket, batch_id).download_as_bytes)
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("jobs"), dict):
+        return None
+    return data
+
+
+def _assert_job_id(job_id: str) -> str:
+    try:
+        return str(uuid.UUID(job_id))
+    except ValueError as exc:
+        raise HTTPException(400, "Identificador de archivo inválido") from exc
+
 def _extract_header(xml_bytes: bytes) -> dict[str, str]:
     try:
         root = ET.fromstring(xml_bytes.decode("utf-8", errors="replace"))
@@ -157,6 +201,94 @@ async def _read_upload_limited(f: UploadFile, *, total_bytes: int) -> tuple[str,
             raise HTTPException(413, "El lote excede el límite agregado de 100 MB")
         chunks.append(chunk)
     return filename, b"".join(chunks), total_bytes + file_bytes
+
+
+@router.post("/loose-batches")
+async def create_durable_analysis_batch(payload: DurableAnalysisBatchCreatePayload):
+    """Reserva un lote de análisis sin transportar los XML en el POST inicial."""
+    if not payload.files:
+        raise HTTPException(400, "Selecciona al menos un XML")
+    if len(payload.files) > MAX_FILES:
+        raise HTTPException(400, f"Máximo {MAX_FILES} archivos por lote")
+
+    seen: set[str] = set()
+    for item in payload.files:
+        if not item.filename.lower().endswith(".xml") or not item.filename or item.filename in seen:
+            raise HTTPException(400, "La lista contiene nombres XML inválidos o duplicados")
+        if item.size < 0 or item.size > BATCH_FILE_MAX_BYTES:
+            raise HTTPException(413, f"{item.filename} excede el límite de 20 MB")
+        seen.add(item.filename)
+
+    batch_id = str(uuid.uuid4())
+    jobs = {
+        str(uuid.uuid4()): {"filename": item.filename, "size": item.size}
+        for item in payload.files
+    }
+    manifest = {"version": 1, "total": len(jobs), "jobs": jobs}
+    bucket = _analysis_bucket()
+    try:
+        await asyncio.to_thread(
+            _durable_analysis_manifest_blob(bucket, batch_id).upload_from_string,
+            json.dumps(manifest, sort_keys=True), content_type="application/json", if_generation_match=0,
+        )
+    except Exception as exc:
+        report(exc, contexto="crear_lote_analisis_durable")
+        raise HTTPException(503, "No se pudo preparar el lote. Intenta de nuevo.") from exc
+
+    # Redis acelera el camino normal, pero el manifiesto de GCS es la fuente
+    # de verdad incluso si esta escritura se pierde por cuota o disponibilidad.
+    safe_redis_call_sync(lambda: (
+        redis_client.pipeline()
+        .hmset(_batch_hash_key(batch_id), {"total_files": len(jobs), "completed_count": 0, "status": "awaiting_upload"})
+        .expire(_batch_hash_key(batch_id), REDIS_TTL)
+        .execute()
+    ))
+    safe_redis_call_sync(lambda: redis_client.expire(_batch_results_key(batch_id), REDIS_TTL))
+    return {
+        "batchId": batch_id,
+        "status": "awaiting_upload",
+        "jobs": [{"jobId": job_id, **job} for job_id, job in jobs.items()],
+    }
+
+
+@router.post("/loose-batches/{batch_id}/files/{job_id}")
+async def upload_durable_analysis_file(
+    batch_id: str, job_id: str, file: UploadFile = File(...),
+):
+    """Guarda un XML individual de un lote durable, sin encolar todavía."""
+    batch_id = _assert_batch_id(batch_id)
+    job_id = _assert_job_id(job_id)
+    bucket = _analysis_bucket()
+    manifest = await _load_durable_analysis_manifest(bucket, batch_id)
+    job = (manifest or {}).get("jobs", {}).get(job_id)
+    if not job or file.filename != job.get("filename"):
+        raise HTTPException(404, "El archivo no pertenece a este lote")
+
+    filename, raw, _ = await _read_upload_limited(file, total_bytes=0)
+    if len(raw.decode("utf-8", errors="replace")) > ANALYZE_CFDI_XML_MAX_CHARS:
+        raise HTTPException(413, f"El archivo {filename} excede el límite de {ANALYZE_CFDI_XML_MAX_CHARS} caracteres")
+    if not _is_valid_xml_content(raw):
+        raise HTTPException(400, f"El archivo {filename} no parece ser un XML válido")
+    if len(raw) != job.get("size"):
+        raise HTTPException(409, "El tamaño del XML no coincide con el lote preparado")
+
+    blob = bucket.blob(_durable_analysis_xml_path(batch_id, job_id))
+    try:
+        await asyncio.to_thread(blob.upload_from_string, raw, content_type="application/xml", if_generation_match=0)
+        return {"batchId": batch_id, "jobId": job_id, "status": "uploaded"}
+    except Exception as exc:
+        # Un reintento después de una respuesta perdida debe conservar el
+        # primer contenido, nunca sobrescribirlo. Comparamos bytes para que
+        # el mismo jobId no pueda mutar de identidad.
+        try:
+            existing = await asyncio.to_thread(blob.download_as_bytes)
+        except Exception:
+            report(exc, contexto="subir_xml_analisis_individual")
+            raise HTTPException(503, "No se pudo guardar el XML. Intenta de nuevo.") from exc
+        if hashlib.sha256(existing).digest() != hashlib.sha256(raw).digest():
+            raise HTTPException(409, "Ese job_id ya corresponde a otro XML")
+        return {"batchId": batch_id, "jobId": job_id, "status": "already_uploaded"}
+
 
 @router.post("/analyze")
 async def batch_analyze(
@@ -232,6 +364,54 @@ async def start_batch_analysis(batch_id: str):
     """
     batch_id = _assert_batch_id(batch_id)
     bucket = _analysis_bucket()
+
+    # Nuevo camino durable: el manifiesto sabe qué se esperaba subir, aun si
+    # el navegador se recargó antes de terminar. No iniciar parcialmente evita
+    # que una fila desaparecida se interprete como XML analizado.
+    manifest = await _load_durable_analysis_manifest(bucket, batch_id)
+    if manifest:
+        jobs: dict[str, dict] = manifest["jobs"]
+        uploaded_blobs = await asyncio.to_thread(
+            lambda: list(bucket.list_blobs(prefix=f"xml_temp/analysis_{batch_id}/"))
+        )
+        uploaded_ids = {Path(blob.name).stem for blob in uploaded_blobs}
+        missing = [job_id for job_id in jobs if job_id not in uploaded_ids]
+        if missing:
+            raise HTTPException(409, f"Faltan {len(missing)} XML por subir antes de iniciar el análisis")
+
+        start_marker = bucket.blob(f"xml_temp/analysis_start_{batch_id}.json")
+        already_started = False
+        try:
+            await asyncio.to_thread(
+                start_marker.upload_from_string,
+                json.dumps({"batch_id": batch_id, "version": 1}),
+                content_type="application/json", if_generation_match=0,
+            )
+        except Exception as exc:
+            if exc.__class__.__name__ in {"PreconditionFailed", "Conflict"}:
+                already_started = True
+            else:
+                raise
+
+        # Siempre recorremos todos los jobs, inclusive con marker existente:
+        # task names deterministas hacen AlreadyExists exitoso y permiten
+        # reanudar un /start que se cayó a mitad de su despacho.
+        try:
+            for job_id, job in jobs.items():
+                enqueue_cfdi_analysis(
+                    batch_id, job["filename"], _durable_analysis_xml_path(batch_id, job_id), job_id,
+                )
+        except Exception as exc:
+            report(exc, contexto="encolar_lote_analisis_durable")
+            raise HTTPException(503, "No se pudo confirmar toda la programación. Reintenta este lote.") from exc
+
+        safe_redis_call_sync(lambda: redis_client.hset(_batch_hash_key(batch_id), "status", "processing"))
+        return {
+            "batchId": batch_id, "status": "processing", "totalFiles": len(jobs),
+            "alreadyStarted": already_started,
+        }
+
+    # Compatibilidad con lotes históricos creados por POST /analyze.
     blobs = await asyncio.to_thread(
         lambda: list(bucket.list_blobs(prefix=f"xml_temp/analysis_{batch_id}/"))
     )
@@ -297,11 +477,37 @@ async def _load_results_from_gcs(bucket, batch_id: str) -> list[dict]:
     return list(await asyncio.gather(*[_read(b) for b in blobs]))
 
 
+async def _get_durable_analysis_status(bucket, batch_id: str, manifest: dict) -> dict:
+    """Snapshot que no depende de Redis para total, uploads ni resultados."""
+    jobs: dict[str, dict] = manifest["jobs"]
+    uploaded_blobs = await asyncio.to_thread(
+        lambda: list(bucket.list_blobs(prefix=f"xml_temp/analysis_{batch_id}/"))
+    )
+    uploaded_ids = {Path(blob.name).stem for blob in uploaded_blobs}
+    uploaded = sum(1 for job_id in jobs if job_id in uploaded_ids)
+    results = await _load_results_from_gcs(bucket, batch_id)
+    response = _build_status_response(total=len(jobs), completed=len(results), results=results)
+    if uploaded < len(jobs):
+        response["status"] = "awaiting_upload"
+    elif response["status"] != "done":
+        marker = bucket.blob(f"xml_temp/analysis_start_{batch_id}.json")
+        if not await asyncio.to_thread(marker.exists):
+            response["status"] = "ready"
+    response["upload"] = {
+        "total": len(jobs), "uploaded": uploaded, "awaitingUpload": len(jobs) - uploaded,
+    }
+    return response
+
+
 @router.get("/status/{batch_id}")
 async def get_batch_status(batch_id: str):
     """Endpoint de consulta (polling) para el frontend y rehidratación de estado."""
-    batch_meta = safe_redis_call_sync(lambda: redis_client.hgetall(_batch_hash_key(batch_id)))
     bucket = _analysis_bucket()
+    manifest = await _load_durable_analysis_manifest(bucket, batch_id)
+    if manifest:
+        return await _get_durable_analysis_status(bucket, batch_id, manifest)
+
+    batch_meta = safe_redis_call_sync(lambda: redis_client.hgetall(_batch_hash_key(batch_id)))
 
     if not batch_meta:
         # Puede ser que el lote de verdad no exista, o que Redis no haya
@@ -333,6 +539,7 @@ async def batch_worker_task(request: Request):
     payload = await request.json()
     batch_id = payload["batch_id"]
     filename = payload["filename"]
+    job_id = payload.get("job_id")
     # payload.get("redis_key"): tareas ya encoladas en Cloud Tasks ANTES de
     # este deploy (migración de Redis a GCS) siguen trayendo el campo viejo.
     # Un valor así nunca es una ruta de GCS válida -- bucket.blob(...) sobre
@@ -361,6 +568,15 @@ async def batch_worker_task(request: Request):
     #    de que Cloud Tasks llegara a leerlo (ver auditoría de resiliencia
     #    2026-07-23).
     bucket = _analysis_bucket()
+    # Los trabajos nuevos tienen identidad durable por archivo. Si Cloud
+    # Tasks reintenta después de haber recibido 200, el resultado ya guardado
+    # es autoridad y no se vuelve a analizar ni a incrementar Redis.
+    result_path = (
+        f"xml_temp/analysis_results_{batch_id}/{job_id}.json"
+        if job_id else f"xml_temp/analysis_results_{batch_id}/{filename}.json"
+    )
+    if job_id and await asyncio.to_thread(bucket.blob(result_path).exists):
+        return {"status": "already_processed"}
     try:
         xml_bytes = await asyncio.to_thread(bucket.blob(gcs_path).download_as_bytes)
     except Exception:
@@ -409,6 +625,7 @@ async def batch_worker_task(request: Request):
         error_msg = "No se pudo analizar el archivo"
 
     parsed_result = {
+        "job_id": job_id,
         "filename": filename,
         "status": status,
         "profile": profile,
@@ -425,7 +642,6 @@ async def batch_worker_task(request: Request):
     # calculado con éxito) nunca debe perderse solo porque el REPORTE a Redis
     # falle; mismo principio ya aplicado en pdf.py tras el incidente del 23
     # de julio.
-    result_path = f"xml_temp/analysis_results_{batch_id}/{filename}.json"
     await asyncio.to_thread(
         bucket.blob(result_path).upload_from_string,
         json.dumps(parsed_result),

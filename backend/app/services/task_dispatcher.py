@@ -129,7 +129,7 @@ def enqueue_zip_extraction(gcs_path: str, batch_id: str, template_id: str):
     response = client.create_task(request={"parent": parent, "task": task})
     return response.name
 
-def enqueue_cfdi_analysis(batch_id: str, filename: str, gcs_path: str):
+def enqueue_cfdi_analysis(batch_id: str, filename: str, gcs_path: str, job_id: str | None = None):
     """Inyecta el análisis asíncrono de un CFDI a la cola de Cloud Tasks.
 
     gcs_path apunta al XML ya subido a GCS (xml_temp_analysis/{batch_id}/{filename})
@@ -141,7 +141,10 @@ def enqueue_cfdi_analysis(batch_id: str, filename: str, gcs_path: str):
     payload = {
         "batch_id": batch_id,
         "filename": filename,
-        "gcs_path": gcs_path  # <-- Enviamos la ruta de acceso en lugar del string pesado
+        "gcs_path": gcs_path,  # <-- Enviamos la ruta de acceso en lugar del string pesado
+        # Los lotes durables asignan un id por archivo. Los lotes antiguos no
+        # lo traen, por compatibilidad con las tareas que ya estaban creadas.
+        "job_id": job_id,
     }
 
     task = {
@@ -154,7 +157,14 @@ def enqueue_cfdi_analysis(batch_id: str, filename: str, gcs_path: str):
         }
     }
     try:
-        client.create_task(request={"parent": parent, "task": task})
+        # Un nombre estable convierte un retry de /start (incluso después de
+        # que ya se escribió su marcador GCS) en una operación segura. El
+        # formato sólo usa letras, dígitos y guiones; UUIDs caben con margen
+        # en el límite de 500 caracteres de Cloud Tasks.
+        task_id = f"analysis-{batch_id}-{job_id}" if job_id else None
+        if task_id:
+            return _create_task_idempotently(client, parent, task, task_id)
+        return client.create_task(request={"parent": parent, "task": task}).name
     except InvalidArgument as e:
         if "Task size too large" in str(e):
             # Le avisamos a Sentry adjuntando el nombre del archivo culpable

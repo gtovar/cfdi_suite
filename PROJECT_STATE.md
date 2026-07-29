@@ -1793,6 +1793,15 @@ veredicto (`pendiente`) — nueva escalada futura se decide con el usuario.
 
 ## Hallazgos preexistentes encontrados al pasar (no arreglados, solo anotados)
 
+- **2026-07-29 — `frontend/npm run lint` (TypeScript):** 10 errores ya
+  presentes, todos fuera del cambio de ingesta durable de Análisis masivo:
+  seis en `ConversionMasivaPage.test.tsx`, tres en
+  `ConversionMasivaPage.tsx` y uno en `src/lib/pdf-download.ts`. Evidencia:
+  se guardaron temporalmente los cuatro archivos modificados de esta tarea con
+  `git stash`, se ejecutó `npm run lint` sobre `main` limpio y se reprodujo la
+  misma lista exacta; después se aplicó el stash sin conflictos. No se
+  corrigieron porque no pertenecen a esta tarea.
+
 Esta sección existe porque, en la sesión del 2026-07-12 (batch masivo/Cloud
 Run Job), varias veces se dijo "esto ya fallaba antes, no es de este cambio"
 sin dejar rastro en ningún lado — quedaba solo en la conversación, no en un

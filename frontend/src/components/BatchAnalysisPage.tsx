@@ -54,8 +54,56 @@ type Phase = 'idle' | 'processing' | 'done';
 type FilterStatus = 'all' | 'ok' | 'con_errores' | 'error';
 
 interface BatchStatusPayload {
-  status: 'ready' | 'processing' | 'done';
+  status: 'ready' | 'uploading' | 'processing' | 'done';
   results: BatchFileResult[];
+  total?: number;
+  awaitingUpload?: number;
+  uploaded?: number;
+  pending?: number;
+  processing?: number;
+  done?: number;
+  error?: number;
+  upload?: { total: number; uploaded: number; awaitingUpload: number };
+}
+
+interface DurableAnalysisJob {
+  jobId: string;
+  filename: string;
+  size: number;
+}
+
+interface DurableAnalysisSession {
+  version: 2;
+  batchId: string;
+  jobs: DurableAnalysisJob[];
+}
+
+const ACTIVE_ANALYSIS_BATCH_KEY = 'cfdi_active_analysis_batch';
+const LEGACY_ACTIVE_BATCH_KEY = 'cfdi_active_batch_id';
+
+function loadDurableAnalysisSession(): DurableAnalysisSession | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_ANALYSIS_BATCH_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DurableAnalysisSession>;
+    if (parsed.version !== 2 || !parsed.batchId || !Array.isArray(parsed.jobs)) return null;
+    return {
+      version: 2,
+      batchId: assertBatchId(parsed.batchId),
+      jobs: parsed.jobs.filter((job): job is DurableAnalysisJob =>
+        typeof job?.jobId === 'string' && typeof job.filename === 'string' && typeof job.size === 'number'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function apiErrorMessage(response: Response, fallback: string): Promise<string> {
+  if (response.status === 413) {
+    return 'El lote no se pudo aceptar. No reintentes el botón: la aplicación debe subir cada XML por separado.';
+  }
+  const body = await response.json().catch(() => null) as { detail?: unknown } | null;
+  return typeof body?.detail === 'string' ? body.detail : fallback;
 }
 
 interface BatchAnalysisPageProps {
@@ -602,6 +650,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const [processEndTime, setProcessEndTime] = useState<number | null>(null);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [wasRestored, setWasRestored] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [durableUpload, setDurableUpload] = useState<{ total: number; uploaded: number; awaitingUpload: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -760,7 +810,23 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
   // EFECTO DE RESILIENCIA EXTRA: Al montar la vista, revisa si había un lote corriendo antes
   useEffect(() => {
-    const raw = localStorage.getItem('cfdi_active_batch_id');
+    const durable = loadDurableAnalysisSession();
+    if (durable) {
+      activeBatchIdRef.current = durable.batchId;
+      // File no puede sobrevivir un refresh, pero el manifiesto durable sí:
+      // rehidratamos filas de solo lectura para que el progreso no desaparezca.
+      const placeholders = durable.jobs.map((job) => new File([], job.filename));
+      setFiles(placeholders);
+      setQueue(placeholders.map((file) => ({ file, result: null })));
+      setDurableUpload({ total: durable.jobs.length, uploaded: 0, awaitingUpload: durable.jobs.length });
+      setPhase('processing');
+      setProcessStartTime(Date.now());
+      setWasRestored(true);
+      startPollingStatus(durable.batchId);
+      return;
+    }
+
+    const raw = localStorage.getItem(LEGACY_ACTIVE_BATCH_KEY);
     const savedBatchId = raw ? assertBatchId(raw) : null;
     if (savedBatchId) {
       activeBatchIdRef.current = savedBatchId;
@@ -812,7 +878,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         pusherRef.current?.connection.unbind('state_change', onConnectionStateChange);
       }
       pusherRef.current?.unsubscribe(`private-batch_${batchId}`);
-      localStorage.removeItem('cfdi_active_batch_id');
+      localStorage.removeItem(LEGACY_ACTIVE_BATCH_KEY);
+      localStorage.removeItem(ACTIVE_ANALYSIS_BATCH_KEY);
       activeBatchIdRef.current = null;
       setPhase('done');
       setProcessEndTime(Date.now());
@@ -830,6 +897,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         const response = await apiFetch(`/api/cfdi/batch/status/${batchId}`);
         if (!response.ok) return;
         const data = await response.json() as BatchStatusPayload;
+        if (data.upload) setDurableUpload(data.upload);
         setQueue((prevQueue) => mergeBatchStatus(prevQueue, data.results));
         if (data.status === 'done') finishBatch();
         if (data.status === 'ready') {
@@ -852,7 +920,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       } catch (err) {
         console.error('[batch] No se pudo iniciar el lote tras suscribirse a Pusher', err);
         setPhase('idle');
-        localStorage.removeItem('cfdi_active_batch_id');
+        localStorage.removeItem(LEGACY_ACTIVE_BATCH_KEY);
+        localStorage.removeItem(ACTIVE_ANALYSIS_BATCH_KEY);
       }
     };
 
@@ -897,12 +966,16 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     });
 
     if (!startAfterSubscription) await reconcileStatus();
+    // Pusher es optimización de latencia. El polling durable evita que una
+    // desconexión o cuota agotada deje a la interfaz congelada.
+    pollingIntervalRef.current = setInterval(() => { void reconcileStatus(); }, 2_000);
   }
 
   // Tu función modificada de procesamiento masivo limpio
   async function handleProcess() {
     if (!files.length) return;
     setPhase('processing');
+    setStartError(null);
     setProcessStartTime(Date.now());
     setProcessEndTime(null);
     setWasRestored(false);
@@ -911,29 +984,63 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     const initialQueue: QueueEntry[] = files.map((file) => ({ file, result: null }));
     setQueue(initialQueue);
 
-    const formData = new FormData();
-    files.forEach(f => formData.append('files', f));
-
     try {
-      const response = await apiFetch('/api/cfdi/batch/analyze', {
-      method: 'POST',
-      body: formData,
-    });
+      // Nunca se envían todos los binarios en un FormData gigante: este POST
+      // sólo crea el manifiesto durable, y cada XML viaja después por su ruta.
+      const create = await apiFetch('/api/cfdi/batch/loose-batches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: files.map((file) => ({ filename: file.name, size: file.size })) }),
+      });
+      if (!create.ok) throw new Error(await apiErrorMessage(create, 'No se pudo preparar el lote de análisis'));
+      const data = await create.json() as { batchId: string; jobs: DurableAnalysisJob[] };
+      const batchId = assertBatchId(data.batchId);
+      if (!Array.isArray(data.jobs) || data.jobs.length !== files.length) {
+        throw new Error('El servidor devolvió un manifiesto incompleto');
+      }
 
-    if (!response.ok) throw new Error('Fallo al iniciar lote en servidor');
+      const session: DurableAnalysisSession = { version: 2, batchId, jobs: data.jobs };
+      localStorage.setItem(ACTIVE_ANALYSIS_BATCH_KEY, JSON.stringify(session));
+      localStorage.removeItem(LEGACY_ACTIVE_BATCH_KEY);
+      activeBatchIdRef.current = batchId;
+      setDurableUpload({ total: data.jobs.length, uploaded: 0, awaitingUpload: data.jobs.length });
+      // Observa el lote desde que empieza a subir. No inicia workers hasta que
+      // las cuatro lanes terminaron de cargar el manifiesto completo.
+      void startPollingStatus(batchId);
 
-    const data = await response.json();
+      const semaphore = new Semaphore(4);
+      const failures: string[] = [];
+      await Promise.all(files.map(async (file, index) => {
+        await semaphore.acquire();
+        try {
+          const job = data.jobs[index]!;
+          const form = new FormData();
+          form.append('file', file);
+          const upload = await apiFetch(`/api/cfdi/batch/loose-batches/${batchId}/files/${job.jobId}`, {
+            method: 'POST', body: form,
+          });
+          if (!upload.ok) throw new Error(await apiErrorMessage(upload, `No se pudo subir ${file.name}`));
+        } catch (error) {
+          failures.push(error instanceof Error ? error.message : `No se pudo subir ${file.name}`);
+        } finally {
+          semaphore.release();
+        }
+      }));
 
-    // Guardamos el ID del lote en el navegador para garantizar resiliencia ante cierres o fallos
-    localStorage.setItem('cfdi_active_batch_id', data.batch_id);
-    activeBatchIdRef.current = data.batch_id;
+      if (failures.length) {
+        setStartError(`${failures.length} XML no se pudieron subir. El lote quedó guardado; revisa los archivos y vuelve a intentarlo, no reinicies el lote.`);
+        return;
+      }
 
-    // Pusher confirma la suscripción antes de encolar los workers.
-    startPollingStatus(data.batch_id, true);
+      // Sólo ahora se solicita el inicio. El marcador de backend hace este
+      // paso idempotente ante refresh, reconexión o doble clic.
+      await startPollingStatus(batchId, true);
     } catch (err) {
       console.error("[batch] Error iniciando flujo asíncrono:", err);
+      setStartError(err instanceof Error ? err.message : 'No se pudo iniciar el lote de análisis');
       setPhase('idle');
-      localStorage.removeItem('cfdi_active_batch_id');
+      localStorage.removeItem(LEGACY_ACTIVE_BATCH_KEY);
+      localStorage.removeItem(ACTIVE_ANALYSIS_BATCH_KEY);
     }
   }
 
@@ -1018,7 +1125,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
   function clearAll() {
     if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-    localStorage.removeItem('cfdi_active_batch_id'); 
+    localStorage.removeItem(LEGACY_ACTIVE_BATCH_KEY);
+    localStorage.removeItem(ACTIVE_ANALYSIS_BATCH_KEY);
     cancelledRef.current = true;
     poolCancelRef.current?.();
     poolCancelRef.current = null;
@@ -1039,6 +1147,8 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     setDiotHalves(null);
     setSelectedRows(new Set());
     setPdfStates(new Map());
+    setStartError(null);
+    setDurableUpload(null);
     onProgressUpdate?.(null);
   }
 
@@ -1252,6 +1362,11 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         {/* ═══════ PHASE: IDLE ═══════ */}
         {phase === 'idle' && (
           <>
+            {startError && (
+              <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                {startError}
+              </div>
+            )}
             {/* Drop zone */}
             <div
               onDragOver={(e) => e.preventDefault()}
@@ -1285,7 +1400,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
                   </button>
                 </div>
                 <p className="mt-2 text-xs text-gray-400">
-                  Solo .xml · Cualquier cantidad — se procesa por lotes
+                  Solo .xml · Cada archivo se sube por separado y el análisis continúa en la nube
                 </p>
               </div>
               {files.length > 0 && (
@@ -1325,6 +1440,11 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         {/* ═══════ PHASE: PROCESSING ═══════ */}
         {phase === 'processing' && (
           <>
+            {startError && (
+              <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                {startError}
+              </div>
+            )}
             {/* Aviso explícito de recuperación — antes esto pasaba en
                 silencio (reconstrucción del estado sin ningún mensaje al
                 usuario), igual que en ConversionMasivaPage (Fase 3). Este
@@ -1332,7 +1452,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
             {wasRestored && (
               <div className="flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
                 <CheckCircle2 size={14} className="shrink-0" />
-                Recuperamos tu lote anterior — sigue procesándose en la nube.
+                Recuperamos tu lote anterior — sigue procesándose en la nube. Los XML locales no se recuperan tras recargar, pero los que ya se subieron no se vuelven a enviar.
               </div>
             )}
 
@@ -1340,9 +1460,15 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
             <BatchPipelineIndicator
               stage="processing"
               completed={stats.completed}
-              total={files.length}
+              total={durableUpload?.total ?? files.length}
               errors={stats.errors}
             />
+
+            {durableUpload && durableUpload.awaitingUpload > 0 && (
+              <div className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-800">
+                Subiendo XML: {durableUpload.uploaded.toLocaleString('es-MX')} de {durableUpload.total.toLocaleString('es-MX')}. Máximo 4 subidas simultáneas.
+              </div>
+            )}
 
             {/* Stats cards */}
             <div className="flex gap-3">
