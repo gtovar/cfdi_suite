@@ -1115,9 +1115,13 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
               </div>
             </div>
             {allDone && done > 0 && (
-              <button onClick={handleDownloadAll} disabled={isDownloadingAll} className="flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
-                {isDownloadingAll ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                {isDownloadingAll ? 'Empaquetando...' : 'Descargar todos (ZIP)'}
+              <button
+                onClick={() => batchId ? void handleDownloadBatchZip() : void handleDownloadAll()}
+                disabled={batchId ? !!zipDownloadProgress : isDownloadingAll}
+                className="flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+              >
+                {(batchId ? !!zipDownloadProgress : isDownloadingAll) ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                {(batchId ? !!zipDownloadProgress : isDownloadingAll) ? 'Descargando ZIP...' : 'Descargar todos (ZIP)'}
               </button>
             )}
           </div>

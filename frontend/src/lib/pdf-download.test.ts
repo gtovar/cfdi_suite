@@ -353,38 +353,25 @@ describe('watchBatchProgress', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('descarta una respuesta vieja que resuelve después de una más nueva (guardia de secuencia)', async () => {
-    // Encontrado por el advisor antes de comitear el rediseño hint-only:
-    // quitar maxProcessed sin reemplazo dejaba dos fetchSnapshot() en vuelo
-    // (aquí, dos 'signal' seguidos) sin protección si resuelven fuera de
-    // orden -- la respuesta vieja llegando después retrocedería la barra.
-    let resolveOlder!: (r: Response) => void;
-    let resolveNewer!: (r: Response) => void;
-    const olderPromise = new Promise<Response>((r) => { resolveOlder = r; });
-    const newerPromise = new Promise<Response>((r) => { resolveNewer = r; });
-
+  it('no solapa snapshots: una señal durante una reconciliación lenta no aborta ni duplica la lectura', async () => {
+    let resolveSlow!: (response: Response) => void;
+    const slow = new Promise<Response>((resolve) => { resolveSlow = resolve; });
     vi.mocked(globalThis.fetch)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'processing', total: 10, done: 0, error: 0, converting: 0, pending: 10, percentage: 0 }), { status: 200 }))
-      .mockImplementationOnce(() => olderPromise) // disparada primero (signal #1) -- resuelve TARDE
-      .mockImplementationOnce(() => newerPromise); // disparada segundo (signal #2) -- resuelve PRIMERO
+      .mockImplementationOnce(() => slow)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'done', total: 1, done: 1, error: 0, converting: 0, pending: 0, percentage: 100 }), { status: 200 }));
 
-    const progressCalls: Array<{ done: number }> = [];
-    watchBatchProgress('batch-1', (p) => progressCalls.push(p));
-    await vi.advanceTimersByTimeAsync(0); // snapshot inicial
-
-    mockChannelHandlers['signal']?.({ kind: 'job_done' }); // dispara fetch #2 (older, aún sin resolver)
-    mockChannelHandlers['signal']?.({ kind: 'job_done' }); // dispara fetch #3 (newer, aún sin resolver)
+    const progress: Array<{ done: number }> = [];
+    const promise = watchBatchProgress('batch-1', (data) => progress.push(data));
     await vi.advanceTimersByTimeAsync(0);
-
-    resolveNewer(new Response(JSON.stringify({ status: 'processing', total: 10, done: 5, error: 0, converting: 0, pending: 5, percentage: 50 }), { status: 200 }));
+    mockChannelHandlers['signal']?.({ kind: 'job_done' });
+    mockChannelHandlers['signal']?.({ kind: 'job_done' });
     await vi.advanceTimersByTimeAsync(0);
-    resolveOlder(new Response(JSON.stringify({ status: 'processing', total: 10, done: 2, error: 0, converting: 0, pending: 8, percentage: 20 }), { status: 200 }));
-    await vi.advanceTimersByTimeAsync(0);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
 
-    // La última actualización real reportada es la de la respuesta más
-    // nueva (done=5) -- la vieja (done=2) se descartó al resolver tarde, no
-    // debe haber sobreescrito después.
-    expect(progressCalls[progressCalls.length - 1].done).toBe(5);
+    resolveSlow(new Response(JSON.stringify({ status: 'done', total: 1, done: 1, error: 0, converting: 0, pending: 0, percentage: 100 }), { status: 200 }));
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(promise).resolves.toBeUndefined();
+    expect(progress.at(-1)?.done).toBe(1);
   });
 
   it('pide el snapshot inicial aunque la pestaña arranque oculta -- regresión del atasco confirmado en vivo (2026-07-24)', async () => {

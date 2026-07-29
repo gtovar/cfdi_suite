@@ -13,6 +13,7 @@ function flushMicrotasks() {
 const watchBatchProgress = vi.fn(() => new Promise<void>(() => {})); // nunca resuelve — solo probamos si se llamó
 const fetchReadyFileIds = vi.fn(async () => []);
 const fetchZipEstimatedSize = vi.fn(async () => null as { estimatedBytes: number; knownCount: number; totalCount: number } | null);
+const convertFileToPdf = vi.fn();
 
 vi.mock('../lib/pdf-download', async () => {
   const actual = await vi.importActual<typeof import('../lib/pdf-download')>('../lib/pdf-download');
@@ -21,6 +22,7 @@ vi.mock('../lib/pdf-download', async () => {
     watchBatchProgress: (...args: Parameters<typeof watchBatchProgress>) => watchBatchProgress(...args),
     fetchReadyFileIds: (...args: Parameters<typeof fetchReadyFileIds>) => fetchReadyFileIds(...args),
     fetchZipEstimatedSize: (...args: Parameters<typeof fetchZipEstimatedSize>) => fetchZipEstimatedSize(...args),
+    convertFileToPdf: (...args: Parameters<typeof convertFileToPdf>) => convertFileToPdf(...args),
   };
 });
 
@@ -43,6 +45,7 @@ describe('ConversionMasivaPage — recuperación de lote (Fase 3)', () => {
     watchBatchProgress.mockClear();
     fetchReadyFileIds.mockClear();
     fetchZipEstimatedSize.mockClear();
+    convertFileToPdf.mockClear();
     fetchZipEstimatedSize.mockResolvedValue(null);
   });
 
@@ -94,6 +97,44 @@ describe('ConversionMasivaPage — recuperación de lote (Fase 3)', () => {
 
     expect(container.textContent).toContain('150 XMLs');
     expect(container.textContent).toContain('no puede restaurar sus archivos');
+  });
+
+  it('un lote durable de XML sueltos descarga el ZIP del backend y nunca reconvierte los XML', async () => {
+    const batchId = 'loose-durable-150';
+    const jobs = Array.from({ length: 3 }, (_, index) => ({
+      jobId: `job-${index + 1}`,
+      filename: `factura-${index + 1}.xml`,
+      size: 100,
+      state: 'done' as const,
+      schedulingAttempts: 0,
+    }));
+    localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify({ batchId, total: jobs.length, startedAt: Date.now(), kind: 'loose' }));
+    sessionStorage.setItem(PENDING_LOOSE_FILES_KEY, JSON.stringify({
+      count: jobs.length, totalBytes: 300, savedAt: Date.now(), batchId, jobs,
+    }));
+    fetchZipEstimatedSize.mockResolvedValueOnce({ estimatedBytes: 0, knownCount: 0, totalCount: jobs.length });
+    const assign = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, assign } });
+
+    try {
+      await act(async () => {
+        ({ container } = renderReact(<ConversionMasivaPage />));
+        await flushMicrotasks();
+      });
+      const button = Array.from(container.querySelectorAll('button')).find((item) =>
+        item.textContent?.includes('Descargar todos (ZIP)'),
+      );
+      expect(button).toBeTruthy();
+      await act(async () => {
+        button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flushMicrotasks();
+      });
+      expect(assign).toHaveBeenCalledWith(expect.stringContaining(`/batch/${batchId}/download`));
+      expect(convertFileToPdf).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    }
   });
 
   it('muestra el link persistente con el batch_id cuando hay un lote activo', () => {

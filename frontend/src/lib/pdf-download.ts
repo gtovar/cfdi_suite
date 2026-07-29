@@ -426,9 +426,18 @@ export function watchBatchProgress(
     // datos. Solo se aplica el resultado de la petición MÁS RECIENTE
     // emitida; las anteriores que resuelven tarde se descartan.
     let fetchSeq = 0;
+    // Un snapshot de lote grande puede requerir reconciliar varios PDFs en
+    // GCS si Redis no está disponible. Las señales de Pusher son hints y
+    // pueden llegar antes de que termine la lectura anterior: no iniciamos
+    // otra lectura/abort mientras una siga viva. Así se evita que la propia
+    // UI cancele repetidamente la única reconciliación que podría actualizar
+    // el progreso.
+    let snapshotInFlight = false;
     const fetchSnapshot = async () => {
       if (settled) return;
       if (!canAttempt()) return;
+      if (snapshotInFlight) return;
+      snapshotInFlight = true;
       const mySeq = ++fetchSeq;
       const controller = new AbortController();
       const timeoutTid = setTimeout(() => controller.abort(), SNAPSHOT_TIMEOUT_MS);
@@ -446,6 +455,7 @@ export function watchBatchProgress(
         // propio reloj de pared sin importar qué pasó en este intento.
       } finally {
         clearTimeout(timeoutTid);
+        snapshotInFlight = false;
       }
     };
 

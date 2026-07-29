@@ -1803,7 +1803,8 @@ si vale la pena arreglarla.
 
 - **Runner frontend no inicializa `localStorage` (2026-07-28)** —
   `npx vitest run src/components/ConversionMasivaPage.test.tsx --environment
-  happy-dom` falla antes de renderizar los 13 tests existentes con
+  happy-dom` falla antes de renderizar las pruebas del archivo (15 tras las
+  regresiones añadidas el 2026-07-29) con
   `TypeError: localStorage.clear is not a function` y el warning de Node sobre
   `--localstorage-file` sin ruta válida. Evidencia: se guardaron los cambios
   del incidente con `git stash --include-untracked`, se repitió la prueba en
