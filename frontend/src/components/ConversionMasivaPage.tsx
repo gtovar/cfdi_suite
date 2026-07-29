@@ -1052,8 +1052,13 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                   {done.toLocaleString('es-MX')} / {total.toLocaleString('es-MX')} convertidos
                   {errors > 0 && <span className="ml-2 text-red-500">· {errors} errores</span>}
                 </span>
-                {phase === 'done' && <span className="flex items-center gap-1 text-green-600"><CheckCircle2 size={12} /> Completado</span>}
-                {phase === 'running' && <span className="flex items-center gap-1 text-primary-600"><Loader2 size={12} className="animate-spin" /> Procesando de 4 en 4...</span>}
+                {allDone ? (
+                  <span className={clsx('flex items-center gap-1', errors > 0 ? 'text-amber-600' : 'text-green-600')}>
+                    <CheckCircle2 size={12} /> {errors > 0 ? 'Completado con errores' : 'Completado'}
+                  </span>
+                ) : phase === 'running' ? (
+                  <span className="flex items-center gap-1 text-primary-600"><Loader2 size={12} className="animate-spin" /> Procesando de 4 en 4...</span>
+                ) : null}
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
                 <div className="h-full rounded-full bg-primary-500 transition-all duration-300" style={{ width: total > 0 ? `${((done + errors) / total) * 100}%` : '0%' }} />
