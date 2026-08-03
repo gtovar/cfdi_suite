@@ -14,9 +14,10 @@ Si vienes por primera vez al repo:
 Si vienes a trabajar con agentes o sesiones guiadas por IA:
 
 1. [ai/workflow.md](./ai/workflow.md)
-2. [ai/implementation-policy.md](./ai/implementation-policy.md)
-3. [ai/ui-testing-baseline.md](./ai/ui-testing-baseline.md)
-4. [ai/templates/](./ai/templates/)
+2. [ai/documentation-policy.md](./ai/documentation-policy.md)
+3. [ai/implementation-policy.md](./ai/implementation-policy.md)
+4. [ai/ui-testing-baseline.md](./ai/ui-testing-baseline.md)
+5. [ai/templates/](./ai/templates/)
 
 ## Mapa de documentos
 
@@ -29,6 +30,7 @@ Si vienes a trabajar con agentes o sesiones guiadas por IA:
 
 - [analysis/2026-04-17-python-satcfdi-decision.md](./analysis/2026-04-17-python-satcfdi-decision.md): decisión base sobre el futuro del motor CFDI
 - [analysis/2026-04-18-python-backend-platform-decision.md](./analysis/2026-04-18-python-backend-platform-decision.md): reapertura hacia arquitectura frontend + backend Python
+- [analysis/2026-08-02-zero-cost-documentation-governance.md](./analysis/2026-08-02-zero-cost-documentation-governance.md): lazo determinista local + CI, sin servicios de modelos
 
 ### Roadmap del motor
 
@@ -40,6 +42,7 @@ Si vienes a trabajar con agentes o sesiones guiadas por IA:
 ### Flujo de trabajo asistido por IA
 
 - [ai/workflow.md](./ai/workflow.md): contrato de tipos de tarea
+- [ai/documentation-policy.md](./ai/documentation-policy.md): evidencia, ownership, DDR, descubrimiento con Graphify y límite de Obsidian
 - [ai/implementation-policy.md](./ai/implementation-policy.md): reglas de ejecución
 - [ai/ui-testing-baseline.md](./ai/ui-testing-baseline.md): base de validación UI
 - [ai/pilots/README.md](./ai/pilots/README.md): historial de pilotos previos
@@ -55,3 +58,6 @@ Cada documento debe tener una responsabilidad clara:
 - `docs/ai/`: operación de agentes y ejecución asistida
 
 No conviertas `README.md` en bitácora. Si un cambio afecta contratos o dirección, actualiza el documento temático correcto y deja el `README` como punto de entrada.
+Para decidir si crear o actualizar documentación, clasificar evidencia y manejar
+conocimiento derivado, sigue
+[ai/documentation-policy.md](./ai/documentation-policy.md).

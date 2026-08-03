@@ -49,5 +49,8 @@ repomix-output-*.md
 .opencode/
 docs/aider/
 
+# Graphify — grafo, reportes y cachés derivados
+graphify-out/
+
 # Config local de CORS para el bucket de GCS, no versionar
 cors-gcs.json

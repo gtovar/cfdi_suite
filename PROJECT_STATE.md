@@ -1793,6 +1793,40 @@ veredicto (`pendiente`) — nueva escalada futura se decide con el usuario.
 
 ## Hallazgos preexistentes encontrados al pasar (no arreglados, solo anotados)
 
+- **La gobernanza configurada no está monitoreando sesiones (2026-08-02)** —
+  `.claude/governance.json` apunta a `http://localhost:4000`, pero no hay un
+  proceso escuchando en ese puerto: `curl --fail --max-time 2
+  http://localhost:4000/` terminó con código 7 (`Couldn't connect to server`)
+  y `lsof -nP -iTCP:4000 -sTCP:LISTEN` no devolvió listeners. El propio hook
+  confirma el comportamiento en `.claude/hooks/governance.sh:401-408`: si no
+  recibe respuesta, informa que la sesión no está siendo monitoreada y sale 0
+  (fail-open). El pre-commit sí está instalado, pero su decisión remota tampoco
+  puede aplicarse mientras el servidor siga ausente. No corregido: arrancar,
+  reemplazar o retirar esa plataforma de gobernanza requiere una decisión
+  operativa separada.
+
+- **Índice de onboarding apunta al roadmap sustituido (2026-08-02)** —
+  `docs/README.md` conserva como cuarto paso de lectura inicial
+  `docs/roadmap/cfdi-engine-migration/index.md`, pero el `STATUS.md` de esa ruta
+  declara que ya no es la dirección principal y
+  `docs/roadmap/python-backend-platform/index.md` declara que la reemplaza.
+  Evidencia de que es preexistente: las tres afirmaciones están presentes en
+  `HEAD` antes de los cambios de gobernanza documental de esta tarea (`git show
+  HEAD:<ruta>`). No corregido: elegir la ruta de onboarding vigente requiere una
+  decisión separada sobre jerarquía de estado y reentrada.
+
+- **Graphify `update` no preserva el modo `--code-only` (2026-08-01)** —
+  después de construir el grafo con `graphify extract . --code-only` (2,214
+  nodos, 4,565 relaciones), `graphify update .` reintrodujo documentos con
+  extractor AST y produjo 4,378 nodos, 6,653 relaciones. Evidencia: la copia
+  fuente limpia de Graphify en `/Users/gil/Documents/graphify` está en
+  `4fe1109` y `graphify/watch.py:973-979` añade explícitamente archivos
+  `document` a `code_files`, mientras que la configuración persistida solo
+  conserva exclusiones y `gitignore`, no `code_only` (`watch.py:109-128`).
+  No corregido: es un defecto del tooling externo Graphify; debe resolverse
+  allí antes de confiar en `graphify update .` para un grafo creado con
+  `--code-only`.
+
 - **2026-07-29 — `frontend/npm run lint` (TypeScript):** 10 errores ya
   presentes, todos fuera del cambio de ingesta durable de Análisis masivo:
   seis en `ConversionMasivaPage.test.tsx`, tres en

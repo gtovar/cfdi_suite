@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "document_suffixes": [".md", ".mdx"],
+  "ignored_paths": [
+    ".agents/**",
+    ".codex/**",
+    "frontend/.agents/**",
+    "frontend/.claude/**",
+    "graphify-out/**"
+  ],
+  "ownership": [
+    {"pattern": "AGENTS.md", "owner": null},
+    {"pattern": "PROJECT_STATE.md", "owner": null},
+    {"pattern": "README.md", "owner": null},
+    {"pattern": "docs/*.md", "owner": "nearest-index"},
+    {"pattern": "docs/**/*.md", "owner": "nearest-index"}
+  ]
+}

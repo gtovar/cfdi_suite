@@ -1,0 +1,4 @@
+interface:
+  display_name: "Documentation Governance"
+  short_description: "Route and validate canonical documentation"
+  default_prompt: "Use $documentation-governance to decide whether to update or create canonical documentation."

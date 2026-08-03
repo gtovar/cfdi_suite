@@ -3,6 +3,12 @@
 PROBLEM:
 What is unclear?
 
+DOCUMENTATION IMPACT (or N/A):
+
+EXISTING CANONICAL SOURCE:
+
+GRAPHIFY PREFLIGHT QUERY (only when documentation is affected):
+
 OPTIONS:
 A:
 B:

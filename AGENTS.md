@@ -1,5 +1,5 @@
 ## Wiki Knowledge Base
-Path: ~/Users/gil/Documents/claude-obsidian
+Path: /Users/gil/Documents/claude-obsidian
 
 When you need context not already in this project:
 1. Read wiki/hot.md first (recent context cache)
@@ -8,6 +8,24 @@ When you need context not already in this project:
 4. Only then drill into specific wiki pages
 
 Do NOT read the wiki for general coding questions or tasks unrelated to [domain].
+
+## Documentation governance
+
+For any persistent documentation creation, move, split, or material rewrite,
+use the repo-local `documentation-governance` skill and follow
+`docs/ai/documentation-policy.md`. Keep `AGENTS.md` as a short router; the policy
+owns the detailed rules. Repository evidence and canonical documents outrank
+Graphify and Obsidian derivatives. Before creating a document, use the existing
+documentation map plus a focused Graphify query; after a documentation change,
+refresh the graph when its build mode supports `graphify update .`.
+At session re-entry, run
+`python3 scripts/check_documentation_governance.py --show-pending` and review any
+persisted findings before making a documentation decision.
+During an active task, infer whether a requested or encountered change creates
+or alters a durable product, architecture, contract, or workflow decision even
+when the user does not call it a decision. If the Decision Gate in
+`docs/ai/workflow.md` is not satisfied, route the work to exploration instead
+of silently choosing material tradeoffs.
 
 ## Política de hallazgos preexistentes
 
@@ -39,3 +57,15 @@ dinámicos/workers) → clasificar con evidencia → proponer al usuario → bor
 solo con su confirmación. Detalle en `docs/react-doctor-veredictos.md`
 §Política de código no usado.
 
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

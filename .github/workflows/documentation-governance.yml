@@ -1,0 +1,38 @@
+name: Documentation governance
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-governance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-checks:
+    name: Deterministic documentation checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test the documentation checker
+        run: python3 -m unittest tests.test_documentation_governance -v
+
+      - name: Check changed documentation and owner indexes
+        env:
+          EVENT_FILE: ${{ github.event_path }}
+        run: >-
+          python3 scripts/check_documentation_governance.py
+          --github-event "$EVENT_FILE"
+          --summary "$GITHUB_STEP_SUMMARY"
+          --no-persist
