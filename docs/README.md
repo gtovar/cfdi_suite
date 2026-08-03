@@ -25,6 +25,7 @@ Si vienes a trabajar con agentes o sesiones guiadas por IA:
 
 - [arquitectura.md](./arquitectura.md): vista de alto nivel del sistema, capas y flujo de análisis
 - [cfdi-ui-dictionary.md](./cfdi-ui-dictionary.md): definición de términos y reglas de interpretación UI
+- [auditoria-tabla-masivos-2026-08-03.md](./auditoria-tabla-masivos-2026-08-03.md): auditoría de las tablas de Análisis masivo y Conversión masiva, hallazgo por hallazgo, con estado de implementación
 
 ### Decisiones
 
