@@ -12,7 +12,7 @@ reportlab>=4.2,<5
 qrcode>=7.4,<8
 lxml>=6.1.1,<7
 defusedxml>=0.7,<0.8
-redis>=5.0,<6
+redis>=8.1.0,<9
 google-cloud-tasks>=2.16,<3
 google-auth>=2.0,<3
 opentelemetry-api
