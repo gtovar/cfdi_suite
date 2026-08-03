@@ -958,9 +958,9 @@ opentelemetry-api==1.44.0 \
     #   opentelemetry-resourcedetector-gcp
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-gcp-trace==1.12.0 \
-    --hash=sha256:1538dab654bcb25e757ed34c94f27a2e30d90dc7deb3630f8d46d1111fcb3bad \
-    --hash=sha256:18c6e56fe123eed020d5005fdd819b196d64f651545bce1ca7e2e2cbaf9d343b
+opentelemetry-exporter-gcp-trace==1.13.0 \
+    --hash=sha256:8b2572235b4683563c21caa8bc97071df11f766f477274a5547751d74eae0643 \
+    --hash=sha256:f0b797272f9c237f5086159c63db500a8736029e1ed4fbade3c4edcb89c5bc5a
     # via -r requirements.in
 opentelemetry-instrumentation==0.65b0 \
     --hash=sha256:071d9d9eced9bd6460444ec3b0c77229870ed05a881c22c84fdede58e4eed09b \
@@ -1475,6 +1475,7 @@ typing-extensions==4.16.0 \
     #   fastapi
     #   grpcio
     #   opentelemetry-api
+    #   opentelemetry-exporter-gcp-trace
     #   opentelemetry-resourcedetector-gcp
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
