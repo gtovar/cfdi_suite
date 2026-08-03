@@ -1101,7 +1101,7 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
                     <CheckCircle2 size={12} /> {errors > 0 ? 'Completado con errores' : 'Completado'}
                   </span>
                 ) : phase === 'running' ? (
-                  <span className="flex items-center gap-1 text-primary-600"><Loader2 size={12} className="animate-spin" /> Procesando de 4 en 4...</span>
+                  <span className="flex items-center gap-1 text-primary-600"><Loader2 size={12} className="animate-spin" /> Procesando…</span>
                 ) : null}
               </div>
               {batchProgress && (
@@ -1150,34 +1150,37 @@ export default function ConversionMasivaPage({ templateId, onProgressUpdate, res
         {!isZipMode && entries.length > 0 && (
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="max-h-[560px] overflow-auto">
-              <table className="w-full text-left">
-                <thead className="border-b border-gray-200 bg-gray-50">
+              <table className="w-full table-fixed text-left">
+                <colgroup>
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '45%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '20%' }} />
+                  <col style={{ width: '16%' }} />
+                </colgroup>
+                <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
                   <tr>
-                    <th className="px-3 py-2.5"><input type="checkbox" aria-label="Seleccionar todos los archivos" checked={allSelected} onChange={(e) => toggleSelectAll(e.target.checked)} className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 accent-primary-600" /></th>
-                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Archivo</th>
-                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Tamaño</th>
-                    <th className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Estado</th>
-                    <th className="px-3 py-2.5" />
+                    <th scope="col" className="px-3 py-2.5"><input type="checkbox" aria-label="Seleccionar todos los archivos" checked={allSelected} onChange={(e) => toggleSelectAll(e.target.checked)} className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 accent-primary-600" /></th>
+                    <th scope="col" className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Archivo</th>
+                    <th scope="col" className="px-3 py-2.5 text-right text-tiny font-semibold uppercase tracking-wider text-gray-500">Tamaño</th>
+                    <th scope="col" className="px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500">Estado</th>
+                    <th scope="col" className="px-3 py-2.5"><span className="sr-only">Acción</span></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {entries.map((entry, i) => (
-                    <tr key={entry.file.name} className={clsx('border-b border-gray-100 last:border-0', i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')} style={{ height: 36 }}>
+                  {entries.map((entry) => (
+                    <tr key={entry.file.name} className="border-b border-gray-100 last:border-0" style={{ height: 36 }}>
                       <td className="px-3 py-2">
                         <input type="checkbox" aria-label={`Seleccionar ${entry.file.name}`} checked={selectedRows.has(entry.file.name)} onChange={(e) => { setSelectedRows((prev) => { const next = new Set(prev); e.target.checked ? next.add(entry.file.name) : next.delete(entry.file.name); return next; }); }} className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300 accent-primary-600" />
                       </td>
                       <td className="px-3 py-2">
-                        <span className="block max-w-[280px] truncate font-mono text-xs text-gray-800" title={entry.file.name}>{entry.file.name}</span>
+                        <span className="block truncate font-mono text-xs text-gray-800" title={entry.file.name}>{entry.file.name}</span>
                         {entry.error && <span className="block truncate text-tiny text-red-500" title={entry.error}>{entry.error}</span>}
                       </td>
-                      <td className="px-3 py-2"><span className="text-xs tabular-nums text-gray-400">{formatBytes(entry.originalSize ?? entry.file.size)}</span></td>
+                      <td className="px-3 py-2 text-right"><span className="text-xs tabular-nums text-gray-400">{formatBytes(entry.originalSize ?? entry.file.size)}</span></td>
                       <td className="px-3 py-2"><StateChip state={entry.state} /></td>
                       <td className="px-3 py-2 text-right">
-                        {entry.state === 'uploading' ? (
-                          <Loader2 size={12} className="animate-spin text-blue-400 inline" />
-                        ) : entry.state === 'converting' ? (
-                          <Loader2 size={12} className="animate-spin text-primary-400 inline" />
-                        ) : entry.state === 'scheduling' ? (
+                        {entry.state === 'uploading' || entry.state === 'converting' ? null : entry.state === 'scheduling' ? (
                           (entry.schedulingAttempts ?? 0) < 3 ? (
                             <button onClick={() => handleConfirmScheduling(entry)} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-tiny font-medium text-amber-700 hover:bg-amber-50">
                               <FileDown size={11} /> Confirmar ({entry.schedulingAttempts ?? 0}/3)

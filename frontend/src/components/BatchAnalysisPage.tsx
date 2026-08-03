@@ -28,6 +28,12 @@ import {
   type SortingState,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
+
+declare module '@tanstack/react-table' {
+  interface ColumnMeta<TData, TValue> {
+    align?: 'right';
+  }
+}
 import { batchAnalyzePool, batchDiot, type BatchFileResult } from '../lib/batch-api-client';
 import { assertBatchId } from '../lib/ids';
 import {
@@ -128,7 +134,7 @@ const COLUMNS = [
   colHelper.accessor('filename', {
     header: 'Archivo',
     cell: (info) => (
-      <span className="block max-w-[220px] truncate font-mono text-xs text-gray-800" title={info.getValue()}>
+      <span className="block truncate font-mono text-xs text-gray-800" title={info.getValue()}>
         {info.getValue()}
       </span>
     ),
@@ -137,35 +143,43 @@ const COLUMNS = [
     header: 'Estado',
     cell: (info) => {
       const cfg = STATUS_CONFIG[info.getValue()];
+      const findings = info.row.original.findings_count;
       return (
         <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-tiny font-medium', cfg.badge)}>
           <cfg.Icon size={11} />
           {cfg.label}
+          {findings > 0 && <span className="font-semibold tabular-nums">· {findings}</span>}
         </span>
       );
     },
   }),
-  colHelper.accessor('profile', {
-    header: 'Tipo',
-    cell: (info) => {
-      const v = info.getValue();
-      return <span className="text-xs text-gray-600">{v === 'ingreso' ? 'Ingreso' : v === 'pagos' ? 'Pagos' : '—'}</span>;
-    },
-  }),
   colHelper.accessor('rfc_emisor', {
     header: 'RFC Emisor',
-    cell: (info) => <span className="font-mono text-xs text-gray-700">{info.getValue() || '—'}</span>,
+    cell: (info) => {
+      const prev = info.table.getRowModel().rows[info.row.index - 1];
+      const repeated = prev && prev.original.rfc_emisor === info.getValue() && !!info.getValue();
+      return (
+        <span className={clsx('font-mono text-xs', repeated ? 'text-gray-300' : 'text-gray-700')}>
+          {info.getValue() || '—'}
+        </span>
+      );
+    },
   }),
   colHelper.accessor('nombre_emisor', {
     header: 'Emisor',
-    cell: (info) => (
-      <span className="block max-w-[180px] truncate text-xs text-gray-600" title={info.getValue()}>
-        {info.getValue() || '—'}
-      </span>
-    ),
+    cell: (info) => {
+      const prev = info.table.getRowModel().rows[info.row.index - 1];
+      const repeated = prev && prev.original.nombre_emisor === info.getValue() && !!info.getValue();
+      return (
+        <span className={clsx('block truncate text-xs', repeated ? 'text-gray-300' : 'text-gray-600')} title={info.getValue()}>
+          {info.getValue() || '—'}
+        </span>
+      );
+    },
   }),
   colHelper.accessor('total', {
     header: 'Total',
+    meta: { align: 'right' },
     cell: (info) => {
       const v = info.getValue();
       if (!v) return <span className="text-xs text-gray-400">—</span>;
@@ -182,20 +196,9 @@ const COLUMNS = [
     header: 'Fecha',
     cell: (info) => <span className="text-xs text-gray-600">{info.getValue() || '—'}</span>,
   }),
-  colHelper.accessor('findings_count', {
-    header: 'Hallazgos',
-    cell: (info) => {
-      const n = info.getValue();
-      if (n === 0) return <span className="text-xs text-gray-400">—</span>;
-      return (
-        <span className="inline-flex items-center justify-center rounded-full bg-yellow-100 px-2 py-0.5 text-tiny font-medium text-yellow-800">
-          {n}
-        </span>
-      );
-    },
-  }),
   colHelper.display({
     id: 'action',
+    header: () => <span className="sr-only">Ver detalle</span>,
     cell: (info) =>
       info.row.original.status === 'error' ? null : (
         <ChevronRight
@@ -360,7 +363,7 @@ function PreflightCard({
 
 function StatsCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="flex-1 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
       <p className="text-tiny font-medium uppercase tracking-wider text-gray-400">{label}</p>
       <p className="mt-0.5 text-lg font-bold tabular-nums text-gray-900">{value}</p>
       {sub && <p className="text-tiny text-gray-400">{sub}</p>}
@@ -385,10 +388,14 @@ function TriageHeader({
   stats,
   filterStatus,
   onFilter,
+  filterTipo,
+  onFilterTipo,
 }: {
   stats: ReturnType<typeof useBatchStats>;
   filterStatus: FilterStatus;
   onFilter: (s: FilterStatus) => void;
+  filterTipo: 'all' | 'ingreso' | 'pagos';
+  onFilterTipo: (t: 'all' | 'ingreso' | 'pagos') => void;
 }) {
   const total = stats.ok + stats.conErrores + stats.errors;
 
@@ -479,6 +486,31 @@ function TriageHeader({
           </button>
         ))}
       </div>
+
+      {/* Filter pills — Tipo (dimensión independiente del estado) */}
+      <div className="flex items-center gap-2">
+        <span className="text-tiny font-medium text-gray-400">Tipo</span>
+        {(
+          [
+            { key: 'all', label: 'Todos' },
+            { key: 'ingreso', label: 'Ingreso' },
+            { key: 'pagos', label: 'Pagos' },
+          ] as { key: 'all' | 'ingreso' | 'pagos'; label: string }[]
+        ).map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => onFilterTipo(key)}
+            className={clsx(
+              'rounded-full px-3 py-1 text-tiny font-medium transition-colors duration-150',
+              filterTipo === key
+                ? 'bg-primary-600 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -498,16 +530,25 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
   const paddingBottom = vItems.length > 0 ? totalSize - (vItems[vItems.length - 1]!.end) : 0;
 
   return (
-    <div ref={containerRef} className="overflow-auto h-72 rounded-xl border border-gray-200 bg-white shadow-sm">
-      <table className="w-full text-left">
+    <div className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm md:min-h-0 md:flex-1">
+      <div ref={containerRef} className="h-72 overflow-auto md:h-auto md:min-h-0 md:flex-1">
+      <table className="w-full table-fixed text-left">
+        <colgroup>
+          <col style={{ width: '26%' }} />
+          <col style={{ width: '13%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '25%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '12%' }} />
+        </colgroup>
         <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
           <tr>
-            <th className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Archivo</th>
-            <th className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Estado</th>
-            <th className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">RFC Emisor</th>
-            <th className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Emisor</th>
-            <th className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Total</th>
-            <th className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Fecha</th>
+            <th scope="col" className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Archivo</th>
+            <th scope="col" className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Estado</th>
+            <th scope="col" className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">RFC Emisor</th>
+            <th scope="col" className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Emisor</th>
+            <th scope="col" className="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wider text-gray-500">Total</th>
+            <th scope="col" className="px-3 py-2 text-tiny font-semibold uppercase tracking-wider text-gray-500">Fecha</th>
           </tr>
         </thead>
         <tbody>
@@ -522,14 +563,14 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
 
             if (!r) {
               return (
-                <tr key={vItem.key} className="border-b border-gray-100" style={{ height: 36 }}>
+                <tr key={vItem.key} className="border-b border-gray-100 border-l-2 border-l-transparent" style={{ height: 36 }}>
                   <td className="px-3 py-2">
-                    <span className="block max-w-[200px] truncate font-mono text-xs text-gray-400">{entry.file.name}</span>
+                    <span className="block truncate font-mono text-xs text-gray-400">{entry.file.name}</span>
                   </td>
                   <td className="px-3 py-2"><div className="h-3.5 w-20 rounded-full bg-gray-200 animate-pulse" /></td>
                   <td className="px-3 py-2"><div className="h-3.5 w-24 rounded bg-gray-200 animate-pulse" /></td>
                   <td className="px-3 py-2"><div className="h-3.5 w-28 rounded bg-gray-200 animate-pulse" /></td>
-                  <td className="px-3 py-2"><div className="h-3.5 w-16 rounded bg-gray-200 animate-pulse" /></td>
+                  <td className="px-3 py-2 text-right"><div className="ml-auto h-3.5 w-16 rounded bg-gray-200 animate-pulse" /></td>
                   <td className="px-3 py-2"><div className="h-3.5 w-16 rounded bg-gray-200 animate-pulse" /></td>
                 </tr>
               );
@@ -537,10 +578,17 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
 
             const cfg = STATUS_CONFIG[r.status];
             const totalNum = parseFloat(r.total);
+            const statusBorder = r.status === 'error' ? 'border-l-red-400'
+              : r.status === 'con_errores' ? 'border-l-yellow-400'
+              : 'border-l-green-400';
             return (
-              <tr key={vItem.key} className={clsx('border-b border-gray-100', flashClass)} style={{ height: 36 }}>
+              <tr
+                key={vItem.key}
+                className={clsx('border-b border-gray-100 border-l-2', statusBorder, flashClass)}
+                style={{ height: 36 }}
+              >
                 <td className="px-3 py-2">
-                  <span className="block max-w-[200px] truncate font-mono text-xs text-gray-800" title={r.filename}>{r.filename}</span>
+                  <span className="block truncate font-mono text-xs text-gray-800" title={r.filename}>{r.filename}</span>
                 </td>
                 <td className="px-3 py-2">
                   <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-tiny font-medium', cfg.badge)}>
@@ -549,9 +597,9 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
                 </td>
                 <td className="px-3 py-2"><span className="font-mono text-xs text-gray-700">{r.rfc_emisor || '—'}</span></td>
                 <td className="px-3 py-2">
-                  <span className="block max-w-[160px] truncate text-xs text-gray-600" title={r.nombre_emisor}>{r.nombre_emisor || '—'}</span>
+                  <span className="block truncate text-xs text-gray-600" title={r.nombre_emisor}>{r.nombre_emisor || '—'}</span>
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 text-right">
                   {isNaN(totalNum)
                     ? <span className="text-xs text-gray-700">{r.total || '—'}</span>
                     : <span className="text-xs tabular-nums text-gray-800">{totalNum.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}</span>}
@@ -563,6 +611,10 @@ function LiveQueueTable({ queue, flashSet }: { queue: QueueEntry[]; flashSet: Se
           {paddingBottom > 0 && <tr><td colSpan={6} style={{ height: `${paddingBottom}px`, padding: 0 }} /></tr>}
         </tbody>
       </table>
+      </div>
+      <div className="border-t border-gray-100 px-3 py-2 text-tiny text-gray-400">
+        {queue.length.toLocaleString('es-MX')} {queue.length === 1 ? 'archivo' : 'archivos'}
+      </div>
     </div>
   );
 }
@@ -573,10 +625,12 @@ function IndeterminateCheckbox({
   checked,
   indeterminate,
   onChange,
+  label,
 }: {
   checked: boolean;
   indeterminate?: boolean;
   onChange: (checked: boolean) => void;
+  label: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -586,6 +640,7 @@ function IndeterminateCheckbox({
     <input
       ref={ref}
       type="checkbox"
+      aria-label={label}
       checked={checked}
       onChange={(e) => onChange(e.target.checked)}
       onClick={(e) => e.stopPropagation()}
@@ -644,6 +699,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const [preflight, setPreflight] = useState<PreflightSummary | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
+  const [filterTipo, setFilterTipo] = useState<'all' | 'ingreso' | 'pagos'>('all');
   const [doneView, setDoneView] = useState<'resultados' | 'diot'>('resultados');
   const [showModal, setShowModal] = useState(false);
   const [processStartTime, setProcessStartTime] = useState<number | null>(null);
@@ -687,9 +743,13 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
   const filteredResults = useMemo(
     () =>
       queue
-        .filter((e) => e.result !== null && (filterStatus === 'all' || e.result.status === filterStatus))
+        .filter((e) =>
+          e.result !== null
+          && (filterStatus === 'all' || e.result.status === filterStatus)
+          && (filterTipo === 'all' || e.result.profile === filterTipo),
+        )
         .map((e) => e.result!),
-    [queue, filterStatus],
+    [queue, filterStatus, filterTipo],
   );
 
   const monthBreakdown = useMemo(() => computeMonthBreakdown(queue), [queue]);
@@ -731,6 +791,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         <IndeterminateCheckbox
           checked={allFiltered}
           indeterminate={someFiltered && !allFiltered}
+          label="Seleccionar todos los archivos"
           onChange={(checked) => {
             setSelectedRows((prev) => {
               const next = new Set(prev);
@@ -743,6 +804,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
       cell: (info) => (
         <IndeterminateCheckbox
           checked={selectedRows.has(info.row.original.filename)}
+          label={`Seleccionar ${info.row.original.filename}`}
           onChange={(checked) => {
             setSelectedRows((prev) => {
               const next = new Set(prev);
@@ -1137,6 +1199,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
     setPreflight(null);
     setPreflightLoading(false);
     setFilterStatus('all');
+    setFilterTipo('all');
     setDoneView('resultados');
     setShowModal(false);
     setProcessStartTime(null);
@@ -1357,7 +1420,7 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
         />
       )}
 
-      <div className="flex flex-1 flex-col gap-5 overflow-auto p-6">
+      <div className="flex flex-1 flex-col gap-5 overflow-auto p-6 md:min-h-0 md:overflow-hidden">
 
         {/* ═══════ PHASE: IDLE ═══════ */}
         {phase === 'idle' && (
@@ -1466,12 +1529,14 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
             {durableUpload && durableUpload.awaitingUpload > 0 && (
               <div className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-800">
-                Subiendo XML: {durableUpload.uploaded.toLocaleString('es-MX')} de {durableUpload.total.toLocaleString('es-MX')}. Máximo 4 subidas simultáneas.
+                Subiendo XML: {durableUpload.uploaded.toLocaleString('es-MX')} de {durableUpload.total.toLocaleString('es-MX')}.
               </div>
             )}
 
-            {/* Stats cards */}
-            <div className="flex gap-3">
+            {/* Stats cards — grid de 3 columnas reservado desde el inicio, para que
+                una sola tarjeta (ej. Velocidad, antes de que existan datos para las
+                otras dos) no se estire a ancho completo. */}
+            <div className="grid grid-cols-3 gap-3">
               <StatsCard
                 label="Velocidad"
                 value={stats.filesPerSecond >= 1 ? `${stats.filesPerSecond.toFixed(1)} /seg` : '…'}
@@ -1582,7 +1647,13 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
             {/* Triage header — solo en tab Resultados */}
             {doneView === 'resultados' && (
-              <TriageHeader stats={stats} filterStatus={filterStatus} onFilter={setFilterStatus} />
+              <TriageHeader
+                stats={stats}
+                filterStatus={filterStatus}
+                onFilter={setFilterStatus}
+                filterTipo={filterTipo}
+                onFilterTipo={setFilterTipo}
+              />
             )}
 
             {/* Selection toolbar — solo en tab Resultados cuando hay selección */}
@@ -1616,76 +1687,117 @@ export default function BatchAnalysisPage({ onProgressUpdate, onSelectFile, onBa
 
             {/* Results table — solo en tab Resultados */}
             {doneView === 'resultados' && (filteredResults.length > 0 ? (
-              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                <div ref={doneTableRef} className="max-h-[560px] overflow-auto">
+              <div className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm md:min-h-0 md:flex-1">
+                <div ref={doneTableRef} className="max-h-[560px] overflow-auto md:min-h-0 md:max-h-none md:flex-1">
                   {(() => {
                     const doneVItems = doneVirtualizer.getVirtualItems();
                     const doneTotalSize = doneVirtualizer.getTotalSize();
                     const donePaddingTop = doneVItems[0]?.start ?? 0;
                     const donePaddingBottom = doneVItems.length > 0 ? doneTotalSize - (doneVItems[doneVItems.length - 1]!.end) : 0;
+                    const handleRowActivate = (row: Row<BatchFileResult>) => {
+                      const file = fileByName.get(row.original.filename);
+                      if (!file) return;
+                      onSelectFile?.(file);
+                      if (onBatchNav) {
+                        const clickableRows = doneRows.filter((r) => r.original.status !== 'error');
+                        const clickIndex = clickableRows.findIndex((r) => r.id === row.id);
+                        const clickableFiles = clickableRows
+                          .map((r) => fileByName.get(r.original.filename))
+                          .filter(Boolean) as File[];
+                        if (clickIndex >= 0) onBatchNav(clickableFiles, clickIndex);
+                      }
+                    };
                     return (
-                      <table className="w-full text-left">
-                        <thead className="border-b border-gray-200 bg-gray-50">
+                      <table className="w-full table-fixed text-left" aria-rowcount={doneRows.length}>
+                        <colgroup>
+                          <col style={{ width: '4%' }} />
+                          <col style={{ width: '20%' }} />
+                          <col style={{ width: '12%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '22%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '10%' }} />
+                          <col style={{ width: '6%' }} />
+                          <col style={{ width: '4%' }} />
+                        </colgroup>
+                        <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
                           {table.getHeaderGroups().map((hg) => (
                             <tr key={hg.id}>
-                              {hg.headers.map((header) => (
-                                <th
-                                  key={header.id}
-                                  onClick={header.column.getToggleSortingHandler()}
-                                  className={clsx(
-                                    'whitespace-nowrap px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500',
-                                    header.column.getCanSort() && 'cursor-pointer select-none hover:text-gray-700',
-                                  )}
-                                >
-                                  {flexRender(header.column.columnDef.header, header.getContext())}
-                                  {header.column.getIsSorted() === 'asc' && ' ↑'}
-                                  {header.column.getIsSorted() === 'desc' && ' ↓'}
-                                </th>
-                              ))}
+                              {hg.headers.map((header) => {
+                                const align = header.column.columnDef.meta?.align;
+                                const sorted = header.column.getIsSorted();
+                                return (
+                                  <th
+                                    key={header.id}
+                                    scope="col"
+                                    aria-sort={
+                                      sorted === 'asc' ? 'ascending'
+                                      : sorted === 'desc' ? 'descending'
+                                      : header.column.getCanSort() ? 'none' : undefined
+                                    }
+                                    className={clsx(
+                                      'whitespace-nowrap px-3 py-2.5 text-tiny font-semibold uppercase tracking-wider text-gray-500',
+                                      align === 'right' && 'text-right',
+                                    )}
+                                  >
+                                    {header.column.getCanSort() ? (
+                                      <button
+                                        type="button"
+                                        onClick={header.column.getToggleSortingHandler()}
+                                        className="inline-flex cursor-pointer select-none items-center gap-0.5 hover:text-gray-700"
+                                      >
+                                        {flexRender(header.column.columnDef.header, header.getContext())}
+                                        {sorted === 'asc' && ' ↑'}
+                                        {sorted === 'desc' && ' ↓'}
+                                      </button>
+                                    ) : (
+                                      flexRender(header.column.columnDef.header, header.getContext())
+                                    )}
+                                  </th>
+                                );
+                              })}
                             </tr>
                           ))}
                         </thead>
                         <tbody>
-                          {donePaddingTop > 0 && <tr><td colSpan={table.getAllLeafColumns().length} style={{ height: `${donePaddingTop}px`, padding: 0 }} /></tr>}
+                          {donePaddingTop > 0 && <tr aria-hidden="true"><td colSpan={table.getAllLeafColumns().length} style={{ height: `${donePaddingTop}px`, padding: 0 }} /></tr>}
                           {doneVItems.map((vRow) => {
                             const row = doneRows[vRow.index]!;
                             const isClickable = !!onSelectFile && row.original.status !== 'error';
                             return (
                               <tr
                                 key={row.id}
-                                onClick={isClickable
-                                  ? () => {
-                                      const file = fileByName.get(row.original.filename);
-                                      if (!file) return;
-                                      onSelectFile?.(file);
-                                      if (onBatchNav) {
-                                        const clickableRows = doneRows.filter((r) => r.original.status !== 'error');
-                                        const clickIndex = clickableRows.findIndex((r) => r.id === row.id);
-                                        const clickableFiles = clickableRows
-                                          .map((r) => fileByName.get(r.original.filename))
-                                          .filter(Boolean) as File[];
-                                        if (clickIndex >= 0) onBatchNav(clickableFiles, clickIndex);
-                                      }
-                                    }
-                                  : undefined}
+                                aria-rowindex={vRow.index + 1}
+                                tabIndex={isClickable ? 0 : undefined}
+                                role={isClickable ? 'button' : undefined}
+                                onClick={isClickable ? () => handleRowActivate(row) : undefined}
+                                onKeyDown={isClickable ? (e) => {
+                                  if (e.target !== e.currentTarget) return;
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    handleRowActivate(row);
+                                  }
+                                } : undefined}
                                 className={clsx(
                                   'border-b border-gray-100 transition-colors duration-100 last:border-0',
-                                  vRow.index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
                                   isClickable
-                                    ? 'cursor-pointer hover:bg-primary-50/60 group'
+                                    ? 'cursor-pointer hover:bg-primary-50/60 group focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:-outline-offset-2'
                                     : 'hover:bg-primary-50/30',
                                 )}
                                 style={{ height: 36 }}
                               >
                                 {row.getVisibleCells().map((cell) => (
-                                  <td key={cell.id} className="px-3 py-2">
+                                  <td
+                                    key={cell.id}
+                                    className={clsx('px-3 py-2', cell.column.columnDef.meta?.align === 'right' && 'text-right')}
+                                  >
                                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                                   </td>
                                 ))}
                               </tr>
                             );
                           })}
-                          {donePaddingBottom > 0 && <tr><td colSpan={table.getAllLeafColumns().length} style={{ height: `${donePaddingBottom}px`, padding: 0 }} /></tr>}
+                          {donePaddingBottom > 0 && <tr aria-hidden="true"><td colSpan={table.getAllLeafColumns().length} style={{ height: `${donePaddingBottom}px`, padding: 0 }} /></tr>}
                         </tbody>
                       </table>
                     );
