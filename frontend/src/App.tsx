@@ -22,7 +22,7 @@ import { assertBatchId } from './lib/ids';
 import AuthGate from './components/AuthGate';
 import { apiFetch } from './lib/api-fetch';
 import { getAuthToken } from './lib/auth-store';
-import FloatingBatchWidget, { type BatchProgressStatus } from './components/FloatingBatchWidget';
+import { FloatingBatchWidgetStack, type BatchProgressStatus, type StackedBatchWidget } from './components/FloatingBatchWidget';
 import CleanStatePanel from './components/CleanStatePanel';
 import ConceptDetailModal from './components/ConceptDetailModal';
 import ConsultasSATPage from './components/ConsultasSATPage';
@@ -315,6 +315,26 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
+  const floatingWidgets: StackedBatchWidget[] = [];
+  if (batchMasivoStatus && batchMasivoStatus.phase === 'processing' && activeView !== 'masivo' && !widgetDismissed) {
+    floatingWidgets.push({
+      id: 'masivo',
+      status: batchMasivoStatus,
+      label: 'Análisis masivo',
+      onNavigate: () => setActiveView('masivo'),
+      onDismiss: () => setWidgetDismissed(true),
+    });
+  }
+  if (batchPdfStatus && batchPdfStatus.phase === 'processing' && activeView !== 'conversion-masiva' && !widgetPdfDismissed) {
+    floatingWidgets.push({
+      id: 'pdf',
+      status: batchPdfStatus,
+      label: 'Conversión masiva',
+      onNavigate: () => setActiveView('conversion-masiva'),
+      onDismiss: () => setWidgetPdfDismissed(true),
+    });
+  }
+
   return (
     <AuthGate>
     <div className="flex flex-col md:h-screen">
@@ -520,26 +540,10 @@ export default function App() {
       </div>
       </div>
 
-      {/* Floating progress widget — visible when batch is running and user is on another view.
-          Dos fuentes posibles (análisis DIOT/IVA-ISR y conversión de PDFs) — si
-          ambas están corriendo a la vez (caso raro), prioriza la de análisis;
-          no hay forma de mostrar dos widgets a la vez sin rediseñar el
-          componente, y no vale la pena para ese caso extremo. */}
-      {batchMasivoStatus && batchMasivoStatus.phase === 'processing' && activeView !== 'masivo' && !widgetDismissed && (
-        <FloatingBatchWidget
-          status={batchMasivoStatus}
-          onNavigate={() => setActiveView('masivo')}
-          onDismiss={() => setWidgetDismissed(true)}
-        />
-      )}
-      {!(batchMasivoStatus && batchMasivoStatus.phase === 'processing') &&
-        batchPdfStatus && batchPdfStatus.phase === 'processing' && activeView !== 'conversion-masiva' && !widgetPdfDismissed && (
-        <FloatingBatchWidget
-          status={batchPdfStatus}
-          onNavigate={() => setActiveView('conversion-masiva')}
-          onDismiss={() => setWidgetPdfDismissed(true)}
-        />
-      )}
+      {/* Floating progress widgets — visibles cuando un lote corre y el usuario está en
+          otra vista. Dos fuentes posibles (análisis masivo y conversión de PDFs); si
+          ambas corren a la vez se apilan, en vez de que una oculte a la otra sin avisar. */}
+      <FloatingBatchWidgetStack widgets={floatingWidgets} />
     </div>
     </AuthGate>
   );

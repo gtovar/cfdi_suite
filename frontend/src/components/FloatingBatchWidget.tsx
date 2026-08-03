@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { Loader2, X } from 'lucide-react';
 
 export interface BatchProgressStatus {
@@ -8,15 +9,16 @@ export interface BatchProgressStatus {
 
 interface FloatingBatchWidgetProps {
   status: BatchProgressStatus;
+  label: string;
   onNavigate: () => void;
   onDismiss: () => void;
 }
 
-export default function FloatingBatchWidget({ status, onNavigate, onDismiss }: FloatingBatchWidgetProps) {
+export default function FloatingBatchWidget({ status, label, onNavigate, onDismiss }: FloatingBatchWidgetProps) {
   const pct = status.total > 0 ? Math.round((status.completed / status.total) * 100) : 0;
 
   return (
-    <div className="float-widget-in fixed bottom-5 right-5 z-40 w-72 rounded-xl border border-gray-200 bg-white shadow-2xl">
+    <div className="float-widget-in relative w-72 rounded-xl border border-gray-200 bg-white shadow-2xl">
       <button
         type="button"
         onClick={onNavigate}
@@ -31,8 +33,8 @@ export default function FloatingBatchWidget({ status, onNavigate, onDismiss }: F
             )}
             <span className="text-xs font-semibold text-gray-800">
               {status.phase === 'processing'
-                ? `Procesando lote…`
-                : 'Lote completado'}
+                ? `Procesando ${label}…`
+                : `${label} completado`}
             </span>
           </div>
         </div>
@@ -59,11 +61,43 @@ export default function FloatingBatchWidget({ status, onNavigate, onDismiss }: F
       <button
         type="button"
         onClick={onDismiss}
-        aria-label="Cerrar"
+        aria-label={`Cerrar aviso de ${label}`}
         className="absolute top-3 right-3 rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
       >
         <X size={12} />
       </button>
+    </div>
+  );
+}
+
+export interface StackedBatchWidget {
+  id: string;
+  status: BatchProgressStatus;
+  label: string;
+  onNavigate: () => void;
+  onDismiss: () => void;
+}
+
+/**
+ * Apila los widgets flotantes que estén activos a la vez (ej. Análisis masivo
+ * y Conversión masiva corriendo simultáneamente) en vez de que uno oculte al
+ * otro sin avisar.
+ */
+export function FloatingBatchWidgetStack({ widgets }: { widgets: StackedBatchWidget[] }) {
+  if (widgets.length === 0) return null;
+
+  return (
+    <div className="fixed bottom-5 right-5 z-40 flex flex-col items-end gap-3">
+      {widgets.map((w) => (
+        <Fragment key={w.id}>
+          <FloatingBatchWidget
+            status={w.status}
+            label={w.label}
+            onNavigate={w.onNavigate}
+            onDismiss={w.onDismiss}
+          />
+        </Fragment>
+      ))}
     </div>
   );
 }
