@@ -976,9 +976,9 @@ opentelemetry-instrumentation-fastapi==0.65b0 \
     --hash=sha256:10a3a95486036230413a58fe4fdf4a83fa6bba46918407e527476994bd92bd97 \
     --hash=sha256:cda2610a0ec1b22d19886f33e4d861e9f5dbb886aeaa3a1263b47aff82c36943
     # via -r requirements.in
-opentelemetry-resourcedetector-gcp==1.12.0a0 \
-    --hash=sha256:d5e3f78283a272eb92547e00bbeff45b7332a34ae791a70ab4eba81af9bc3baf \
-    --hash=sha256:e803688d14e2969fe816077be81f7b034368314d485863f12ce49daba7c81919
+opentelemetry-resourcedetector-gcp==1.14.0 \
+    --hash=sha256:10b41802acf815838a85c9fe1dae02f5d27ebc17527b77441111c010bead95bc \
+    --hash=sha256:cc4818570933b5c651aef80fbf6e8fbe26d63fe6fbc24ce22ae37e78744d30eb
     # via
     #   -r requirements.in
     #   opentelemetry-exporter-gcp-trace
@@ -1475,7 +1475,6 @@ typing-extensions==4.16.0 \
     #   fastapi
     #   grpcio
     #   opentelemetry-api
-    #   opentelemetry-resourcedetector-gcp
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
     #   pydantic
