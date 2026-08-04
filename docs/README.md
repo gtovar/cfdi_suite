@@ -25,12 +25,13 @@ Si vienes a trabajar con agentes o sesiones guiadas por IA:
 
 - [arquitectura.md](./arquitectura.md): vista de alto nivel del sistema, capas y flujo de análisis
 - [cfdi-ui-dictionary.md](./cfdi-ui-dictionary.md): definición de términos y reglas de interpretación UI
-- [auditoria-tabla-masivos-2026-08-03.md](./auditoria-tabla-masivos-2026-08-03.md): auditoría de las tablas de Análisis masivo y Conversión masiva, hallazgo por hallazgo, con estado de implementación
 
 ### Decisiones
 
 - [analysis/2026-04-17-python-satcfdi-decision.md](./analysis/2026-04-17-python-satcfdi-decision.md): decisión base sobre el futuro del motor CFDI
 - [analysis/2026-04-18-python-backend-platform-decision.md](./analysis/2026-04-18-python-backend-platform-decision.md): reapertura hacia arquitectura frontend + backend Python
+- [analysis/masivo-ux-analysis.md](./analysis/masivo-ux-analysis.md): análisis de flujo/descubrimiento de Análisis masivo para diseño (2026-06-03, recomendaciones aún sin implementar; sus capturas base están obsoletas)
+- [analysis/2026-08-03-auditoria-tabla-masivos.md](./analysis/2026-08-03-auditoria-tabla-masivos.md): auditoría técnica de las tablas de Análisis masivo y Conversión masiva — hallazgos ya implementados y verificados, más decisión pendiente de dirección estética
 - [analysis/2026-08-02-zero-cost-documentation-governance.md](./analysis/2026-08-02-zero-cost-documentation-governance.md): lazo determinista local + CI, sin servicios de modelos
 
 ### Roadmap del motor
