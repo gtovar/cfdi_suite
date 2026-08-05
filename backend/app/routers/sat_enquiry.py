@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+from urllib.parse import quote
 import secrets
 from datetime import datetime
 from typing import Any, NamedTuple
@@ -220,7 +221,9 @@ async def _call_diverza(
     payload: dict[str, Any],
     max_retries: int = 3,
 ) -> str:
-    url = f"{_DIVERZA_BASE}/{_require_uuid(uuid)}/sat_cfdi_enquiry"
+    validated_uuid = _require_uuid(uuid)
+    safe_uuid = quote(validated_uuid, safe="")
+    url = f"{_DIVERZA_BASE}/{safe_uuid}/sat_cfdi_enquiry"
     last_exc: Exception | None = None
 
     for attempt in range(1, max_retries + 1):
