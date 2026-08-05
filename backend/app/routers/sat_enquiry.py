@@ -47,7 +47,7 @@ BATCH_ENQUIRY_QUEUE_SIZE = 20
 
 
 def _is_uuid(value: str) -> bool:
-    return bool(value) and bool(_UUID_RE.match(value))
+    return bool(value) and _UUID_RE.fullmatch(value) is not None
 
 
 def _require_uuid(value: str) -> str:
