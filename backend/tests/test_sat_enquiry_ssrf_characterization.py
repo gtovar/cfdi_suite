@@ -14,10 +14,10 @@ from backend.app.routers.sat_enquiry import (
 
 
 class DiverzaSsrfCharacterizationTests(unittest.TestCase):
-    """Caracteriza el comportamiento actual antes de cambiar la mitigación SSRF.
+    """Caracteriza y protege la mitigación SSRF de la llamada a Diverza.
 
-    Estos tests no proponen todavía una implementación. Verifican dos hipótesis:
-    1. Un UUID con salto de línea final debe ser rechazado por el contrato.
+    Verifica dos invariantes:
+    1. Un UUID con salto de línea final debe ser rechazado.
     2. Un UUID válido debe producir exactamente el destino Diverza esperado.
     """
 
